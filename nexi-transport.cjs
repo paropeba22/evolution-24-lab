@@ -16,7 +16,8 @@ local now = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
 local existing = redis.call('GET', key)
 if not existing then
   local value = cjson.encode({state='reserved', bodyHash=hash, ownerToken=owner, reservedUntilMs=now+lease_ms})
-  if redis.call('SET', key, value, 'NX', 'EX', ttl) == 'OK' then return 'claimed' end
+  local set_result = redis.call('SET', key, value, 'NX', 'EX', ttl)
+  if type(set_result) == 'table' and set_result.ok == 'OK' then return 'claimed' end
   return 'inconsistent'
 end
 local ok, record = pcall(cjson.decode, existing)
@@ -26,7 +27,8 @@ if record.state == 'reserved' then
   if type(record.reservedUntilMs) ~= 'number' or type(record.ownerToken) ~= 'string' then return 'inconsistent' end
   if record.reservedUntilMs > now then return 'active_reserved' end
   record.ownerToken, record.reservedUntilMs = owner, now + lease_ms
-  if redis.call('SET', key, cjson.encode(record), 'XX', 'KEEPTTL') == 'OK' then return 'claimed' end
+  local set_result = redis.call('SET', key, cjson.encode(record), 'XX', 'KEEPTTL')
+  if type(set_result) == 'table' and set_result.ok == 'OK' then return 'claimed' end
   return 'inconsistent'
 end
 if record.state == 'dispatching' or record.state == 'completed' or record.state == 'ambiguous' then return record.state end
@@ -44,7 +46,8 @@ local time = redis.call('TIME')
 local now = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
 if type(record.reservedUntilMs) ~= 'number' or record.reservedUntilMs <= now then return 'lost_ownership' end
 record.state, record.reservedUntilMs = 'dispatching', cjson.null
-if redis.call('SET', key, cjson.encode(record), 'XX', 'KEEPTTL') == 'OK' then return 'dispatching' end
+local set_result = redis.call('SET', key, cjson.encode(record), 'XX', 'KEEPTTL')
+if type(set_result) == 'table' and set_result.ok == 'OK' then return 'dispatching' end
 return 'inconsistent'
 `;
 
@@ -56,7 +59,8 @@ local ok, record = pcall(cjson.decode, existing)
 if not ok or type(record) ~= 'table' then return 'inconsistent' end
 if record.state ~= 'dispatching' or record.bodyHash ~= hash or record.ownerToken ~= owner then return 'inconsistent' end
 record.state = target
-if redis.call('SET', key, cjson.encode(record), 'XX', 'KEEPTTL') == 'OK' then return target end
+local set_result = redis.call('SET', key, cjson.encode(record), 'XX', 'KEEPTTL')
+if type(set_result) == 'table' and set_result.ok == 'OK' then return target end
 return 'inconsistent'
 `;
 

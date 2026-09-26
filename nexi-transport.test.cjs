@@ -6,6 +6,14 @@ const { createHmac } = require('node:crypto');
 const { isolateChatwoot, verifyChatwootWebhook, processChatwootWebhook, createReplayLedger, resolveConfiguredInbox,
   prepareEvent, eventKeyProof, redactEventForLog } = require('./nexi-transport.cjs');
 
+// redis.call('SET') returns a Lua status table ({ ok: 'OK' }), not the string 'OK'.
+// Match the script's actual branch after the simulated write so the old comparison fails these tests.
+function recognizesLuaSetStatus(script, index = 0) {
+  const reply = { ok: 'OK' };
+  const checks = [...script.matchAll(/local set_result = redis\.call\('SET'[^\n]*\)\s*\n\s*if type\(set_result\) == 'table' and set_result\.ok == 'OK' then return /g)];
+  return Boolean(checks[index] && typeof reply === 'object' && reply.ok === 'OK');
+}
+
 // One shared deterministic Redis command contract; eval is atomic and has no await points.
 class RedisContract {
   records = new Map();
@@ -25,13 +33,13 @@ class RedisContract {
       if (!record) {
         this.records.set(key, { value: JSON.stringify({ state: 'reserved', bodyHash, ownerToken,
           reservedUntilMs: this.nowMs + Number(leaseMs) }), expires: this.nowMs + Number(ttlSeconds) * 1000 });
-        return 'claimed';
+        return recognizesLuaSetStatus(script, 0) ? 'claimed' : 'inconsistent';
       }
       if (record.bodyHash !== bodyHash) return 'identity_conflict';
       if (record.state === 'reserved' && record.reservedUntilMs <= this.nowMs) {
         this.records.set(key, { value: JSON.stringify({ ...record, ownerToken,
           reservedUntilMs: this.nowMs + Number(leaseMs) }), expires: current.expires });
-        return 'claimed';
+        return recognizesLuaSetStatus(script, 1) ? 'claimed' : 'inconsistent';
       }
       return record.state === 'reserved' ? 'active_reserved' : record.state;
     }
@@ -40,7 +48,7 @@ class RedisContract {
       if (!record || record.state !== 'dispatching' || record.bodyHash !== args[0] ||
           record.ownerToken !== args[1]) return 'inconsistent';
       this.records.set(key, { value: JSON.stringify({ ...record, state: args[2] }), expires: current.expires });
-      return args[2];
+      return recognizesLuaSetStatus(script) ? args[2] : 'inconsistent';
     }
     if (this.failBegin) throw new Error('dispatch marker unavailable');
     assert.match(script, /record\.state, record\.reservedUntilMs = 'dispatching', cjson\.null/);
@@ -48,7 +56,7 @@ class RedisContract {
         record.ownerToken !== args[1] || record.reservedUntilMs <= this.nowMs) return 'lost_ownership';
     this.records.set(key, { value: JSON.stringify({ ...record, state: 'dispatching', reservedUntilMs: null }),
       expires: current.expires });
-    return 'dispatching';
+    return recognizesLuaSetStatus(script) ? 'dispatching' : 'inconsistent';
   }
   async ping() {
     if (!this.isReady) throw new Error('redis unavailable');
