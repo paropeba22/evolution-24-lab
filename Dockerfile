@@ -1,4 +1,4 @@
-FROM evoapicloud/evolution-api:homolog
+FROM evoapicloud/evolution-api@sha256:65e29aa1a2ca096675825ff8feb3b5bf7fbcb167e368f9282fd80670e8da18a2
 
 WORKDIR /evolution
 
