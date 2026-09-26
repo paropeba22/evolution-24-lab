@@ -36,7 +36,7 @@ replaceOnce('let n=s.payload.find(a=>a.name===this.getClientCwConfig().nameInbox
   'stable Inbox ID resolution');
 
 replaceOnce('.post(this.routerPath("webhook"),async(e,s)=>{let n=await this.dataValidate({request:e,schema:T,ClassRef:P,execute:(a,i)=>Cn.receiveWebhook(a,i)});s.status(200).json(n)})',
-  `.post(this.routerPath("webhook"),async(e,s)=>{let v=await ${helper}.verifyChatwootWebhook(e,await ig.getProvider({instanceName:e.params.instanceName}));if(v.replay)return s.status(200).json({message:"delivery_already_recorded"});if(!v.ok)return s.status(v.status).json({error:v.status===503?"chatwoot_replay_store_unavailable":"chatwoot_transport_auth_failed"});try{let n=await this.dataValidate({request:e,schema:T,ClassRef:P,execute:(a,i)=>Cn.receiveWebhook(a,i)});await ${helper}.finishChatwootDelivery(v.claim,"completed");return s.status(200).json(n)}catch(n){await ${helper}.finishChatwootDelivery(v.claim,"ambiguous").catch(()=>{});throw n}})`,
+  `.post(this.routerPath("webhook"),async(e,s)=>{let v=await ${helper}.processChatwootWebhook(e,await ig.getProvider({instanceName:e.params.instanceName}),()=>this.dataValidate({request:e,schema:T,ClassRef:P,execute:(a,i)=>Cn.receiveWebhook(a,i)}));return s.status(v.status).json(v.body)})`,
   'authenticated chatwoot webhook route');
 
 replaceOnce('execute:a=>Cn.findChatwoot(a)});s.status(200).json(n)',

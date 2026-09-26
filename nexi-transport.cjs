@@ -6,9 +6,62 @@ const { createHmac, createHash, randomUUID, timingSafeEqual } = require('node:cr
 const context = new AsyncLocalStorage();
 const MAX_SKEW_MS = 5 * 60 * 1000;
 const DELIVERY_TTL_SECONDS = 30 * 24 * 60 * 60;
+const RESERVED_LEASE_MS = 30 * 1000;
+
+const CLAIM_SCRIPT = `
+local key, hash, owner = KEYS[1], ARGV[1], ARGV[2]
+local lease_ms, ttl = tonumber(ARGV[3]), tonumber(ARGV[4])
+local time = redis.call('TIME')
+local now = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
+local existing = redis.call('GET', key)
+if not existing then
+  local value = cjson.encode({state='reserved', bodyHash=hash, ownerToken=owner, reservedUntilMs=now+lease_ms})
+  if redis.call('SET', key, value, 'NX', 'EX', ttl) == 'OK' then return 'claimed' end
+  return 'inconsistent'
+end
+local ok, record = pcall(cjson.decode, existing)
+if not ok or type(record) ~= 'table' or type(record.state) ~= 'string' or type(record.bodyHash) ~= 'string' then return 'inconsistent' end
+if record.bodyHash ~= hash then return 'identity_conflict' end
+if record.state == 'reserved' then
+  if type(record.reservedUntilMs) ~= 'number' or type(record.ownerToken) ~= 'string' then return 'inconsistent' end
+  if record.reservedUntilMs > now then return 'active_reserved' end
+  record.ownerToken, record.reservedUntilMs = owner, now + lease_ms
+  if redis.call('SET', key, cjson.encode(record), 'XX', 'KEEPTTL') == 'OK' then return 'claimed' end
+  return 'inconsistent'
+end
+if record.state == 'dispatching' or record.state == 'completed' or record.state == 'ambiguous' then return record.state end
+return 'inconsistent'
+`;
+
+const BEGIN_SCRIPT = `
+local key, hash, owner = KEYS[1], ARGV[1], ARGV[2]
+local existing = redis.call('GET', key)
+if not existing then return 'lost_ownership' end
+local ok, record = pcall(cjson.decode, existing)
+if not ok or type(record) ~= 'table' then return 'inconsistent' end
+if record.state ~= 'reserved' or record.bodyHash ~= hash or record.ownerToken ~= owner then return 'lost_ownership' end
+local time = redis.call('TIME')
+local now = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
+if type(record.reservedUntilMs) ~= 'number' or record.reservedUntilMs <= now then return 'lost_ownership' end
+record.state, record.reservedUntilMs = 'dispatching', cjson.null
+if redis.call('SET', key, cjson.encode(record), 'XX', 'KEEPTTL') == 'OK' then return 'dispatching' end
+return 'inconsistent'
+`;
+
+const FINISH_SCRIPT = `
+local key, hash, owner, target = KEYS[1], ARGV[1], ARGV[2], ARGV[3]
+local existing = redis.call('GET', key)
+if not existing then return 'inconsistent' end
+local ok, record = pcall(cjson.decode, existing)
+if not ok or type(record) ~= 'table' then return 'inconsistent' end
+if record.state ~= 'dispatching' or record.bodyHash ~= hash or record.ownerToken ~= owner then return 'inconsistent' end
+record.state = target
+if redis.call('SET', key, cjson.encode(record), 'XX', 'KEEPTTL') == 'OK' then return target end
+return 'inconsistent'
+`;
 
 function createReplayLedger({ client: suppliedClient, prefix = process.env.CACHE_REDIS_PREFIX_KEY || 'evolution-cache',
-  ttlSeconds = DELIVERY_TTL_SECONDS } = {}) {
+  ttlSeconds = DELIVERY_TTL_SECONDS, reservedLeaseMs = RESERVED_LEASE_MS } = {}) {
   let client = suppliedClient;
   let connecting;
 
@@ -53,22 +106,28 @@ function createReplayLedger({ client: suppliedClient, prefix = process.env.CACHE
       const redis = await connection();
       const key = keyFor(instanceName, accountId, inboxId, deliveryId);
       const bodyHash = createHash('sha256').update(rawBody).digest('hex');
-      const value = JSON.stringify({ state: 'reserved', bodyHash });
-      const claimed = await redis.set(key, value, { NX: true, EX: ttlSeconds });
-      if (claimed === 'OK') return { kind: 'claimed', key, bodyHash };
-      const existing = JSON.parse(await redis.get(key));
-      if (!existing || !['reserved', 'completed', 'ambiguous'].includes(existing.state)) {
-        throw new Error('chatwoot_replay_store_inconsistent');
+      const ownerToken = randomUUID();
+      const state = await redis.eval(CLAIM_SCRIPT, { keys: [key],
+        arguments: [bodyHash, ownerToken, String(reservedLeaseMs), String(ttlSeconds)] });
+      if (state === 'claimed') return { kind: 'claimed', key, bodyHash, ownerToken };
+      if (state === 'identity_conflict') return { kind: 'identity_conflict' };
+      if (['active_reserved', 'dispatching', 'completed', 'ambiguous'].includes(state)) {
+        return { kind: 'duplicate', state };
       }
-      if (existing.bodyHash !== bodyHash) return { kind: 'identity_conflict' };
-      return { kind: 'duplicate', state: existing.state };
+      throw new Error('chatwoot_replay_store_inconsistent');
+    },
+    async beginDispatch(claim) {
+      const redis = await connection();
+      const result = await redis.eval(BEGIN_SCRIPT, { keys: [claim.key],
+        arguments: [claim.bodyHash, claim.ownerToken] });
+      if (result !== 'dispatching') throw new Error('chatwoot_delivery_dispatch_boundary_unavailable');
     },
     async finish(claim, state) {
       if (!['completed', 'ambiguous'].includes(state)) throw new Error('chatwoot_delivery_state_invalid');
       const redis = await connection();
-      const updated = await redis.set(claim.key, JSON.stringify({ state, bodyHash: claim.bodyHash }),
-        { XX: true, KEEPTTL: true });
-      if (updated !== 'OK') throw new Error('chatwoot_replay_store_inconsistent');
+      const result = await redis.eval(FINISH_SCRIPT, { keys: [claim.key],
+        arguments: [claim.bodyHash, claim.ownerToken, state] });
+      if (result !== state) throw new Error('chatwoot_replay_store_inconsistent');
     },
   };
 }
@@ -173,12 +232,42 @@ async function verifyChatwootWebhook(request, provider, fetchImpl = fetch, ledge
 
   try {
     const claim = await ledger.claim(instanceName, provider.accountId, inbox.id, delivery, raw);
-    if (claim.kind === 'duplicate') return { ok: false, status: 200, replay: true, state: claim.state };
+    if (claim.kind === 'duplicate') return { ok: false, replay: true, state: claim.state };
     if (claim.kind === 'identity_conflict') return fail(409);
     return { ok: true, status: 200, claim };
   } catch {
     return fail(503);
   }
+}
+
+async function processChatwootWebhook(request, provider, execute, fetchImpl = fetch, ledger = defaultLedger) {
+  const verified = await verifyChatwootWebhook(request, provider, fetchImpl, ledger);
+  if (verified.replay) {
+    if (verified.state === 'completed') return { status: 200, body: { message: 'delivery_completed' } };
+    if (verified.state === 'active_reserved') return { status: 409, body: { error: 'delivery_in_progress' } };
+    return { status: 409, body: { error: 'dispatch_outcome_unknown' } };
+  }
+  if (!verified.ok) return { status: verified.status,
+    body: { error: verified.status === 503 ? 'chatwoot_replay_store_unavailable' :
+      verified.status === 409 ? 'delivery_identity_conflict' : 'chatwoot_transport_auth_failed' } };
+  try {
+    await ledger.beginDispatch(verified.claim);
+  } catch {
+    return { status: 503, body: { error: 'chatwoot_replay_store_unavailable' } };
+  }
+  let result;
+  try {
+    result = await execute();
+  } catch (error) {
+    await ledger.finish(verified.claim, 'ambiguous').catch(() => {});
+    throw error;
+  }
+  try {
+    await ledger.finish(verified.claim, 'completed');
+  } catch {
+    return { status: 503, body: { error: 'dispatch_outcome_unknown' } };
+  }
+  return { status: 200, body: result };
 }
 
 function prepareEvent(headers, body, instanceName, instanceId) {
@@ -227,13 +316,9 @@ function redactEventForLog(body) {
   return { ...body, apikey: undefined };
 }
 
-async function finishChatwootDelivery(claim, state) {
-  await defaultLedger.finish(claim, state);
-}
-
 async function replayStoreReady() {
   return defaultLedger.ready();
 }
 
-module.exports = { isolateChatwoot, verifyChatwootWebhook, finishChatwootDelivery, replayStoreReady, createReplayLedger,
+module.exports = { isolateChatwoot, verifyChatwootWebhook, processChatwootWebhook, replayStoreReady, createReplayLedger,
   inboxMatches, resolveConfiguredInbox, prepareEvent, eventSigningReady, eventKeyProof, redactEventForLog };

@@ -3,24 +3,52 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createHmac } = require('node:crypto');
-const { isolateChatwoot, verifyChatwootWebhook, createReplayLedger, resolveConfiguredInbox,
+const { isolateChatwoot, verifyChatwootWebhook, processChatwootWebhook, createReplayLedger, resolveConfiguredInbox,
   prepareEvent, eventKeyProof, redactEventForLog } = require('./nexi-transport.cjs');
 
-// Shared deterministic adapter for the Redis SET NX EX / SET XX KEEPTTL contract.
+// One shared deterministic Redis command contract; eval is atomic and has no await points.
 class RedisContract {
   records = new Map();
   isReady = true;
-  async set(key, value, options) {
+  nowMs = Date.now();
+  failBegin = false;
+  failFinalization = false;
+  async eval(script, { keys: [key], arguments: args }) {
     if (!this.isReady) throw new Error('redis unavailable');
-    if (options.NX && this.records.has(key)) return null;
-    if (options.XX && !this.records.has(key)) return null;
-    const expires = options.KEEPTTL ? this.records.get(key).expires : Date.now() + options.EX * 1000;
-    this.records.set(key, { value, expires });
-    return 'OK';
-  }
-  async get(key) {
-    if (!this.isReady) throw new Error('redis unavailable');
-    return this.records.get(key)?.value || null;
+    const current = this.records.get(key);
+    const record = current && current.expires > this.nowMs ? JSON.parse(current.value) : null;
+    if (!record && current) this.records.delete(key);
+    if (script.includes('local lease_ms, ttl')) {
+      assert.match(script, /'SET', key, value, 'NX', 'EX', ttl/);
+      assert.match(script, /'SET', key, cjson\.encode\(record\), 'XX', 'KEEPTTL'/);
+      const [bodyHash, ownerToken, leaseMs, ttlSeconds] = args;
+      if (!record) {
+        this.records.set(key, { value: JSON.stringify({ state: 'reserved', bodyHash, ownerToken,
+          reservedUntilMs: this.nowMs + Number(leaseMs) }), expires: this.nowMs + Number(ttlSeconds) * 1000 });
+        return 'claimed';
+      }
+      if (record.bodyHash !== bodyHash) return 'identity_conflict';
+      if (record.state === 'reserved' && record.reservedUntilMs <= this.nowMs) {
+        this.records.set(key, { value: JSON.stringify({ ...record, ownerToken,
+          reservedUntilMs: this.nowMs + Number(leaseMs) }), expires: current.expires });
+        return 'claimed';
+      }
+      return record.state === 'reserved' ? 'active_reserved' : record.state;
+    }
+    if (script.includes('local key, hash, owner, target')) {
+      if (this.failFinalization) throw new Error('finalization unavailable');
+      if (!record || record.state !== 'dispatching' || record.bodyHash !== args[0] ||
+          record.ownerToken !== args[1]) return 'inconsistent';
+      this.records.set(key, { value: JSON.stringify({ ...record, state: args[2] }), expires: current.expires });
+      return args[2];
+    }
+    if (this.failBegin) throw new Error('dispatch marker unavailable');
+    assert.match(script, /record\.state, record\.reservedUntilMs = 'dispatching', cjson\.null/);
+    if (!record || record.state !== 'reserved' || record.bodyHash !== args[0] ||
+        record.ownerToken !== args[1] || record.reservedUntilMs <= this.nowMs) return 'lost_ownership';
+    this.records.set(key, { value: JSON.stringify({ ...record, state: 'dispatching', reservedUntilMs: null }),
+      expires: current.expires });
+    return 'dispatching';
   }
   async ping() {
     if (!this.isReady) throw new Error('redis unavailable');
@@ -91,6 +119,8 @@ test('shared Redis claim survives new ledger client and concurrent workers', asy
     b.claim(instanceName, 4, 13, '10eb4a77-8c84-487c-a4bd-d2a915b21f44', raw),
   ]);
   assert.deepEqual(claims.map((item) => item.kind).sort(), ['claimed', 'duplicate']);
+  assert.equal(claims.find((item) => item.kind === 'duplicate').state, 'active_reserved');
+  await a.beginDispatch(claims.find((item) => item.kind === 'claimed'));
   await a.finish(claims.find((item) => item.kind === 'claimed'), 'completed');
   const restarted = createReplayLedger({ client: redis });
   const replay = await restarted.claim(instanceName, 4, 13,
@@ -101,21 +131,114 @@ test('shared Redis claim survives new ledger client and concurrent workers', asy
   assert.equal(redis.records.values().next().value.expires > Date.now() + 29 * 86400 * 1000, true);
 });
 
-test('reserved or ambiguous delivery is acknowledged without another dispatch', async () => {
+test('active reservation is not success; a pre-dispatch crash can be reclaimed after its lease', async () => {
   const redis = new RedisContract();
   const ledger = createReplayLedger({ client: redis });
   const delivery = request(privateNote);
   const first = await verifyChatwootWebhook(delivery, provider, fetchInbox, ledger);
   assert.equal(first.ok, true);
-  const reserved = await verifyChatwootWebhook(delivery, provider, fetchInbox,
+  let sends = 0;
+  const active = await processChatwootWebhook(delivery, provider, () => { sends++; }, fetchInbox,
     createReplayLedger({ client: redis }));
-  assert.deepEqual({ status: reserved.status, replay: reserved.replay, state: reserved.state },
-    { status: 200, replay: true, state: 'reserved' });
+  assert.deepEqual(active, { status: 409, body: { error: 'delivery_in_progress' } });
+  assert.equal(sends, 0);
+  redis.nowMs += 31_000;
+  assert.deepEqual(await processChatwootWebhook(request({ ...privateNote, changed: true }), provider,
+    () => { sends++; }, fetchInbox, createReplayLedger({ client: redis })),
+  { status: 409, body: { error: 'delivery_identity_conflict' } });
+  const recovered = await processChatwootWebhook(delivery, provider, () => {
+    assert.equal(JSON.parse(redis.records.values().next().value.value).state, 'dispatching');
+    sends++;
+    return { message: 'sent' };
+  },
+    fetchInbox, createReplayLedger({ client: redis }));
+  assert.deepEqual(recovered, { status: 200, body: { message: 'sent' } });
+  assert.equal(sends, 1);
+  await assert.rejects(ledger.beginDispatch(first.claim), /dispatch_boundary_unavailable/);
+});
+
+test('two workers racing to reclaim one stale reservation have one owner', async () => {
+  const redis = new RedisContract();
+  const a = createReplayLedger({ client: redis });
+  const b = createReplayLedger({ client: redis });
+  const raw = Buffer.from('body');
+  const args = [instanceName, 4, 13, '10eb4a77-8c84-487c-a4bd-d2a915b21f44', raw];
+  await a.claim(...args);
+  redis.nowMs += 31_000;
+  const claims = await Promise.all([a.claim(...args), b.claim(...args)]);
+  assert.deepEqual(claims.map((item) => item.kind).sort(), ['claimed', 'duplicate']);
+  assert.equal(claims.find((item) => item.kind === 'duplicate').state, 'active_reserved');
+  await b.beginDispatch(claims.find((item) => item.kind === 'claimed'));
+  assert.equal((await a.claim(...args)).state, 'dispatching');
+});
+
+test('dispatching crash and ambiguous outcome never redispatch or return success', async () => {
+  const redis = new RedisContract();
+  const ledger = createReplayLedger({ client: redis });
+  const delivery = request(privateNote);
+  const first = await verifyChatwootWebhook(delivery, provider, fetchInbox, ledger);
+  await ledger.beginDispatch(first.claim);
+  let sends = 0;
+  const dispatching = await processChatwootWebhook(delivery, provider, () => { sends++; }, fetchInbox,
+    createReplayLedger({ client: redis }));
+  assert.deepEqual(dispatching, { status: 409, body: { error: 'dispatch_outcome_unknown' } });
   await ledger.finish(first.claim, 'ambiguous');
-  const ambiguous = await verifyChatwootWebhook(delivery, provider, fetchInbox,
+  const ambiguous = await processChatwootWebhook(delivery, provider, () => { sends++; }, fetchInbox,
     createReplayLedger({ client: redis }));
-  assert.equal(ambiguous.replay, true);
-  assert.equal(ambiguous.state, 'ambiguous');
+  assert.deepEqual(ambiguous, { status: 409, body: { error: 'dispatch_outcome_unknown' } });
+  assert.equal(sends, 0);
+});
+
+test('a first-attempt transport error marks the dispatch ambiguous and remains an HTTP failure', async () => {
+  const redis = new RedisContract();
+  const ledger = createReplayLedger({ client: redis });
+  const delivery = request(privateNote);
+  let sends = 0;
+  await assert.rejects(processChatwootWebhook(delivery, provider, () => {
+    sends++;
+    throw new Error('send failed');
+  }, fetchInbox, ledger), /send failed/);
+  assert.equal(sends, 1);
+  assert.deepEqual(await processChatwootWebhook(delivery, provider, () => { sends++; }, fetchInbox,
+    createReplayLedger({ client: redis })), { status: 409, body: { error: 'dispatch_outcome_unknown' } });
+  assert.equal(sends, 1);
+});
+
+test('completed delivery alone receives idempotent 200; different body remains conflict', async () => {
+  const redis = new RedisContract();
+  const ledger = createReplayLedger({ client: redis });
+  const delivery = request(privateNote);
+  const first = await verifyChatwootWebhook(delivery, provider, fetchInbox, ledger);
+  await ledger.beginDispatch(first.claim);
+  await ledger.finish(first.claim, 'completed');
+  let sends = 0;
+  assert.deepEqual(await processChatwootWebhook(delivery, provider, () => { sends++; }, fetchInbox,
+    createReplayLedger({ client: redis })), { status: 200, body: { message: 'delivery_completed' } });
+  assert.deepEqual(await processChatwootWebhook(request({ ...privateNote, changed: true }), provider,
+    () => { sends++; }, fetchInbox, createReplayLedger({ client: redis })),
+  { status: 409, body: { error: 'delivery_identity_conflict' } });
+  assert.equal(sends, 0);
+});
+
+test('Redis transition failure prevents side effect; completed write failure stays unresolved', async () => {
+  const redis = new RedisContract();
+  redis.failBegin = true;
+  let sends = 0;
+  const ledger = createReplayLedger({ client: redis });
+  const delivery = request(privateNote);
+  assert.deepEqual(await processChatwootWebhook(delivery, provider, () => { sends++; }, fetchInbox, ledger),
+    { status: 503, body: { error: 'chatwoot_replay_store_unavailable' } });
+  assert.equal(sends, 0);
+  redis.failBegin = false;
+  redis.nowMs += 31_000;
+  redis.failFinalization = true;
+  assert.deepEqual(await processChatwootWebhook(delivery, provider, () => { sends++; return { message: 'sent' }; },
+    fetchInbox, createReplayLedger({ client: redis })),
+  { status: 503, body: { error: 'dispatch_outcome_unknown' } });
+  assert.equal(sends, 1);
+  assert.deepEqual(await processChatwootWebhook(delivery, provider, () => { sends++; }, fetchInbox,
+    createReplayLedger({ client: redis })), { status: 409, body: { error: 'dispatch_outcome_unknown' } });
+  assert.equal(sends, 1);
 });
 
 test('missing or unavailable shared replay authority fails before send', async () => {
