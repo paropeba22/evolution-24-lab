@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 
-const bundlePath = '/evolution/dist/main.js';
+const bundlePath = process.env.EVOLUTION_BUNDLE_PATH || '/evolution/dist/main.js';
 const marker = 'evo24-lab-instance-create-fix';
 
 let code = fs.readFileSync(bundlePath, 'utf8');
