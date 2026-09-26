@@ -9,6 +9,10 @@ test('patched image bundle preserves the direct message path and fails closed', 
   const route = bundle.indexOf('verifyChatwootWebhook(e,await ig.getProvider');
   const dispatch = bundle.indexOf('execute:(a,i)=>Cn.receiveWebhook(a,i)', route);
   assert.ok(route >= 0 && dispatch > route);
+  assert.match(bundle, /finishChatwootDelivery\(v\.claim,"completed"\)/);
+  assert.match(bundle, /finishChatwootDelivery\(v\.claim,"ambiguous"\)/);
+  assert.match(bundle, /inboxId:t\.inboxId/);
+  assert.match(bundle, /resolveConfiguredInbox\(s\.payload,this\.provider,t\.instanceName\)/);
   assert.match(bundle, /A\.private\|\|A\.event==="message_updated"/);
   assert.match(bundle, /substring\(0,5\)==="WAID:"/);
   assert.match(bundle, /await i\?\.textMessage\(C,!0\)/);

@@ -1,0 +1,1 @@
+ALTER TABLE `Chatwoot` ADD COLUMN `inboxId` VARCHAR(32) NULL;

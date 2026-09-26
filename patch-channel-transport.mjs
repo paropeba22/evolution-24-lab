@@ -11,18 +11,36 @@ function replaceOnce(before, after, label) {
   code = code.replace(before, after);
 }
 
+function replaceCount(before, after, expected, label) {
+  const actual = code.split(before).length - 1;
+  if (actual !== expected) throw new Error(`${label}: expected ${expected} exact patterns, found ${actual}`);
+  code = code.split(before).join(after);
+}
+
 const helper = 'require("/evolution/nexi-transport.cjs")';
 replaceOnce('this.chatwootService=new ye(O,this.configService,this.prismaRepository,this.chatwootCache)',
   `this.chatwootService=${helper}.isolateChatwoot(new ye(O,this.configService,this.prismaRepository,this.chatwootCache))`,
   'per-instance chatwoot service');
 replaceOnce('ig=new ye(O,E,J,cn)', `ig=${helper}.isolateChatwoot(new ye(O,E,J,cn))`, 'singleton chatwoot service');
 
+replaceOnce('async setChatwoot(t){if(!this.configService.get("CHATWOOT").ENABLED)return;',
+  'async setChatwoot(t){if(!this.configService.get("CHATWOOT").ENABLED)return;if(this.instanceName.startsWith("nexi-wa-")&&!/^[1-9][0-9]{0,18}$/.test(String(t.inboxId||"")))throw new Error("chatwoot_inbox_id_required");',
+  'managed Chatwoot Inbox ID required');
+replaceCount('nameInbox:t.nameInbox,signMsg', 'nameInbox:t.nameInbox,inboxId:t.inboxId,signMsg', 3,
+  'Chatwoot Inbox ID storage and readback');
+replaceOnce('if(await this.cache.has(A))return await this.cache.get(A);let e=await this.clientCw(t);if(!e)return this.logger.warn("client not found"),null;',
+  `let e=await this.clientCw(t);if(!e)return this.logger.warn("client not found"),null;if(await this.cache.has(A)){let c=await this.cache.get(A);if(${helper}.inboxMatches(c,this.provider,t.instanceName))return c;await this.cache.delete(A)}`,
+  'cached Inbox ID validation');
+replaceOnce('let n=s.payload.find(a=>a.name===this.getClientCwConfig().nameInbox);return n?(this.cache.set(A,n),n):(this.logger.warn("inbox not found"),null)',
+  `let n=${helper}.resolveConfiguredInbox(s.payload,this.provider,t.instanceName);return n?(this.cache.set(A,n),n):(this.logger.warn("inbox not found"),null)`,
+  'stable Inbox ID resolution');
+
 replaceOnce('.post(this.routerPath("webhook"),async(e,s)=>{let n=await this.dataValidate({request:e,schema:T,ClassRef:P,execute:(a,i)=>Cn.receiveWebhook(a,i)});s.status(200).json(n)})',
-  `.post(this.routerPath("webhook"),async(e,s)=>{let v=await ${helper}.verifyChatwootWebhook(e,await ig.getProvider({instanceName:e.params.instanceName}));if(!v.ok)return s.status(v.status).json({error:"chatwoot_transport_auth_failed"});let n=await this.dataValidate({request:e,schema:T,ClassRef:P,execute:(a,i)=>Cn.receiveWebhook(a,i)});s.status(200).json(n)})`,
+  `.post(this.routerPath("webhook"),async(e,s)=>{let v=await ${helper}.verifyChatwootWebhook(e,await ig.getProvider({instanceName:e.params.instanceName}));if(v.replay)return s.status(200).json({message:"delivery_already_recorded"});if(!v.ok)return s.status(v.status).json({error:v.status===503?"chatwoot_replay_store_unavailable":"chatwoot_transport_auth_failed"});try{let n=await this.dataValidate({request:e,schema:T,ClassRef:P,execute:(a,i)=>Cn.receiveWebhook(a,i)});await ${helper}.finishChatwootDelivery(v.claim,"completed");return s.status(200).json(n)}catch(n){await ${helper}.finishChatwootDelivery(v.claim,"ambiguous").catch(()=>{});throw n}})`,
   'authenticated chatwoot webhook route');
 
 replaceOnce('execute:a=>Cn.findChatwoot(a)});s.status(200).json(n)',
-  'execute:a=>Cn.findChatwoot(a)});n.nexi_transport_hardened=true;s.status(200).json(n)',
+  `execute:a=>Cn.findChatwoot(a)});n.nexi_transport_hardened=true;n.nexi_replay_store_ready=await ${helper}.replayStoreReady();s.status(200).json(n)`,
   'chatwoot transport proof');
 replaceOnce('execute:i=>z.webhook.get(i.instanceName)});n.status(200).json(a)',
   `execute:i=>z.webhook.get(i.instanceName)});if(a){a.nexi_event_signed=${helper}.eventSigningReady();a.nexi_event_key_check=${helper}.eventKeyProof(e.params.instanceName)}n.status(200).json(a)`,
