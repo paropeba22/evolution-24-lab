@@ -6,11 +6,92 @@ if (!['postgresql', 'psql_bouncer', 'mysql'].includes(provider)) throw new Error
 const mysql = provider === 'mysql';
 const marker = 'nexi-p3-chatwoot-transport';
 const helper = 'require("/evolution/nexi-transport.cjs")';
-const webhookService = mysql ? 'X' : 'z';
-const eventProofRoute = `execute:async i=>{let r=await ${webhookService}.webhook.get(i.instanceName);if(r){r.nexi_event_signed=${helper}.eventSigningReady();r.nexi_event_key_check=${helper}.eventKeyProof(i.instanceName)}return r}});n.status(200).json(a)`;
 let code = fs.readFileSync(bundlePath, 'utf8');
+
+const identifier = '[A-Za-z_$][\\w$]*';
+const webhookSet = new RegExp(`(${identifier})\\.webhook\\.set\\((${identifier})\\.instanceName,(${identifier})\\)`, 'g');
+const findHeader = new RegExp(`^\\.get\\(this\\.routerPath\\("find"\\),\\.\\.\\.(${identifier}),async\\((${identifier}),(${identifier})\\)=>\\{let (${identifier})=await this\\.dataValidate\\(\\{request:(${identifier}),schema:(${identifier}),ClassRef:(${identifier}),`);
+
+function callEnd(source, start) {
+  const open = source.indexOf('(', start);
+  let depth = 0;
+  let quote = null;
+  for (let pos = open; pos < source.length; pos++) {
+    const char = source[pos];
+    if (quote) {
+      if (char === '\\') pos++;
+      else if (char === quote) quote = null;
+    } else if (char === '"' || char === "'" || char === '`') {
+      quote = char;
+    } else if (char === '(') {
+      depth++;
+    } else if (char === ')' && --depth === 0) {
+      return pos + 1;
+    }
+  }
+  throw new Error('webhook/find: unclosed route call');
+}
+
+function webhookFindRoute(source) {
+  const setCalls = [...source.matchAll(webhookSet)];
+  if (setCalls.length !== 1) throw new Error(`webhook/find: expected one owning webhook/set route, found ${setCalls.length}`);
+  const setCall = setCalls[0];
+  const service = setCall[1];
+  const findToken = '.get(this.routerPath("find"),';
+  const webhookFindStarts = [];
+  for (let start = source.indexOf(findToken); start >= 0;
+    start = source.indexOf(findToken, start + findToken.length)) {
+    if (source.slice(start, callEnd(source, start)).includes(`${service}.webhook.get(`)) webhookFindStarts.push(start);
+  }
+  if (webhookFindStarts.length !== 1) {
+    throw new Error(`webhook/find: expected one webhook.get find route, found ${webhookFindStarts.length}`);
+  }
+  const postStart = source.lastIndexOf('.post(this.routerPath("set"),', setCall.index);
+  if (postStart < 0) throw new Error('webhook/find: owning webhook/set route absent');
+  const postEnd = callEnd(source, postStart);
+  if (setCall.index + setCall[0].length > postEnd) throw new Error('webhook/find: webhook/set is outside set route');
+  const post = source.slice(postStart, postEnd);
+  const postHeader = post.match(new RegExp(`^\\.post\\(this\\.routerPath\\("set"\\),\\.\\.\\.(${identifier}),async\\((${identifier}),(${identifier})\\)=>\\{`));
+  if (!postHeader) throw new Error('webhook/find: webhook/set route shape changed');
+
+  const getStart = postEnd;
+  if (!source.startsWith('.get(this.routerPath("find"),', getStart)) throw new Error('webhook/find: chained find route absent');
+  if (webhookFindStarts[0] !== getStart) throw new Error('webhook/find: find route is outside owning router');
+  const getEnd = callEnd(source, getStart);
+  if (!source.startsWith('}};', getEnd)) throw new Error('webhook/find: find route is duplicated or boundary changed');
+  const route = source.slice(getStart, getEnd);
+  const header = route.match(findHeader);
+  if (!header || header[1] !== postHeader[1] || header[2] !== header[5]) {
+    throw new Error('webhook/find: find route validation shape changed');
+  }
+  const [, , , response, result] = header;
+  const suffix = `});${response}.status(200).json(${result})})`;
+  if (!route.endsWith(suffix)) throw new Error('webhook/find: find route response changed');
+  const execute = route.slice(header[0].length, -suffix.length);
+  const oldCallback = execute.match(new RegExp(`^execute:(${identifier})=>`));
+  const newCallback = execute.match(new RegExp(`^execute:async (${identifier})=>`));
+  const instance = oldCallback?.[1] || newCallback?.[1];
+  const resultName = instance === 'r' ? '__nexiWebhookResult' : 'r';
+  const oldExecute = `execute:${instance}=>${service}.webhook.get(${instance}.instanceName)`;
+  const newExecute = `execute:async ${instance}=>{let ${resultName}=await ${service}.webhook.get(${instance}.instanceName);if(${resultName}){${resultName}.nexi_event_signed=${helper}.eventSigningReady();${resultName}.nexi_event_key_check=${helper}.eventKeyProof(${instance}.instanceName)}return ${resultName}}`;
+  const state = execute === oldExecute ? 'old' : execute === newExecute ? 'corrected' : null;
+  if (!state) throw new Error('webhook/find: expected one exact webhook.get transformation point');
+  return { start: getStart, end: getEnd, route, corrected: header[0] + newExecute + suffix, state };
+}
+
+function patchWebhookFindRoute(source) {
+  const target = webhookFindRoute(source);
+  if (target.state !== 'old') throw new Error('webhook/find: first application expected old route');
+  return source.slice(0, target.start) + target.corrected + source.slice(target.end);
+}
+
 if (code.includes(marker)) {
-  if (code.split(eventProofRoute).length !== 2) throw new Error('event signing proof: existing bundle is not corrected');
+  if (webhookFindRoute(code).state !== 'corrected') throw new Error('webhook/find: marked bundle is not corrected');
+  process.exit(0);
+}
+// Exercises the same route transformation on representative bundles without replaying unrelated P3 patches.
+if (process.argv[2] === '--webhook-route-only') {
+  fs.writeFileSync(bundlePath, patchWebhookFindRoute(code));
   process.exit(0);
 }
 
@@ -56,9 +137,7 @@ replaceOnce(mysql
 replaceOnce(mysql ? 'execute:a=>pn.findChatwoot(a)});s.status(200).json(n)' : 'execute:a=>Cn.findChatwoot(a)});s.status(200).json(n)',
   `execute:a=>${mysql ? 'pn' : 'Cn'}.findChatwoot(a)});n.nexi_transport_hardened=true;n.nexi_replay_store_ready=await ${helper}.replayStoreReady();s.status(200).json(n)`,
   'chatwoot transport proof');
-replaceOnce(mysql ? 'execute:i=>X.webhook.get(i.instanceName)});n.status(200).json(a)' : 'execute:i=>z.webhook.get(i.instanceName)});n.status(200).json(a)',
-  eventProofRoute,
-  'event signing proof');
+code = patchWebhookFindRoute(code);
 
 replaceOnce(`url:D,...f};this.logger.log(${mysql ? 'M' : 'U'})}try{if(u?.enabled&&S.test(u.url))`,
   `url:D,...${helper}.redactEventForLog(f)};this.logger.log(${mysql ? 'M' : 'U'})}try{if(u?.enabled&&S.test(u.url))`,

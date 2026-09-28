@@ -3,6 +3,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { createHash } = require('node:crypto');
+const { spawnSync } = require('node:child_process');
 
 test('patched image bundle preserves the direct message path and fails closed', { skip: !process.env.EVOLUTION_BUNDLE_PATH }, () => {
   const bundle = fs.readFileSync(process.env.EVOLUTION_BUNDLE_PATH, 'utf8');
@@ -101,3 +105,91 @@ test('final webhook/find route binds event proof to the validated instance', { s
   assert.deepEqual(validated.proofNames, ['validated-instance']);
   assert.doesNotMatch(route, /eventKeyProof\([^)]*\.params\.instanceName\)/);
 });
+
+test('webhook/find patch targets only its owning route and fails closed',
+  { skip: !process.env.EVOLUTION_BUNDLE_PATH }, async (t) => {
+    const marked = fs.readFileSync(process.env.EVOLUTION_BUNDLE_PATH, 'utf8');
+    const mysql = process.env.EVOLUTION_PROVIDER === 'mysql';
+    const service = mysql ? 'X' : 'z';
+    const routeStart = '.get(this.routerPath("find"),...e,async(s,n)=>{';
+    const routeEnd = 'n.status(200).json(a)})';
+    const executeStart = `execute:async i=>{let r=await ${service}.webhook.get(i.instanceName)`;
+    const executeAt = marked.indexOf(executeStart);
+    assert.ok(executeAt >= 0 && marked.indexOf(executeStart, executeAt + 1) < 0);
+    const start = marked.lastIndexOf(routeStart, executeAt);
+    const end = marked.indexOf(routeEnd, executeAt) + routeEnd.length;
+    assert.ok(start >= 0 && end > executeAt);
+    const route = marked.slice(start, end);
+    const executeEnd = route.indexOf('});n.status(200).json(a)');
+    const correctedExecute = route.slice(route.indexOf('execute:async i=>'), executeEnd);
+    const oldExecute = `execute:i=>${service}.webhook.get(i.instanceName)`;
+    const oldRoute = route.replace(correctedExecute, oldExecute);
+    const unmarked = marked.replace(/^\/\* nexi-p3-chatwoot-transport \*\/\r?\n/, '');
+    assert.notEqual(unmarked, marked, 'final representative bundle has the marker');
+    const oldBundle = unmarked.replace(route, oldRoute);
+    assert.notEqual(oldBundle, unmarked);
+    const unrelatedOld = route.replace('routerPath("find")', 'routerPath("other")')
+      .replace(correctedExecute, oldExecute);
+    const unrelatedCorrected = route.replace('routerPath("find")', 'routerPath("other")');
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'evolution-webhook-find-'));
+
+    function run(source, routeOnly = true) {
+      const target = path.join(directory, 'candidate.js');
+      fs.writeFileSync(target, source);
+      const result = spawnSync(process.execPath,
+        [path.join(__dirname, 'patch-channel-transport.mjs'), ...(routeOnly ? ['--webhook-route-only'] : [])],
+        { env: { ...process.env, EVOLUTION_BUNDLE_PATH: target }, encoding: 'utf8' });
+      return { status: result.status, output: fs.readFileSync(target, 'utf8'), stderr: result.stderr };
+    }
+
+    function rejected(source, routeOnly = true) {
+      const result = run(source, routeOnly);
+      assert.notEqual(result.status, 0, 'patch must reject the candidate');
+      assert.match(result.stderr, /webhook\/find:/);
+      assert.equal(result.output, source, 'failed patch must not write the bundle');
+    }
+
+    try {
+      await t.test('unique correct route is patched', () => {
+        const result = run(oldBundle);
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(result.output, unmarked);
+      });
+      await t.test('absent find route fails', () => {
+        rejected(oldBundle.replace(oldRoute, oldRoute.replace('routerPath("find")', 'routerPath("missing")')));
+      });
+      await t.test('duplicate find route fails', () => {
+        rejected(oldBundle.replace(oldRoute + '}};', oldRoute + oldRoute + '}};'));
+      });
+      await t.test('unrelated identical suffix is untouched', () => {
+        const result = run(oldBundle + unrelatedOld);
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(result.output, unmarked + unrelatedOld);
+      });
+      await t.test('changed intended route with unrelated suffix fails', () => {
+        rejected(oldBundle.replace(oldRoute, oldRoute.replace(oldExecute,
+          oldExecute.replace('i.instanceName', 'i.name'))) + unrelatedOld);
+      });
+      await t.test('duplicated transformation point inside intended route fails', () => {
+        rejected(oldBundle.replace(oldRoute, oldRoute.replace(oldExecute, `${oldExecute},${oldExecute}`)));
+      });
+      await t.test('correct marked bundle is byte-identical on rerun', () => {
+        const result = run(marked, false);
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(result.output, marked);
+        assert.equal(createHash('sha256').update(result.output).digest('hex'),
+          createHash('sha256').update(marked).digest('hex'));
+      });
+      await t.test('stale marked route with outer-variable proof fails', () => {
+        const prefix = route.slice(0, route.indexOf(correctedExecute));
+        const oldProof = `${oldExecute}});if(a){a.nexi_event_signed=require("/evolution/nexi-transport.cjs").eventSigningReady();` +
+          `a.nexi_event_key_check=require("/evolution/nexi-transport.cjs").eventKeyProof(${mysql ? 's' : 'e'}.params.instanceName)}n.status(200).json(a)})`;
+        rejected(marked.replace(route, prefix + oldProof), false);
+      });
+      await t.test('proof only in unrelated route cannot validate marker', () => {
+        rejected(marked.replace(route, oldRoute) + unrelatedCorrected, false);
+      });
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
