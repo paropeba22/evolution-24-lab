@@ -4,16 +4,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const distDir = process.env.EVOLUTION_DIST_DIR || '/evolution/dist';
-if (process.env.DATABASE_PROVIDER === undefined) {
-  // Match runWithProvider.js, which loads the upstream .env before selecting
-  // the schema and migration folder.
-  require(path.join(distDir, '..', 'node_modules', 'dotenv')).config({
-    path: path.join(distDir, '..', '.env'),
-  });
-}
-const provider = process.env.DATABASE_PROVIDER || 'postgresql';
+const provider = process.env.DATABASE_PROVIDER;
 if (!['postgresql', 'psql_bouncer', 'mysql'].includes(provider)) {
-  throw new Error(`Unsupported DATABASE_PROVIDER: ${provider}`);
+  throw new Error(`DATABASE_PROVIDER must be postgresql, psql_bouncer, or mysql; received: ${provider}`);
+}
+const prismaConfig = path.join(distDir, '..', 'prisma.config.ts');
+if (!fs.existsSync(prismaConfig) || !fs.statSync(prismaConfig).isFile()) {
+  throw new Error('Missing /evolution/prisma.config.ts required for Prisma startup');
 }
 
 const source = path.join(distDir, 'providers', `${provider}.js`);

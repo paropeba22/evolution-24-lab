@@ -17,6 +17,7 @@ COPY patch-instance-create.mjs /tmp/patch-instance-create.mjs
 COPY patch-channel-transport.mjs /tmp/patch-channel-transport.mjs
 COPY assert-runtime-model.mjs /tmp/assert-runtime-model.mjs
 COPY assert-runtime-model.mjs /evolution/assert-runtime-model.mjs
+COPY Dockerfile /evolution/Dockerfile
 COPY nexi-transport.cjs /evolution/nexi-transport.cjs
 COPY bundle-patch.test.cjs nexi-transport.test.cjs redis-lua.integration.test.cjs runtime-model.test.cjs /evolution/
 COPY select-provider-bundle.cjs /evolution/select-provider-bundle.cjs
@@ -62,13 +63,22 @@ RUN set -eu; mkdir -p /tmp/evolution-provider-bundles; \
 FROM evoapicloud/evolution-api@sha256:65e29aa1a2ca096675825ff8feb3b5bf7fbcb167e368f9282fd80670e8da18a2
 
 WORKDIR /evolution
+COPY prisma.config.ts /evolution/prisma.config.ts
 COPY --from=source-builder /evolution/dist /evolution/dist
 COPY --from=source-builder /evolution/prisma /evolution/prisma
 COPY --from=source-builder /evolution/nexi-transport.cjs /evolution/nexi-transport.cjs
 COPY select-provider-bundle.cjs /evolution/select-provider-bundle.cjs
 COPY assert-runtime-model.mjs /tmp/assert-runtime-model.mjs
 
-RUN set -eu; for provider in mysql postgresql; do \
+RUN set -eu; \
+    test -f /evolution/prisma.config.ts; \
+    test -f /evolution/prisma/postgresql-schema.prisma; \
+    test -f /evolution/prisma/psql_bouncer-schema.prisma; \
+    test -f /evolution/prisma/mysql-schema.prisma; \
+    test -f /evolution/select-provider-bundle.cjs; \
+    test -f /evolution/Docker/scripts/deploy_database.sh; \
+    test -f /evolution/runWithProvider.js; \
+    for provider in mysql postgresql; do \
       EVOLUTION_PROVIDER="$provider" EVOLUTION_SKIP_GENERATED=1 EVOLUTION_BUNDLE_PATH="/evolution/dist/providers/$provider.js" node /tmp/assert-runtime-model.mjs; \
     done; \
     EVOLUTION_PROVIDER=postgresql EVOLUTION_SCHEMA_PROVIDER=psql_bouncer EVOLUTION_SKIP_GENERATED=1 EVOLUTION_BUNDLE_PATH=/evolution/dist/providers/psql_bouncer.js node /tmp/assert-runtime-model.mjs; \
