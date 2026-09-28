@@ -15,6 +15,7 @@ RUN npm ci --silent
 COPY patch-prisma-binding.mjs /tmp/patch-prisma-binding.mjs
 COPY patch-instance-create.mjs /tmp/patch-instance-create.mjs
 COPY patch-channel-transport.mjs /tmp/patch-channel-transport.mjs
+COPY patch-channel-transport.mjs /evolution/patch-channel-transport.mjs
 COPY assert-runtime-model.mjs /tmp/assert-runtime-model.mjs
 COPY assert-runtime-model.mjs /evolution/assert-runtime-model.mjs
 COPY Dockerfile /evolution/Dockerfile
