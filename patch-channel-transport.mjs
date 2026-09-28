@@ -5,8 +5,14 @@ const provider = process.env.EVOLUTION_PROVIDER || 'postgresql';
 if (!['postgresql', 'psql_bouncer', 'mysql'].includes(provider)) throw new Error('unsupported Prisma provider');
 const mysql = provider === 'mysql';
 const marker = 'nexi-p3-chatwoot-transport';
+const helper = 'require("/evolution/nexi-transport.cjs")';
+const webhookService = mysql ? 'X' : 'z';
+const eventProofRoute = `execute:async i=>{let r=await ${webhookService}.webhook.get(i.instanceName);if(r){r.nexi_event_signed=${helper}.eventSigningReady();r.nexi_event_key_check=${helper}.eventKeyProof(i.instanceName)}return r}});n.status(200).json(a)`;
 let code = fs.readFileSync(bundlePath, 'utf8');
-if (code.includes(marker)) process.exit(0);
+if (code.includes(marker)) {
+  if (code.split(eventProofRoute).length !== 2) throw new Error('event signing proof: existing bundle is not corrected');
+  process.exit(0);
+}
 
 function replaceOnce(before, after, label) {
   const first = code.indexOf(before);
@@ -20,7 +26,6 @@ function replaceCount(before, after, expected, label) {
   code = code.split(before).join(after);
 }
 
-const helper = 'require("/evolution/nexi-transport.cjs")';
 const chatwootCtor = provider === 'mysql' ? 'Qe(R' : 'ye(O';
 const singletonCtor = provider === 'mysql' ? 'Qe(R,y,x,cn)' : 'ye(O,E,J,cn)';
 replaceOnce(`this.chatwootService=new ${chatwootCtor},this.configService,this.prismaRepository,this.chatwootCache)`,
@@ -52,9 +57,7 @@ replaceOnce(mysql ? 'execute:a=>pn.findChatwoot(a)});s.status(200).json(n)' : 'e
   `execute:a=>${mysql ? 'pn' : 'Cn'}.findChatwoot(a)});n.nexi_transport_hardened=true;n.nexi_replay_store_ready=await ${helper}.replayStoreReady();s.status(200).json(n)`,
   'chatwoot transport proof');
 replaceOnce(mysql ? 'execute:i=>X.webhook.get(i.instanceName)});n.status(200).json(a)' : 'execute:i=>z.webhook.get(i.instanceName)});n.status(200).json(a)',
-  mysql
-    ? `execute:i=>X.webhook.get(i.instanceName)});if(a){a.nexi_event_signed=${helper}.eventSigningReady();a.nexi_event_key_check=${helper}.eventKeyProof(s.params.instanceName)}n.status(200).json(a)`
-    : `execute:i=>z.webhook.get(i.instanceName)});if(a){a.nexi_event_signed=${helper}.eventSigningReady();a.nexi_event_key_check=${helper}.eventKeyProof(e.params.instanceName)}n.status(200).json(a)`,
+  eventProofRoute,
   'event signing proof');
 
 replaceOnce(`url:D,...f};this.logger.log(${mysql ? 'M' : 'U'})}try{if(u?.enabled&&S.test(u.url))`,
