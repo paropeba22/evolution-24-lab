@@ -17,7 +17,7 @@ const mapperPath = 'src/api/integrations/chatbot/chatwoot/services/chatwoot.serv
 const webhookPath = 'src/api/integrations/event/webhook/webhook.controller.ts';
 const jidA = '5511999999999@s.whatsapp.net', jidB = '5511888888888@s.whatsapp.net', lid = '100000000000001@lid';
 const logger = { verbose() {}, error() {}, warn() {}, info() {}, log() {}, debug() {}, trace() {} };
-let scratch, raw, rawSend, bufferSource, baileys, mapper, retry, tsup, ts, createJid;
+let scratch, raw, rawSend, originalRecv, originalSend, bufferSource, baileys, mapper, retry, tsup, ts, createJid;
 function section(s, a, b) { const start = s.indexOf(a), end = s.indexOf(b, start); assert.ok(start >= 0 && end > start); return s.slice(start, end); }
 function helper(name) {
   if (name === '/evolution/nexi-financial-transport.cjs') return financial;
@@ -45,6 +45,7 @@ before(() => {
     ? fs.readFileSync(path.join(__dirname, '.identity-upstream/messages-recv.js'))
     : fs.readFileSync(path.join(upstream, 'node_modules/baileys/lib/Socket/messages-recv.js'));
   const target = path.join(scratch, 'node_modules/baileys/lib/Socket/messages-recv.js');
+  originalRecv = rawSource.toString('utf8');
   fs.mkdirSync(path.dirname(target), { recursive: true }); fs.writeFileSync(target, rawSource);
   bufferSource = fs.existsSync(path.join(__dirname, '.identity-upstream/event-buffer.js'))
     ? fs.readFileSync(path.join(__dirname, '.identity-upstream/event-buffer.js'), 'utf8')
@@ -55,6 +56,7 @@ before(() => {
     ? fs.readFileSync(path.join(__dirname, '.identity-upstream/messages-send.js'))
     : fs.readFileSync(path.join(upstream, 'node_modules/baileys/lib/Socket/messages-send.js'));
   const sendTarget = path.join(scratch, 'node_modules/baileys/lib/Socket/messages-send.js');
+  originalSend = sendSource.toString('utf8');
   fs.writeFileSync(sendTarget, sendSource);
   fs.writeFileSync(path.join(scratch, 'tsup.config.ts'), pristine('tsup.config.ts', '.identity-upstream', 'tsup.config.ts'));
   for (const patch of ['patch-financial-delivery-source.mjs', 'patch-trusted-baileys.mjs', 'patch-managed-retry.mjs']) {
@@ -96,30 +98,34 @@ test('actual patched tsup config and lightweight esbuild preserve one shared run
 });
 
 async function decryptedFixture({ attrs = {}, key = {}, message = { conversation: 'Synthetic' }, decryptFails = false,
-  stub, parameters, history = false, from = jidA, consume = true } = {}) {
-  const node = { attrs: { from, id: 'synthetic-wa-id', ...attrs } };
+  stub, parameters, history = false, from = jidA, consume = true, retryManager = null, managed = true, recvSource = raw } = {}) {
+  const node = { attrs: { from, id: key.id || 'synthetic-wa-id', ...attrs } };
   const msg = { key: { fromMe: false, remoteJid: from, id: node.attrs.id, ...key }, message,
     messageStubType: stub, messageStubParameters: parameters };
   const credentials = { me: { id: '5500000000000@s.whatsapp.net', lid: '200000000000001@lid' },
     registrationId: 1, signedIdentityKey: { public: Buffer.alloc(32, 7) } };
   let event, captured = null;
+  const errors = [];
   const bindings = {
-    nexiIdentity: identity, logger, authState: { creds: credentials }, signalRepository: { lidMapping: {
+    nexiIdentity: identity, nexiFinancial: financial, config: { nexiFinancialManaged: managed },
+    logger: { ...logger, error: (value, text) => { if (text === 'error in handling message') errors.push(value.error); } },
+    authState: { creds: credentials }, signalRepository: { lidMapping: {
       getPNForLID: async () => jidA, storeLIDPNMappings: async () => {} }, migrateSession: async () => {} },
     getBinaryNodeChild: () => ({ attrs: { type: 'msg' } }), jidDecode: value => ({ server: value.split('@')[1] }),
     decryptMessageNode: () => ({ fullMessage: msg, category: attrs.category, author: from,
       decrypt: async () => { if (decryptFails) throw new Error('synthetic decrypt failure'); } }),
-    messageMutex: { mutex: fn => fn() }, messageRetryManager: null,
+    messageMutex: { mutex: fn => fn() }, messageRetryManager: retryManager,
     proto: { WebMessageInfo: { StubType: { CIPHERTEXT: 1 } } }, MISSING_KEYS_ERROR_TEXT: 'missing',
     NO_MESSAGE_FOUND_ERROR_TEXT: 'absent', NACK_REASONS: { ParsingError: 1, UnhandledError: 2 },
     sendMessageAck: async () => {}, sendReceipt: async () => {}, sendActiveReceipts: true,
-    isNewsletter: () => false, isJidNewsletter: () => false, getHistoryMsg: () => history,
+    isNewsletter: () => false, isJidNewsletter: () => false, isLidUser: value => typeof value === 'string' && value.endsWith('@lid'),
+    getHistoryMsg: () => history,
     jidNormalizedUser: value => value, cleanMessage: () => {}, binaryNodeToString: () => 'synthetic',
     upsertMessage: async (m, type) => { event = type; if (consume) captured = identity.take(m, type); },
   };
-  const fn = new Function(...Object.keys(bindings), section(raw, '    const handleMessage = async (node) => {', '    const handleCall =') + 'return handleMessage;')(...Object.values(bindings));
+  const fn = new Function(...Object.keys(bindings), section(recvSource, '    const handleMessage = async (node) => {', '    const handleCall =') + 'return handleMessage;')(...Object.values(bindings));
   await fn(node);
-  return { msg, event, captured };
+  return { msg, event, captured, errors };
 }
 
 test('actual patched Baileys decrypt path marks only genuine live peer input, and artificial copies lack provenance', async () => {
@@ -260,7 +266,7 @@ test('recipient capability cannot cross instance identity or survive its deadlin
 test('actual patched Baileys wire boundary rejects changed stanza/device peers and disables native financial retry cache', async () => {
   const wireBody = section(rawSend, '            nexiFinancial.assertWireRecipient(', '            // Fire-and-forget:');
   const sendWire = new Function('nexiFinancial', 'logger', 'sendNode', 'destinationJid', 'stanza', 'authState',
-    `return (async () => { const msgId = 'synthetic'; const participants = []; ${wireBody} })();`);
+    `return (async () => { const msgId = 'synthetic', message = {}; const config = {}; const participants = []; ${wireBody} })();`);
   const cacheBody = section(rawSend, '            // Add message to retry cache if enabled', '        }, meId);');
   const cacheMessage = new Function('nexiFinancial', 'messageRetryManager',
     `const participant = null, destinationJid = '${jidA}', msgId = 'synthetic', message = {}; ${cacheBody}`);
@@ -291,8 +297,171 @@ test('actual patched Baileys wire boundary rejects changed stanza/device peers a
     assert.equal(await makeCallback.call({ instance: subject.instance, getMessage: async () => message }, helper).getMessage({}), undefined);
   }
   const unchanged = { conversation: 'Synthetic ordinary message' };
+  assert.equal(await makeCallback.call({ instance: subject.instance, getMessage: async () => unchanged }, helper)
+    .getMessage({ id: '3EB0F1A9C7D5E3B1RECONSTRUCTED' }), undefined);
   assert.equal(await makeCallback.call({ instance: { name: 'unmanaged' }, getMessage: async () => unchanged }, helper).getMessage({}), unchanged);
 });
+test('actual transformed socket creation derives managed retry scope from runtime instance, overriding editable config', () => {
+  const socketLine = baileys.split('\n').find(line => line.includes('this.client = makeWASocket('));
+  assert.ok(socketLine.includes('.socketConfig(this.instance.name, socketConfig)'));
+  const create = new Function('require', 'makeWASocket', 'socketConfig', socketLine + '\nreturn this.client;');
+  for (const [name, expected] of [['nexi-wa-runtime', true], ['unmanaged', false]]) {
+    const scope = create.call({ instance: { name } }, helper, config => config,
+      { nexiFinancialManaged: !expected, enableRecentMessageCache: true });
+    assert.equal(scope.nexiFinancialManaged, expected);
+    assert.equal(scope.enableRecentMessageCache, true);
+  }
+});
+function nativeRetryFixture({ managed = true, fallback, recvSource = raw, sendSource = rawSend } = {}) {
+  const managerFile = 'node_modules/baileys/lib/Utils/message-retry-manager.js';
+  const managerSource = fs.readFileSync(fs.existsSync(path.join(__dirname, managerFile))
+    ? path.join(__dirname, managerFile) : path.join(upstream, managerFile), 'utf8');
+  const { LRUCache } = require(require.resolve('lru-cache', { paths: [__dirname, upstream] }));
+  const Manager = new Function('LRUCache', managerSource.replace(/^import .*;\r?\n/gm, '')
+    .replaceAll('export var ', 'var ').replaceAll('export class ', 'class ') + '\nreturn MessageRetryManager;')(LRUCache);
+  const manager = new Manager(logger, 5);
+  const effects = { relay: 0, sendNode: 0, fallback: 0 };
+  const wireBody = section(sendSource, sendSource.includes('nexiFinancial.assertWireRecipient(')
+    ? '            nexiFinancial.assertWireRecipient('
+    : '            logger.debug({ msgId }, `sending message to ${participants.length} devices`);', '            // Fire-and-forget:');
+  const wire = new Function('nexiFinancial', 'logger', 'sendNode', 'destinationJid', 'stanza', 'authState', 'message', 'config',
+    `return (async () => { const msgId = stanza.attrs.id; const participants = []; ${wireBody} })();`);
+  const bindings = {
+    nexiFinancial: financial, config: { nexiFinancialManaged: managed }, logger, messageRetryManager: manager,
+    getMessage: async key => { effects.fallback++; return typeof fallback === 'function' ? fallback(key) : fallback; },
+    jidDecode: () => ({ device: 1 }), signalRepository: {
+      jidToSignalProtocolAddress: () => 'synthetic', getSessionInfo: async () => null,
+    }, extractE2ESessionFromRetryReceipt: () => null, getBinaryNodeChildUInt: () => undefined,
+    enableAutoSessionRecreation: false, assertSessions: async () => {}, isJidGroup: () => false,
+    isJidStatusBroadcast: () => false, authState: { creds: { me: { id: jidB } } },
+    willSendMessageAgain: async () => true, updateSendMessageAgainCount: async () => {},
+    relayMessage: async (jid, message, options) => {
+      effects.relay++;
+      await wire(financial, logger, async () => effects.sendNode++, jid,
+        { attrs: { to: jid, id: options.messageId }, content: [] }, {}, message, { nexiFinancialManaged: managed });
+    },
+    areJidsSameUser: () => false, getBinaryNodeChildren: () => [], getBinaryNodeChild: () => ({ attrs: { count: '1' } }),
+    receiptMutex: { mutex: fn => fn() }, getStatusFromReceiptType: () => undefined,
+    ev: { emit() {} }, sendMessageAck: async () => {},
+  };
+  const receipt = new Function(...Object.keys(bindings),
+    section(recvSource, '    const sendMessagesAgain = async', '    const handleNotification =') + '\nreturn handleReceipt;')(...Object.values(bindings));
+  return { manager, effects, retry: id => receipt({ attrs: { from: jidA, id, type: 'retry' } }),
+    close: () => { for (const value of Object.values(manager)) if (value instanceof LRUCache) value.clear(); } };
+}
+
+test('pristine pinned Baileys reproduces financial echo -> recent cache -> retry bypassing getMessage and relaying without ALS', async () => {
+  const fixture = nativeRetryFixture({ recvSource: originalRecv, sendSource: originalSend });
+  try {
+    const echo = await decryptedFixture({ from: '5500000000000:1@s.whatsapp.net', attrs: { recipient: jidA },
+      key: { fromMe: true, remoteJid: jidA, id: 'baseline-financial-id' }, message: cta,
+      retryManager: fixture.manager, recvSource: originalRecv });
+    assert.deepEqual(echo.errors, []); assert.equal(echo.event, 'notify');
+    assert.ok(fixture.manager.getRecentMessage(jidA, 'baseline-financial-id'));
+    await fixture.retry('baseline-financial-id');
+    assert.equal(fixture.effects.fallback, 0);
+    assert.equal(fixture.effects.relay, 1); assert.equal(fixture.effects.sendNode, 1);
+  } finally { fixture.close(); }
+});
+
+test('actual authenticated financial echo and native retry receipt produce ZERO second relay/sendNode with recent cache and DB OFF', async () => {
+  const fixture = nativeRetryFixture({ fallback: undefined }); // DB OFF: no stored payload.
+  try {
+    const { subject } = sendSubject();
+    const idLine = rawSend.split('\n').find(line => line.includes('msgId = nexiFinancial.relayMessageId('));
+    const assignId = new Function('nexiFinancial', 'message', `const config = { nexiFinancialManaged: true }; let msgId; ${idLine} return msgId;`);
+    const wireBody = section(rawSend, '            nexiFinancial.assertWireRecipient(', '            // Fire-and-forget:');
+    const send = new Function('nexiFinancial', 'logger', 'sendNode', 'destinationJid', 'stanza', 'authState', 'message',
+      `return (async () => { const config = { nexiFinancialManaged: true }, msgId = stanza.attrs.id, participants = []; ${wireBody} })();`);
+    let id, firstOutbound = 0;
+    subject.client.relayMessage = async (jid, message) => {
+      id = assignId(financial, message);
+      await send(financial, logger, async () => firstOutbound++, jid,
+        { attrs: { id, to: jid }, content: [] }, subject.client.authState, message);
+      return id;
+    };
+    await withTestRecipient(subject, () => subject.sendMessageWithTyping('5511999999999', cta, {}));
+    assert.equal(firstOutbound, 1);
+    assert.match(id, /^3EB0F1A9C7D5E3B1[0-9A-F]{16}$/);
+    const echo = await decryptedFixture({ from: '5500000000000:1@s.whatsapp.net', attrs: { recipient: jidA },
+      key: { fromMe: true, remoteJid: jidA, id }, message: cta, retryManager: fixture.manager });
+    assert.deepEqual(echo.errors, []); assert.equal(echo.event, 'notify');
+    assert.equal(fixture.manager.getRecentMessage(jidA, id), undefined, 'authenticated echo did not repopulate cache');
+    await fixture.retry(id);
+    assert.equal(fixture.effects.relay, 0); assert.equal(fixture.effects.sendNode, 0);
+    assert.equal(firstOutbound + fixture.effects.sendNode, 1, 'no second outbound');
+    // Force a stale/alternate cache insertion. The consumer must deny even
+    // after the real manager removes the entry on markRetrySuccess.
+    fixture.manager.addRecentMessage(jidA, id, cta);
+    await fixture.retry(id);
+    assert.equal(fixture.effects.relay, 0); assert.equal(fixture.effects.sendNode, 0);
+  } finally { fixture.close(); }
+});
+
+test('native recent-cache/getMessage consumers deny old CTA, nested representations and reconstructed marked IDs without ALS', async () => {
+  const urlCta = { interactiveMessage: { nativeFlowMessage: { buttons: [{ name: 'cta_url', buttonParamsJson: '{}' }] } } };
+  for (const message of [cta, urlCta, { ephemeralMessage: { message: { viewOnceMessageV2Extension: { message: cta } } } },
+    { deviceSentMessage: { message: cta } }, { conversation: 'reconstructed without CTA fields' }]) {
+    for (const cached of [true, false]) {
+      const id = message.conversation ? '3EB0F1A9C7D5E3B1RECONSTRUCTED' : 'old-unmarked-financial-id';
+      const fixture = nativeRetryFixture({ fallback: message });
+      try {
+        if (cached) fixture.manager.addRecentMessage(jidA, id, message);
+        await fixture.retry(id);
+        assert.equal(fixture.effects.fallback, cached ? 0 : 1, 'recent-cache bypass of getMessage is exercised');
+        assert.equal(fixture.effects.relay, 0); assert.equal(fixture.effects.sendNode, 0);
+      } finally { fixture.close(); }
+    }
+  }
+});
+
+test('native retry cannot borrow expired/replaced financial context, and final wire denies managed content without ALS', async () => {
+  const fixture = nativeRetryFixture({ fallback: cta });
+  try {
+    const { subject } = sendSubject();
+    const oldNow = Date.now;
+    await withTestRecipient(subject, async () => {
+      subject.instanceId = 'revoked-runtime-binding';
+      Date.now = () => oldNow() + 300001;
+      try { await fixture.retry('old-financial-id'); } finally { Date.now = oldNow; }
+    });
+    assert.equal(fixture.effects.relay, 0); assert.equal(fixture.effects.sendNode, 0);
+    const wireBody = section(rawSend, '            nexiFinancial.assertWireRecipient(', '            // Fire-and-forget:');
+    const wire = new Function('nexiFinancial', 'logger', 'sendNode', 'message', 'stanza',
+      `return (async () => { const config = { nexiFinancialManaged: true }, authState = { creds: {} };
+        const destinationJid = '${jidA}', msgId = stanza.attrs.id, participants = []; ${wireBody} })();`);
+    for (const [id, message] of [['3EB0F1A9C7D5E3B1RECONSTRUCTED', {}], ['old-financial-id', cta]]) {
+      await assert.rejects(wire(financial, logger, async () => fixture.effects.sendNode++, message,
+        { attrs: { id, to: jidA } }), /native_retry_denied/);
+      assert.throws(() => financial.relayMessageId(true, id, message), /native_retry_denied/);
+    }
+    assert.equal(fixture.effects.sendNode, 0);
+  } finally { fixture.close(); }
+});
+
+test('actual unmanaged echoes, recent-cache and getMessage retries retain native relay/sendNode baseline', async () => {
+  for (const managed of [false, true]) {
+    for (const cached of [false, true]) {
+      // Unmanaged CTAs are generic Evolution traffic; managed plain messages
+      // also retain native retries. The marker only denies in managed scope.
+      const message = managed ? { conversation: 'ordinary' } : cta;
+      const id = managed ? 'ordinary-id' : '3EB0F1A9C7D5E3B1UNMANAGED';
+      const fixture = nativeRetryFixture({ managed, fallback: message });
+      try {
+        if (cached) {
+          const echo = await decryptedFixture({ from: '5500000000000:1@s.whatsapp.net', attrs: { recipient: jidA },
+            key: { fromMe: true, remoteJid: jidA, id }, message, managed, retryManager: fixture.manager });
+          assert.deepEqual(echo.errors, []); assert.equal(echo.event, 'notify');
+          assert.ok(fixture.manager.getRecentMessage(jidA, id));
+        }
+        await fixture.retry(id);
+        assert.equal(fixture.effects.fallback, cached ? 0 : 1);
+        assert.equal(fixture.effects.relay, 1); assert.equal(fixture.effects.sendNode, 1);
+      } finally { fixture.close(); }
+    }
+  }
+});
+
 test('actual managed conversation path ignores telephone/cache lookup and requires server-owned Inbox/CI association', async () => {
   const Subject = compile(section(mapper, '  public async createConversation(', '  public async getInbox('));
   const subject = new Subject(); subject.logger = logger; subject.provider = { accountId: 1, inboxId: 10 };

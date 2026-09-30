@@ -153,8 +153,11 @@ patch('src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts', (inpu
   section = replaceOnce(section, '    this.logger.verbose(`Sending message to ${sender}`);',
     "    if (!managedFinancial) this.logger.verbose(`Sending message to ${sender}`);", 'recipient log redaction');
   let source = input.slice(0, start) + section + input.slice(end);
+  source = replaceOnce(source, '    this.client = makeWASocket(socketConfig);',
+    `    this.client = makeWASocket(${helper}.socketConfig(this.instance.name, socketConfig));`,
+    'runtime-owned managed retry scope');
   source = replaceOnce(source, '      getMessage: async (key) => (await this.getMessage(key)) as Promise<proto.IMessage>,',
-    `      getMessage: async (key) => ${helper}.retryMessage(this.instance.name, await this.getMessage(key)) as Promise<proto.IMessage>,`,
+    `      getMessage: async (key) => ${helper}.retryMessage(this.instance.name, await this.getMessage(key), key) as Promise<proto.IMessage>,`,
     'managed financial messages never supply native receipt retries');
   const lookupStart = source.indexOf('  public async whatsappNumber(');
   const lookupEnd = source.indexOf('  public async markMessageAsRead(', lookupStart);

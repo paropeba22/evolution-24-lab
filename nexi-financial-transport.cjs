@@ -1,7 +1,7 @@
 'use strict';
 
 const { AsyncLocalStorage } = require('node:async_hooks');
-const { createHmac, createHash, timingSafeEqual } = require('node:crypto');
+const { createHmac, createHash, timingSafeEqual, randomBytes } = require('node:crypto');
 const { sessionFingerprint } = require('./nexi-identity.cjs');
 const recipientContext = new AsyncLocalStorage();
 const ledger = require('./nexi-transport.cjs').createReplayLedger({ consumeOnClaim: true });
@@ -63,14 +63,38 @@ function assertRecipient(instance, message, recipient, instanceId) {
 
 function managedLookup(instance) { return recipientContext.getStore()?.instance === instance; }
 function currentOperation() { return !!recipientContext.getStore(); }
-function retryMessage(instance, message) {
+// A reserved, runtime-generated WA message ID survives encryption, fromMe
+// echoes, cache storage keys and DB reconstruction. It is a denial marker,
+// never authority, and contains no financial value or recipient information.
+const financialIdPrefix = '3EB0F1A9C7D5E3B1';
+function socketConfig(instance, config) {
+  return { ...config, nexiFinancialManaged: instance.startsWith('nexi-wa-') };
+}
+function nativeFinancial(managed, key, message) {
+  return managed === true && (typeof key?.id === 'string' && key.id.startsWith(financialIdPrefix) ||
+    isManagedCta('nexi-wa-runtime', message));
+}
+function relayMessageId(managed, id, message) {
+  const state = recipientContext.getStore();
+  if (state) {
+    state.messageId ||= financialIdPrefix + randomBytes(8).toString('hex').toUpperCase();
+    return state.messageId;
+  }
+  if (nativeFinancial(managed, { id }, message)) throw new Error('nexi_financial_native_retry_denied');
+  return id;
+}
+function retryMessage(instance, message, key) {
+  if (nativeFinancial(instance.startsWith('nexi-wa-'), key, message)) return undefined;
   if (instance.startsWith('nexi-wa-') && (isManagedCta(instance, message) ||
       !message || message.conversation === '' || message.conversation === 'NEXI financial delivery')) return undefined;
   return message;
 }
-function assertWireRecipient(jid, stanza, credentials) {
+function assertWireRecipient(jid, stanza, credentials, message, managed = false) {
   const state = recipientContext.getStore();
-  if (!state) return;
+  if (!state) {
+    if (nativeFinancial(managed, stanza?.attrs, message)) throw new Error('nexi_financial_native_retry_denied');
+    return;
+  }
   const self = credentials?.me;
   if (state.deadline <= Date.now() || jid !== state.jid || stanza?.attrs?.to !== state.jid ||
       !state.currentBinding() || sessionFingerprint(credentials) !== state.session ||
@@ -111,8 +135,13 @@ async function beginRelay(instance, message, recipient, instanceId) {
 
 // Classification limits redaction scope; it is never destination authority.
 function isManagedCta(instanceName, message) {
-  const content = message?.viewOnceMessage?.message || message?.viewOnceMessageV2?.message ||
-    message?.ephemeralMessage?.message || message;
+  let content = message;
+  for (let depth = 0; depth < 8; depth++) {
+    const inner = content?.viewOnceMessage?.message || content?.viewOnceMessageV2?.message ||
+      content?.viewOnceMessageV2Extension?.message || content?.ephemeralMessage?.message || content?.deviceSentMessage?.message;
+    if (!inner) break;
+    content = inner;
+  }
   return typeof instanceName === 'string' && instanceName.startsWith('nexi-wa-') &&
     content?.interactiveMessage?.nativeFlowMessage?.buttons?.some(
       (button) => button.name === 'cta_copy' || button.name === 'cta_url',
@@ -134,4 +163,4 @@ function failureMetadata(instanceId, messageId, stage, error) {
 }
 
 module.exports = { isManagedCta, failureMetadata, withRecipient, assertRecipient, beginRelay, dtoHash, managedLookup, resolutionInput,
-  currentOperation, retryMessage, assertWireRecipient };
+  currentOperation, retryMessage, assertWireRecipient, socketConfig, nativeFinancial, relayMessageId };

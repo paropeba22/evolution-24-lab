@@ -14,8 +14,17 @@ if (createHash('sha256').update(source).digest('hex') !== '850445e6f9e076b1beb98
 }
 const anchor = '                cleanMessage(msg, authState.creds.me.id, authState.creds.me.lid);\n                await upsertMessage(msg, node.attrs.offline ? \'append\' : \'notify\');';
 if (source.split(anchor).length !== 2) throw new Error('Baileys inbound anchor changed');
-const patched = "import nexiIdentity from '/evolution/nexi-identity.cjs';\n" + source.replace(anchor,
-  '                nexiIdentity.observeDecrypted(msg, node, authState.creds, getHistoryMsg(msg.message));\n' + anchor);
+const echoAnchor = '                if (msg.key?.remoteJid && msg.key?.id && msg.message && messageRetryManager) {';
+const consumeAnchor = '            msgs.push(msg);';
+if (source.split(echoAnchor).length !== 2 || source.split(consumeAnchor).length !== 2) {
+  throw new Error('Baileys native retry insertion/consumption anchor changed');
+}
+const patched = "import nexiIdentity from '/evolution/nexi-identity.cjs';\nimport nexiFinancial from '/evolution/nexi-financial-transport.cjs';\n" + source
+  .replace(anchor, '                nexiIdentity.observeDecrypted(msg, node, authState.creds, getHistoryMsg(msg.message));\n' + anchor)
+  .replace(echoAnchor, '                if (msg.key?.remoteJid && msg.key?.id && msg.message && messageRetryManager &&\n' +
+    '                    !(msg.key.fromMe && nexiFinancial.nativeFinancial(config.nexiFinancialManaged, msg.key, msg.message))) {')
+  .replace(consumeAnchor, '            // Deny both recent-cache and getMessage financial payloads, regardless of ALS.\n' +
+    '            if (nexiFinancial.nativeFinancial(config.nexiFinancialManaged, { ...key, id }, msg)) msg = undefined;\n' + consumeAnchor);
 const sendFile = path.join(root, 'node_modules/baileys/lib/Socket/messages-send.js');
 const sendSource = fs.readFileSync(sendFile, 'utf8').replaceAll('\r\n', '\n');
 if (createHash('sha256').update(sendSource).digest('hex') !== '81387f00b457ea28b481b1320bfdbf5ada766305f6f2bc7033931f49811519dc') {
@@ -23,11 +32,13 @@ if (createHash('sha256').update(sendSource).digest('hex') !== '81387f00b457ea28b
 }
 const wireAnchor = '            logger.debug({ msgId }, `sending message to ${participants.length} devices`);\n            await sendNode(stanza);';
 const retryAnchor = '            if (messageRetryManager && !participant) {';
-if (sendSource.split(wireAnchor).length !== 2 || sendSource.split(retryAnchor).length !== 2) {
+const idAnchor = '        msgId = msgId || generateMessageIDV2(meId);';
+if (sendSource.split(wireAnchor).length !== 2 || sendSource.split(retryAnchor).length !== 2 || sendSource.split(idAnchor).length !== 2) {
   throw new Error('Baileys final wire/retry anchor changed');
 }
 const sendPatched = "import nexiFinancial from '/evolution/nexi-financial-transport.cjs';\n" + sendSource
-  .replace(wireAnchor, '            nexiFinancial.assertWireRecipient(destinationJid, stanza, authState.creds);\n' + wireAnchor)
+  .replace(idAnchor, '        msgId = nexiFinancial.relayMessageId(config.nexiFinancialManaged, msgId, message);\n' + idAnchor)
+  .replace(wireAnchor, '            nexiFinancial.assertWireRecipient(destinationJid, stanza, authState.creds, message, config.nexiFinancialManaged);\n' + wireAnchor)
   .replace(retryAnchor, '            if (messageRetryManager && !participant && !nexiFinancial.currentOperation()) {');
 const tsupFile = path.join(root, 'tsup.config.ts');
 const tsupSource = fs.readFileSync(tsupFile, 'utf8').replaceAll('\r\n', '\n');
