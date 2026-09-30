@@ -7,6 +7,7 @@ const { tmpdir } = require('node:os');
 const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
 const { createHash } = require('node:crypto');
+const { withTestRecipient } = require('./recipient-contract-test-support.cjs');
 const revision = 'e273b904d53f5726970fd6a244ed9caa61dfeb9a';
 const files = [
   'src/validate/message.schema.ts',
@@ -125,7 +126,9 @@ test('actual transformed sendMessageWithTyping redacts persistence exception, lo
         } } };
         let response;
         let propagated;
-        try { response = await subject.sendMessageWithTyping('5511999999999', message, {}); } catch (error) { propagated = error; }
+        try {
+          response = await withTestRecipient(subject, () => subject.sendMessageWithTyping('5511999999999', message, {}));
+        } catch (error) { propagated = error; }
         assert.equal(sent, 1, 'persistence failure happens after external acceptance');
         const diagnostics = JSON.stringify({ captured, response, propagated });
         if (!managed) {
@@ -138,7 +141,7 @@ test('actual transformed sendMessageWithTyping redacts persistence exception, lo
         assert.doesNotMatch(diagnostics, /FINANCIAL_SECRET_NEVER_LOG|buttonParamsJson|copy_code|copyCode/);
         if (failPersistence) {
           assert.equal(response, undefined);
-          assert.deepEqual(propagated, { status: 400, error: 'Bad Request', message: ['nexi_financial_transport_failed'] });
+          assert.equal(propagated.message, 'nexi_financial_transport_failed');
           assert.deepEqual(captured.at(-1), { code: 'nexi_financial_transport_failed', operation: 'sendButtons',
             instanceId: 'safe-instance-id', deliveryId: 'safe-delivery-id', stage: 'persistence', category: 'persistence', status: 400 });
         } else assert.deepEqual(response, { key: { id: 'safe-delivery-id', fromMe: true } });

@@ -36,11 +36,45 @@ patch('src/validate/message.schema.ts', (source) => {
   const section = source.slice(start, end);
   const corrected = replaceOnce(section, "          url: { type: 'string' },\n          phoneNumber:",
     "          url: { type: 'string' },\n          copyCode: { type: 'string' },\n          phoneNumber:", 'copyCode schema');
-  return source.slice(0, start) + corrected + source.slice(end);
+  const recipientSchema = replaceOnce(corrected, "    number: { ...numberDefinition },",
+    "    number: { ...numberDefinition },\n    nexiRecipient: { type: 'object', properties: { claims: { type: 'string' }, signature: { type: 'string' } }, required: ['claims', 'signature'], additionalProperties: false },", 'recipient schema');
+  return source.slice(0, start) + recipientSchema + source.slice(end);
 });
 
 patch('src/api/integrations/chatbot/chatwoot/services/chatwoot.service.ts', (input) => {
   let source = input;
+  const identity = "require('/evolution/nexi-identity.cjs')";
+  source = replaceOnce(source, '    const isLid = body.key.addressingMode',
+    `    const trustedAssociation = ${identity}.associationFor(body);
+    if (instance.instanceName.startsWith('nexi-wa-') && !body.key.fromMe) {
+      if (!trustedAssociation || String(trustedAssociation.account_id) !== String(this.provider.accountId) ||
+          String(trustedAssociation.inbox_id) !== String(this.provider.inboxId)) return null;
+      // The authenticated reservation response validates ContactInbox and the
+      // database/display IDs in Rails. Generic conversation JSON omits CI ID.
+      return trustedAssociation.conversation_display_id;
+    }
+    const isLid = body.key.addressingMode`, 'managed inbound association');
+  // Every cache-return branch re-enters the live validation above for managed
+  // inbound. Managed own messages cannot establish evidence; reject an Inbox
+  // mismatch even for those legacy cache branches.
+  source = replaceOnce(source, '        return conversationId;\n      }',
+    `        if (instance.instanceName.startsWith('nexi-wa-') &&
+            (String(conversationExists.inbox_id) !== String(this.provider.inboxId) ||
+             !conversationExists.contact_inbox_id)) return null;
+        return conversationId;
+      }`, 'cached Inbox veto');
+  const conversationStart = source.indexOf('  public async createConversation(');
+  const conversationEnd = source.indexOf('  public async getInbox(', conversationStart);
+  let conversation = source.slice(conversationStart, conversationEnd);
+  conversation = conversation.replaceAll('return conversationId;',
+    "return instance.instanceName.startsWith('nexi-wa-') ? null : conversationId;");
+  conversation = conversation.replaceAll('return (await this.cache.get(cacheKey)) as number;',
+    "return instance.instanceName.startsWith('nexi-wa-') ? null : (await this.cache.get(cacheKey)) as number;");
+  source = source.slice(0, conversationStart) + conversation + source.slice(conversationEnd);
+  source = replaceOnce(source,
+    "      if (body?.key?.remoteJid && body.key.remoteJid.includes('@lid') && !body.key.remoteJid.endsWith('@g.us')) {",
+    `      if (!${identity}.associationFor(body) && body?.key?.remoteJid && body.key.remoteJid.includes('@lid') && !body.key.remoteJid.endsWith('@g.us')) {`,
+    'trusted inbound bypasses heuristic LID cache');
   source = replaceOnce(source,
     "this.logger.info(`[${event}] New message received - Instance: ${JSON.stringify(body, null, 2)}`);",
     "this.logger.info({ event, instanceName: instance.instanceName, messageId: body?.key?.id, fromMe: body?.key?.fromMe, messageType: body?.messageType });",
@@ -81,10 +115,10 @@ patch('src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts', (inpu
   let section = input.slice(start, end);
   section = replaceOnce(section,
     '    const isWA = (await this.whatsappNumber({ numbers: [number] }))?.shift();',
-    `    const managedFinancial = ${helper}.isManagedCta(this.instance.name, message);
+    `    const managedFinancial = ${helper}.isManagedCta(this.instance.name, message) || ${helper}.managedLookup(this.instance.name);
     let financialStage = 'lookup';
     let financialMessageId: string = null;
-    const isWA = (await this.whatsappNumber({ numbers: [number] }))?.shift();`, 'financial exception boundary');
+    const isWA = (await this.whatsappNumber({ numbers: [managedFinancial ? ${helper}.resolutionInput(this.instance.name, number, this.instanceId) : number] }))?.shift();`, 'financial exception boundary');
   section = replaceOnce(section, '      let messageSent: WAMessage;',
     "      financialStage = 'dispatch';\n      let messageSent: WAMessage;", 'dispatch stage');
   section = replaceOnce(section, '      const messageRaw = this.prepareMessage(messageSent) as any;',
@@ -113,14 +147,71 @@ patch('src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts', (inpu
       }
       this.logger.error(error);
       throw new BadRequestException(error.toString());`, 'financial exception redaction');
+  section = replaceOnce(section, '    const sender = isWA.jid.toLowerCase();',
+    `    ${helper}.assertRecipient(this.instance.name, message, isWA?.jid, this.instanceId);
+    const sender = isWA.jid.toLowerCase();`, 'exact resolved recipient');
+  section = replaceOnce(section, '    this.logger.verbose(`Sending message to ${sender}`);',
+    "    if (!managedFinancial) this.logger.verbose(`Sending message to ${sender}`);", 'recipient log redaction');
   let source = input.slice(0, start) + section + input.slice(end);
+  source = replaceOnce(source, '      getMessage: async (key) => (await this.getMessage(key)) as Promise<proto.IMessage>,',
+    `      getMessage: async (key) => ${helper}.retryMessage(this.instance.name, await this.getMessage(key)) as Promise<proto.IMessage>,`,
+    'managed financial messages never supply native receipt retries');
+  const lookupStart = source.indexOf('  public async whatsappNumber(');
+  const lookupEnd = source.indexOf('  public async markMessageAsRead(', lookupStart);
+  let lookup = source.slice(lookupStart, lookupEnd);
+  lookup = replaceOnce(lookup, '          this.logger.verbose(`Number ${user.number} found in cache`);',
+    `          if (!${helper}.managedLookup(this.instance.name)) this.logger.verbose('Number found in cache');`, 'cache recipient redaction');
+  lookup = replaceOnce(lookup, '    if (numbersToCache.length > 0) {',
+    `    if (numbersToCache.length > 0 && !${helper}.managedLookup(this.instance.name)) {`, 'financial resolver never expands cache aliases');
+  source = source.slice(0, lookupStart) + lookup + source.slice(lookupEnd);
+  source = replaceOnce(source, '  public async buttonMessage(data: SendButtonsDto) {',
+    `  public async buttonMessage(data: SendButtonsDto) {
+    try {
+      return await ${helper}.withRecipient(this, data, () => this.buttonMessagePrepared(data));
+    } catch (error) {
+      if (this.instance.name.startsWith('nexi-wa-')) throw new BadRequestException('nexi_financial_transport_failed');
+      throw error;
+    }
+  }
+
+  private async buttonMessagePrepared(data: SendButtonsDto) {`, 'signed backend recipient');
+  source = replaceOnce(source, '      const id = await this.client.relayMessage(sender, message, {',
+    `      await ${helper}.beginRelay(this.instance.name, message, sender, this.instanceId);
+      const id = await this.client.relayMessage(sender, message, {`, 'pre relay exact recipient');
   source = replaceOnce(source,
     '        for (const received of messages) {',
     `        for (const received of messages) {
           // Outgoing CTA echoes may arrive asynchronously with the full secret.
           // The send path already owns persistence and Rails owns CW history.
-          if (received.key?.fromMe && ${helper}.isManagedCta(this.instance.name, received.message)) continue;`,
+          if (received.key?.fromMe && ${helper}.isManagedCta(this.instance.name, received.message)) continue;
+          const trustedObservation = require('/evolution/nexi-identity.cjs').take(received, type, requestId);`,
     'managed CTA asynchronous echo redaction');
+  source = replaceOnce(source, '          const messageRaw = this.prepareMessage(received) as any;',
+    `          const messageRaw = this.prepareMessage(received) as any;
+          let trustedAssociation: any = null;
+          if (this.instance.name.startsWith('nexi-wa-') && trustedObservation && this.localChatwoot?.enabled) {
+            try {
+              trustedAssociation = await require('/evolution/nexi-identity.cjs').managedObservation(this, trustedObservation);
+              require('/evolution/nexi-identity.cjs').bind(messageRaw, trustedAssociation);
+            } catch {
+              this.logger.warn('nexi_identity_association_rejected');
+            }
+          }`, 'raw observation before normalization');
+  source = replaceOnce(source, '              messageRaw.chatwootConversationId = chatwootSentMessage.conversation_id;',
+    `              messageRaw.chatwootConversationId = chatwootSentMessage.conversation_id;
+              if (trustedAssociation && !trustedAssociation.message_id) {
+                try {
+                  await require('/evolution/nexi-identity.cjs').managedObservation(this, trustedObservation,
+                    { ...trustedAssociation, message_id: chatwootSentMessage.id });
+                } catch {
+                  this.logger.warn('nexi_identity_correlation_rejected');
+                }
+              }`, 'Chatwoot ACK identity correlation');
+  source = replaceOnce(source, '            const chatwootSentMessage = await this.chatwootService.eventWhatsapp(',
+    `            const chatwootSentMessage = trustedAssociation?.message_id
+              ? { id: trustedAssociation.message_id, inbox_id: trustedAssociation.inbox_id,
+                  conversation_id: trustedAssociation.conversation_display_id }
+              : await this.chatwootService.eventWhatsapp(`, 'duplicate inbound does not repeat CW history');
   return source;
 });
 

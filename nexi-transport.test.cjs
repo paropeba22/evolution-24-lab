@@ -29,13 +29,14 @@ class RedisContract {
     if (script.includes('local lease_ms, ttl')) {
       assert.match(script, /'SET', key, value, 'NX', 'EX', ttl/);
       assert.match(script, /'SET', key, cjson\.encode\(record\), 'XX', 'KEEPTTL'/);
-      const [bodyHash, ownerToken, leaseMs, ttlSeconds] = args;
+      const [bodyHash, ownerToken, leaseMs, ttlSeconds, initial] = args;
       if (!record) {
-        this.records.set(key, { value: JSON.stringify({ state: 'reserved', bodyHash, ownerToken,
+        this.records.set(key, { value: JSON.stringify({ state: initial, bodyHash, ownerToken,
           reservedUntilMs: this.nowMs + Number(leaseMs) }), expires: this.nowMs + Number(ttlSeconds) * 1000 });
         return recognizesLuaSetStatus(script, 0) ? 'claimed' : 'inconsistent';
       }
       if (record.bodyHash !== bodyHash) return 'identity_conflict';
+      if (initial === 'dispatching' && record.state === 'reserved') return 'active_reserved';
       if (record.state === 'reserved' && record.reservedUntilMs <= this.nowMs) {
         this.records.set(key, { value: JSON.stringify({ ...record, ownerToken,
           reservedUntilMs: this.nowMs + Number(leaseMs) }), expires: current.expires });
@@ -89,6 +90,21 @@ function request(body, overrides = {}) {
 }
 
 const privateNote = { event: 'message_created', account: { id: 4 }, inbox: { id: 13 }, private: true };
+
+test('financial signed operations are consumed atomically on claim, never lease-reclaimed, and isolated from CW replay keys', async () => {
+  const redis = new RedisContract();
+  const first = createReplayLedger({ client: redis, consumeOnClaim: true });
+  const second = createReplayLedger({ client: redis, consumeOnClaim: true });
+  const claim = await first.claim(instanceName, '4', '13', '21', 'synthetic-financial-body');
+  assert.equal(claim.kind, 'claimed');
+  assert.match(claim.key, /financial-recipient:v1/);
+  redis.nowMs += 60000;
+  assert.equal((await second.claim(instanceName, '4', '13', '21', 'synthetic-financial-body')).state, 'dispatching');
+  await first.finish(claim, 'ambiguous');
+  assert.equal((await second.claim(instanceName, '4', '13', '21', 'synthetic-financial-body')).state, 'ambiguous');
+  const cw = createReplayLedger({ client: redis });
+  assert.equal((await cw.claim(instanceName, '4', '13', '21', 'synthetic-financial-body')).kind, 'claimed');
+});
 
 test('delayed managed history event never executes outbound after a newer conversation message; concurrent recoveries', async () => {
   const body = { ...privateNote, id: 51, private: false, message_type: 'outgoing', source_id: 'WAID:safe-wa-id',

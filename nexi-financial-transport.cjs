@@ -1,5 +1,114 @@
 'use strict';
 
+const { AsyncLocalStorage } = require('node:async_hooks');
+const { createHmac, createHash, timingSafeEqual } = require('node:crypto');
+const { sessionFingerprint } = require('./nexi-identity.cjs');
+const recipientContext = new AsyncLocalStorage();
+const ledger = require('./nexi-transport.cjs').createReplayLedger({ consumeOnClaim: true });
+
+function dtoHash(data) {
+  return createHash('sha256').update(JSON.stringify([data.number, data.title, data.description, data.footer,
+    data.buttons.map(b => [b.type, b.displayText, b.copyCode ?? null, b.url ?? null])])).digest('hex');
+}
+
+async function withRecipient(service, data, operation, store = ledger) {
+  if (!service.instance.name.startsWith('nexi-wa-') ||
+      (!data.nexiRecipient && !data.buttons?.some(b => ['copy', 'url', 'pix'].includes(b.type)))) {
+    return operation();
+  }
+  const fail = () => { throw new Error('nexi_financial_recipient_unverified'); };
+  const token = data.nexiRecipient;
+  const master = process.env.NEXI_CHANNELS_EVENT_MASTER_SECRET || '';
+  if (Buffer.byteLength(master) < 32 || typeof token?.claims !== 'string' || token.claims.length > 4096 ||
+      !/^[A-Za-z0-9_-]+$/.test(token.claims) || !/^[a-f0-9]{64}$/.test(token.signature || '')) fail();
+  const secret = createHmac('sha256', master).update(`event:${service.instance.name}`).digest();
+  const expected = createHmac('sha256', secret).update(`financial-recipient:v1:${token.claims}`).digest();
+  if (!timingSafeEqual(expected, Buffer.from(token.signature, 'hex'))) fail();
+  let c;
+  try { c = JSON.parse(Buffer.from(token.claims, 'base64url').toString('utf8')); } catch { fail(); }
+  // Version, instance, JID, ledger revision, delivery, tenant, deadline, DTO hash.
+  if (!Array.isArray(c) || c.length !== 12 || c[0] !== 1 || c[1] !== service.instance.name || c[2] !== service.instanceId ||
+      !/^[1-9]\d{7,14}@s\.whatsapp\.net$/.test(c[3]) || `${data.number}@s.whatsapp.net` !== c[3] ||
+      !Number.isSafeInteger(c[4]) || c[4] <= 0 || !Number.isSafeInteger(c[5]) || c[5] <= 0 ||
+      !Number.isSafeInteger(c[6]) || c[6] <= 0 || !Number.isSafeInteger(c[7]) || c[7] <= 0 ||
+      !Number.isSafeInteger(c[8]) || c[8] <= 0 || !Number.isSafeInteger(c[9]) ||
+      c[9] <= Date.now() || c[9] > Date.now() + 300000 || c[10] !== dtoHash(data) ||
+      Object.keys(data).some(k => !['number', 'title', 'description', 'footer', 'buttons', 'nexiRecipient'].includes(k)) ||
+      data.buttons.length !== 1 || !['copy', 'url'].includes(data.buttons[0].type) ||
+      !/^[a-f0-9]{64}$/.test(c[11] || '') || c[11] !== sessionFingerprint(service.client?.authState?.creds)) fail();
+  const claim = await store.claim(c[1], c[7], c[8], String(c[6]), JSON.stringify(c));
+  if (claim.kind !== 'claimed') fail();
+  const state = { instance: service.instance.name, instanceId: service.instanceId, jid: c[3], deadline: c[9],
+    session: c[11], credentials: () => service.client?.authState?.creds,
+    currentBinding: () => service.instance.name === c[1] && service.instanceId === c[2], claim, store, crossed: false };
+  return recipientContext.run(state, async () => {
+    try {
+      const result = await operation();
+      await store.finish(claim, 'completed');
+      return result;
+    } catch {
+      await store.finish(claim, 'ambiguous').catch(() => {});
+      throw new Error('nexi_financial_transport_failed');
+    }
+  });
+}
+
+function assertRecipient(instance, message, recipient, instanceId) {
+  const state = recipientContext.getStore();
+  if (!isManagedCta(instance, message) && !state) return;
+  if (!state || state.instance !== instance || state.instanceId !== instanceId || state.deadline <= Date.now() ||
+      !state.currentBinding() || sessionFingerprint(state.credentials()) !== state.session ||
+      recipient !== state.jid) throw new Error('nexi_financial_recipient_mismatch');
+}
+
+function managedLookup(instance) { return recipientContext.getStore()?.instance === instance; }
+function currentOperation() { return !!recipientContext.getStore(); }
+function retryMessage(instance, message) {
+  if (instance.startsWith('nexi-wa-') && (isManagedCta(instance, message) ||
+      !message || message.conversation === '' || message.conversation === 'NEXI financial delivery')) return undefined;
+  return message;
+}
+function assertWireRecipient(jid, stanza, credentials) {
+  const state = recipientContext.getStore();
+  if (!state) return;
+  const self = credentials?.me;
+  if (state.deadline <= Date.now() || jid !== state.jid || stanza?.attrs?.to !== state.jid ||
+      !state.currentBinding() || sessionFingerprint(credentials) !== state.session ||
+      sessionFingerprint(state.credentials()) !== state.session ||
+      stanza.attrs.participant || stanza.attrs.recipient) throw new Error('nexi_financial_recipient_mismatch');
+  const base = value => typeof value === 'string' ? value.replace(/:\d+(?=@)/, '') : null;
+  const own = new Set([base(self?.id), base(self?.lid)].filter(Boolean));
+  // Cached device fanout must not introduce another peer or an unproved LID.
+  // Own authenticated companion identities are separate, explicit recipients.
+  const recipients = stanza.content?.filter(n => n.tag === 'participants').flatMap(n => n.content || []) || [];
+  for (const recipient of recipients) {
+    const target = base(recipient.attrs?.jid);
+    if (target !== state.jid && !own.has(target)) throw new Error('nexi_financial_recipient_mismatch');
+  }
+}
+function resolutionInput(instance, number, instanceId) {
+  const state = recipientContext.getStore();
+  if (!state || state.instance !== instance || state.instanceId !== instanceId || state.deadline <= Date.now() ||
+      !state.currentBinding() || sessionFingerprint(state.credentials()) !== state.session ||
+      `${number}@s.whatsapp.net` !== state.jid) {
+    throw new Error('nexi_financial_recipient_unverified');
+  }
+  // A transport-proven PN is already a complete logical JID. Do not guess BR,
+  // MX or AR number variants; the subsequent resolver/cache is still checked.
+  return state.jid;
+}
+
+async function beginRelay(instance, message, recipient, instanceId) {
+  assertRecipient(instance, message, recipient, instanceId);
+  if (!isManagedCta(instance, message) && !recipientContext.getStore()) return;
+  const state = recipientContext.getStore();
+  if (state.crossed) throw new Error('nexi_financial_duplicate_relay');
+  // Claim already atomically consumed this signed operation in Redis. Even
+  // pre-relay failures cannot reopen it or authorize an automatic retry.
+  state.crossed = true;
+  assertRecipient(instance, message, recipient, instanceId);
+}
+
 // Classification limits redaction scope; it is never destination authority.
 function isManagedCta(instanceName, message) {
   const content = message?.viewOnceMessage?.message || message?.viewOnceMessageV2?.message ||
@@ -24,4 +133,5 @@ function failureMetadata(instanceId, messageId, stage, error) {
     category, status: 400 };
 }
 
-module.exports = { isManagedCta, failureMetadata };
+module.exports = { isManagedCta, failureMetadata, withRecipient, assertRecipient, beginRelay, dtoHash, managedLookup, resolutionInput,
+  currentOperation, retryMessage, assertWireRecipient };

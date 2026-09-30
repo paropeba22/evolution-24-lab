@@ -11,11 +11,13 @@ const RESERVED_LEASE_MS = 30 * 1000;
 const CLAIM_SCRIPT = `
 local key, hash, owner = KEYS[1], ARGV[1], ARGV[2]
 local lease_ms, ttl = tonumber(ARGV[3]), tonumber(ARGV[4])
+local initial = ARGV[5]
+if initial ~= 'reserved' and initial ~= 'dispatching' then return 'inconsistent' end
 local time = redis.call('TIME')
 local now = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
 local existing = redis.call('GET', key)
 if not existing then
-  local value = cjson.encode({state='reserved', bodyHash=hash, ownerToken=owner, reservedUntilMs=now+lease_ms})
+  local value = cjson.encode({state=initial, bodyHash=hash, ownerToken=owner, reservedUntilMs=now+lease_ms})
   local set_result = redis.call('SET', key, value, 'NX', 'EX', ttl)
   if type(set_result) == 'table' and set_result.ok == 'OK' then return 'claimed' end
   return 'inconsistent'
@@ -24,6 +26,7 @@ local ok, record = pcall(cjson.decode, existing)
 if not ok or type(record) ~= 'table' or type(record.state) ~= 'string' or type(record.bodyHash) ~= 'string' then return 'inconsistent' end
 if record.bodyHash ~= hash then return 'identity_conflict' end
 if record.state == 'reserved' then
+  if initial == 'dispatching' then return 'active_reserved' end
   if type(record.reservedUntilMs) ~= 'number' or type(record.ownerToken) ~= 'string' then return 'inconsistent' end
   if record.reservedUntilMs > now then return 'active_reserved' end
   record.ownerToken, record.reservedUntilMs = owner, now + lease_ms
@@ -65,7 +68,7 @@ return 'inconsistent'
 `;
 
 function createReplayLedger({ client: suppliedClient, prefix = process.env.CACHE_REDIS_PREFIX_KEY || 'evolution-cache',
-  ttlSeconds = DELIVERY_TTL_SECONDS, reservedLeaseMs = RESERVED_LEASE_MS } = {}) {
+  ttlSeconds = DELIVERY_TTL_SECONDS, reservedLeaseMs = RESERVED_LEASE_MS, consumeOnClaim = false } = {}) {
   let client = suppliedClient;
   let connecting;
 
@@ -95,7 +98,8 @@ function createReplayLedger({ client: suppliedClient, prefix = process.env.CACHE
 
   function keyFor(instanceName, accountId, inboxId, deliveryId) {
     const scope = JSON.stringify([instanceName, String(accountId), String(inboxId), deliveryId]);
-    return `${prefix}:nexi:chatwoot-delivery:v1:${createHash('sha256').update(scope).digest('hex')}`;
+    const domain = consumeOnClaim ? 'financial-recipient:v1' : 'chatwoot-delivery:v1';
+    return `${prefix}:nexi:${domain}:${createHash('sha256').update(scope).digest('hex')}`;
   }
 
   return {
@@ -112,7 +116,7 @@ function createReplayLedger({ client: suppliedClient, prefix = process.env.CACHE
       const bodyHash = createHash('sha256').update(rawBody).digest('hex');
       const ownerToken = randomUUID();
       const state = await redis.eval(CLAIM_SCRIPT, { keys: [key],
-        arguments: [bodyHash, ownerToken, String(reservedLeaseMs), String(ttlSeconds)] });
+        arguments: [bodyHash, ownerToken, String(reservedLeaseMs), String(ttlSeconds), consumeOnClaim ? 'dispatching' : 'reserved'] });
       if (state === 'claimed') return { kind: 'claimed', key, bodyHash, ownerToken };
       if (state === 'identity_conflict') return { kind: 'identity_conflict' };
       if (['active_reserved', 'dispatching', 'completed', 'ambiguous'].includes(state)) {
@@ -311,7 +315,9 @@ function prepareEvent(headers, body, instanceName, instanceId) {
       ? { qrcode: { instance: instanceName } }
       : body.event === 'connection.update'
         ? { state: body.data?.state }
-        : {},
+        : ['identity.observed', 'identity.correlated'].includes(body.event)
+          ? identityPayload(body.data)
+          : {},
   };
   const timestamp = String(Date.now());
   const eventId = randomUUID();
@@ -319,11 +325,58 @@ function prepareEvent(headers, body, instanceName, instanceId) {
   const signature = createHmac('sha256', secret)
     .update(`${timestamp}.${eventId}.${instanceName}.${instanceId}.${JSON.stringify(payload)}`).digest('hex');
   return {
-    headers: { ...headers, 'X-Nexi-Event-Timestamp': timestamp,
+    headers: { ...headers, 'Content-Type': 'application/json', 'X-Instance-ID': instanceId, 'X-Instance-Name': instanceName,
+      'X-Nexi-Event-Timestamp': timestamp,
       'X-Nexi-Event-Id': eventId,
       'X-Nexi-Event-Signature': `sha256=${signature}` },
     body: payload,
   };
+}
+
+function identityPayload(data) {
+  const keys = ['version', 'origin', 'external_message_id', 'pn_jid', 'lid_jid', 'session_identity', 'account_id', 'inbox_id'];
+  const result = Object.fromEntries(keys.map(key => [key, data?.[key]]));
+  if (data?.ack) result.ack = Object.fromEntries(['message_id', 'conversation_id', 'conversation_display_id',
+    'contact_id', 'contact_inbox_id', 'inbox_id', 'account_id', 'association_id', 'generation'].map(key => [key, data.ack[key]]));
+  return result;
+}
+
+function freshEventHeaders(headers, body, now = Date.now()) {
+  if (!headers['X-Nexi-Event-Id']) return headers;
+  const master = process.env.NEXI_CHANNELS_EVENT_MASTER_SECRET || '';
+  if (Buffer.byteLength(master) < 32) throw new Error('nexi_event_secret_missing');
+  const instance = body.instance;
+  const id = headers['X-Instance-ID'] || headers['X-Instance-Id'];
+  if (!id) throw new Error('nexi_event_instance_missing');
+  const timestamp = String(now);
+  const secret = createHmac('sha256', master).update(`event:${instance}`).digest();
+  const signature = createHmac('sha256', secret)
+    .update(`${timestamp}.${headers['X-Nexi-Event-Id']}.${instance}.${id}.${JSON.stringify(body)}`).digest('hex');
+  return { ...headers, 'X-Nexi-Event-Timestamp': timestamp, 'X-Nexi-Event-Signature': `sha256=${signature}` };
+}
+
+function signedEventClient(client, prepared) {
+  if (!prepared.headers['X-Nexi-Event-Id']) return client;
+  const raw = JSON.stringify(prepared.body);
+  client.interceptors.request.use(config => {
+    if (JSON.stringify(config.data) !== raw) throw new Error('nexi_event_payload_conflict');
+    config.headers = freshEventHeaders(prepared.headers, prepared.body);
+    return config;
+  });
+  return client;
+}
+
+function retryPolicy(body, config, attempts, delay) {
+  const original = { maxRetryAttempts: attempts ?? config.RETRY?.MAX_ATTEMPTS ?? 10,
+    initialDelay: delay ?? config.RETRY?.INITIAL_DELAY_SECONDS ?? 5,
+    useExponentialBackoff: config.RETRY?.USE_EXPONENTIAL_BACKOFF ?? true,
+    maxDelay: config.RETRY?.MAX_DELAY_SECONDS ?? 300, jitterFactor: config.RETRY?.JITTER_FACTOR ?? 0.2,
+    nonRetryableStatusCodes: config.RETRY?.NON_RETRYABLE_STATUS_CODES ?? [400, 401, 403, 404, 422] };
+  if (!body?.instance?.startsWith('nexi-wa-')) return original;
+  const bounded = (v, fallback, min, max) => Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : fallback;
+  return { maxRetryAttempts: Math.floor(bounded(original.maxRetryAttempts, 6, 1, 6)),
+    initialDelay: bounded(original.initialDelay, 5, 5, 300), useExponentialBackoff: true,
+    maxDelay: 300, jitterFactor: 0.2, nonRetryableStatusCodes: [400, 401, 403, 404, 409, 410, 422] };
 }
 
 function eventSigningReady() {
@@ -352,4 +405,5 @@ async function replayStoreReady() {
 }
 
 module.exports = { isolateChatwoot, verifyChatwootWebhook, processChatwootWebhook, replayStoreReady, createReplayLedger,
-  inboxMatches, resolveConfiguredInbox, prepareEvent, eventSigningReady, eventKeyProof, redactEventForLog, financialHistoryDisposition };
+  inboxMatches, resolveConfiguredInbox, prepareEvent, freshEventHeaders, signedEventClient, retryPolicy,
+  eventSigningReady, eventKeyProof, redactEventForLog, financialHistoryDisposition };

@@ -22,6 +22,8 @@ COPY assert-runtime-model.mjs /tmp/assert-runtime-model.mjs
 COPY assert-runtime-model.mjs /evolution/assert-runtime-model.mjs
 COPY Dockerfile /evolution/Dockerfile
 COPY nexi-transport.cjs /evolution/nexi-transport.cjs
+COPY patch-trusted-baileys.mjs patch-managed-retry.mjs nexi-identity.cjs /evolution/
+COPY identity-foundation-source.test.cjs recipient-contract-test-support.cjs /evolution/
 COPY bundle-patch.test.cjs nexi-transport.test.cjs redis-lua.integration.test.cjs runtime-model.test.cjs financial-delivery-source.test.cjs /evolution/
 COPY select-provider-bundle.cjs /evolution/select-provider-bundle.cjs
 COPY prisma/postgresql-migrations/20260926000000_add_chatwoot_inbox_id /evolution/prisma/postgresql-migrations/20260926000000_add_chatwoot_inbox_id
@@ -30,6 +32,8 @@ COPY prisma/mysql-migrations/20260926000000_add_chatwoot_inbox_id /evolution/pri
 # The schema change must precede Prisma generation and tsup's bundled client.
 RUN node /tmp/patch-prisma-binding.mjs
 RUN node /tmp/patch-financial-delivery-source.mjs /evolution --snapshot
+RUN node /evolution/patch-trusted-baileys.mjs /evolution --snapshot
+RUN node /evolution/patch-managed-retry.mjs /evolution --snapshot
 
 # tsup bakes licensing definitions into each bundle. Empty args retain the
 # pinned upstream source's official-endpoint fallback; no runtime ENV is added.
@@ -72,6 +76,8 @@ COPY --from=source-builder /evolution/dist /evolution/dist
 COPY --from=source-builder /evolution/prisma /evolution/prisma
 COPY --from=source-builder /evolution/nexi-transport.cjs /evolution/nexi-transport.cjs
 COPY --from=source-builder /evolution/nexi-financial-transport.cjs /evolution/nexi-financial-transport.cjs
+COPY --from=source-builder /evolution/nexi-identity.cjs /evolution/nexi-identity.cjs
+COPY --from=source-builder /evolution/node_modules/baileys /evolution/node_modules/baileys
 COPY select-provider-bundle.cjs /evolution/select-provider-bundle.cjs
 COPY assert-runtime-model.mjs /tmp/assert-runtime-model.mjs
 

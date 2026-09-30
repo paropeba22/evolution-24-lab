@@ -184,6 +184,11 @@ replaceOnce(mysql
     : `let U={...h,"Content-Type":"application/json","X-Instance-ID":this.monitor.waInstances[A].instanceId,"X-Instance-Name":A,"X-Event-Type":s,"X-Timestamp":Date.now().toString(),"User-Agent":"EvolutionAPI-Webhook/2.3.7"},__nexiPrepared=${helper}.prepareEvent(U,f,A,this.monitor.waInstances[A].instanceId),k=_i.default.create({baseURL:D,headers:__nexiPrepared.headers,timeout:m.REQUEST?.TIMEOUT_MS??3e4});await this.retryWebhookRequest(k,__nexiPrepared.body,\`\${e}.sendData-Webhook\`,D,a)`,
   'signed Evolution event');
 
+// Axios invokes this request interceptor for every post in the upstream retry
+// loop, before serialization. UUID/body stay fixed; authentication is renewed.
+replaceOnce(mysql ? 'this.retryWebhookRequest(U,__nexiPrepared.body,' : 'this.retryWebhookRequest(k,__nexiPrepared.body,',
+  `this.retryWebhookRequest(${helper}.signedEventClient(${mysql ? 'U' : 'k'},__nexiPrepared),__nexiPrepared.body,`, 'fresh retry auth');
+
 code = `/* ${marker} */\n` + code;
 fs.writeFileSync(bundlePath, code);
 console.log('[evolution-24-lab] hardened Chatwoot and signed NEXI channel events');

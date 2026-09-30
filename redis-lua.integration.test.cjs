@@ -45,6 +45,13 @@ test('real Redis Lua status replies support claim, reclaim, dispatch and finaliz
       await assert.rejects(first.finish(staleOwner, 'completed'));
       await second.finish(newOwner, 'ambiguous');
       assert.equal((await first.claim(...scope, deliveryB, raw)).state, 'ambiguous');
+      const financial = createReplayLedger({ client: adapter, prefix, consumeOnClaim: true, reservedLeaseMs: 1 });
+      const consumed = await financial.claim(...scope, 'synthetic-financial', raw);
+      keys.push(consumed.key);
+      assert.equal(consumed.kind, 'claimed');
+      assert.equal((await financial.claim(...scope, 'synthetic-financial', raw)).state, 'dispatching');
+      await financial.finish(consumed, 'ambiguous');
+      assert.equal((await financial.claim(...scope, 'synthetic-financial', raw)).state, 'ambiguous');
     } finally {
       if (client.isReady) await Promise.all(keys.map((key) => client.del(key)));
       if (client.isOpen) await client.quit();
