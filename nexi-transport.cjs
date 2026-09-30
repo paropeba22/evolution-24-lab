@@ -244,6 +244,25 @@ async function verifyChatwootWebhook(request, provider, fetchImpl = fetch, ledge
   }
 }
 
+function financialHistoryDisposition(body, provider) {
+  if (!['message_created', 'message_updated'].includes(body?.event)) return null;
+  const attributes = body.content_attributes;
+  const isWaid = typeof body.source_id === 'string' && body.source_id.startsWith('WAID:');
+  if (!attributes?.nexi_managed_delivery && !isWaid) return null;
+  // Inspect the event's own identity. conversation.messages is an asynchronous
+  // projection and may already describe a later, unrelated outgoing message.
+  const context = attributes?.nexi_delivery_context;
+  const positiveId = (value) => /^[1-9]\d{0,18}$/.test(String(value || ''));
+  const valid = attributes?.nexi_managed_delivery === true &&
+    /^WAID:[a-zA-Z0-9_-]{1,128}$/.test(body.source_id || '') && positiveId(body.id) &&
+    body.message_type === 'outgoing' && body.private === false && positiveId(context?.delivery_id) &&
+    positiveId(body.conversation?.id) && String(context?.conversation_id) === String(body.conversation.id) &&
+    String(context?.account_id) === String(provider.accountId) && String(body.account?.id) === String(provider.accountId) &&
+    String(context?.inbox_id) === String(provider.inboxId) && String(body.inbox?.id) === String(provider.inboxId) &&
+    String(body.conversation?.inbox_id) === String(provider.inboxId);
+  return valid ? 'managed_financial_history' : 'managed_financial_history_invalid';
+}
+
 async function processChatwootWebhook(request, provider, execute, fetchImpl = fetch, ledger = defaultLedger) {
   const verified = await verifyChatwootWebhook(request, provider, fetchImpl, ledger);
   if (verified.replay) {
@@ -254,6 +273,10 @@ async function processChatwootWebhook(request, provider, execute, fetchImpl = fe
   if (!verified.ok) return { status: verified.status,
     body: { error: verified.status === 503 ? 'chatwoot_replay_store_unavailable' :
       verified.status === 409 ? 'delivery_identity_conflict' : 'chatwoot_transport_auth_failed' } };
+  const history = financialHistoryDisposition(request.body, provider);
+  if (history === 'managed_financial_history_invalid') {
+    return { status: 422, body: { error: history } };
+  }
   try {
     await ledger.beginDispatch(verified.claim);
   } catch {
@@ -261,7 +284,7 @@ async function processChatwootWebhook(request, provider, execute, fetchImpl = fe
   }
   let result;
   try {
-    result = await execute();
+    result = history ? { message: history } : await execute();
   } catch (error) {
     await ledger.finish(verified.claim, 'ambiguous').catch(() => {});
     throw error;
@@ -329,4 +352,4 @@ async function replayStoreReady() {
 }
 
 module.exports = { isolateChatwoot, verifyChatwootWebhook, processChatwootWebhook, replayStoreReady, createReplayLedger,
-  inboxMatches, resolveConfiguredInbox, prepareEvent, eventSigningReady, eventKeyProof, redactEventForLog };
+  inboxMatches, resolveConfiguredInbox, prepareEvent, eventSigningReady, eventKeyProof, redactEventForLog, financialHistoryDisposition };

@@ -90,6 +90,46 @@ function request(body, overrides = {}) {
 
 const privateNote = { event: 'message_created', account: { id: 4 }, inbox: { id: 13 }, private: true };
 
+test('delayed managed history event never executes outbound after a newer conversation message; concurrent recoveries', async () => {
+  const body = { ...privateNote, id: 51, private: false, message_type: 'outgoing', source_id: 'WAID:safe-wa-id',
+    content: 'PIX da fatura enviado ao cliente',
+    content_attributes: { nexi_managed_delivery: true,
+      nexi_delivery_context: { delivery_id: 12, account_id: 4, inbox_id: 13, conversation_id: 22 } },
+    conversation: { id: 22, inbox_id: 13, meta: { sender: { identifier: '5511999999999' } },
+      messages: [{ id: 52, source_id: null, content: 'A newer message', message_type: 'outgoing' }] } };
+  const redis = new RedisContract();
+  const a = createReplayLedger({ client: redis });
+  const b = createReplayLedger({ client: redis });
+  let outbound = 0;
+  const execute = async () => { outbound++; throw new Error('outbound forbidden'); };
+  const results = await Promise.all([
+    processChatwootWebhook(request(body), provider, execute, fetchInbox, a),
+    processChatwootWebhook(request(body, { delivery: 'a37696c7-aefc-46a1-bfd9-77148a1af795' }), provider, execute, fetchInbox, b),
+  ]);
+  assert.equal(outbound, 0);
+  assert.deepEqual(results.map((result) => result.body.message), ['managed_financial_history', 'managed_financial_history']);
+});
+
+test('managed event identity validates its own source, message ID, metadata and tenant/inbox/conversation', async () => {
+  const body = { ...privateNote, id: 51, private: false, message_type: 'outgoing', source_id: 'WAID:safe-wa-id',
+    content_attributes: { nexi_managed_delivery: true,
+      nexi_delivery_context: { delivery_id: 12, account_id: 4, inbox_id: 13, conversation_id: 22 } },
+    conversation: { id: 22, inbox_id: 13, meta: { sender: { identifier: '5511999999999' } }, messages: [{ id: 52 }] } };
+  const variants = [
+    { ...body, id: null }, { ...body, source_id: 'arbitrary' },
+    { ...body, account: { id: 5 } }, { ...body, inbox: { id: 99 } },
+    { ...body, conversation: { ...body.conversation, id: 23 } },
+    { ...body, content_attributes: { nexi_managed_delivery: true } },
+  ];
+  let outbound = 0;
+  for (const variant of variants) {
+    const ledger = createReplayLedger({ client: new RedisContract() });
+    const result = await processChatwootWebhook(request(variant), provider, async () => { outbound++; }, fetchInbox, ledger);
+    assert.ok([401, 422].includes(result.status));
+  }
+  assert.equal(outbound, 0);
+});
+
 test('delivery ID is signed: changing only D1 to D2 rejects before dispatch or ledger claim', async () => {
   const redis = new RedisContract();
   const ledger = createReplayLedger({ client: redis });
