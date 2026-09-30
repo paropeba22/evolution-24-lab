@@ -60,23 +60,6 @@ patch('src/api/integrations/chatbot/chatwoot/services/chatwoot.service.ts', (inp
 
         const getConversation = await this.createConversation(instance, body);`,
     'managed conversation guard');
-  source = replaceOnce(source,
-    "          for (const button of buttons) {",
-    `          const cta = body.key.fromMe && buttons.find(
-            (button) => button.name === 'cta_copy' || button.name === 'cta_url',
-          );
-          if (cta) {
-            const content = cta.name === 'cta_copy'
-              ? 'PIX da fatura enviado ao cliente'
-              : 'Fatura enviada ao cliente';
-            return await this.createMessage(
-              instance, getConversation, content, 'outgoing', false, [], body,
-              'WAID:' + body.key.id, quotedMsg,
-            );
-          }
-
-          for (const button of buttons) {`,
-    'CTA history mapping');
   return source;
 });
 
