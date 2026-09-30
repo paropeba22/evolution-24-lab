@@ -15,18 +15,20 @@ RUN npm ci --silent
 COPY patch-prisma-binding.mjs /tmp/patch-prisma-binding.mjs
 COPY patch-instance-create.mjs /tmp/patch-instance-create.mjs
 COPY patch-channel-transport.mjs /tmp/patch-channel-transport.mjs
+COPY patch-financial-delivery-source.mjs /tmp/patch-financial-delivery-source.mjs
 COPY patch-channel-transport.mjs /evolution/patch-channel-transport.mjs
 COPY assert-runtime-model.mjs /tmp/assert-runtime-model.mjs
 COPY assert-runtime-model.mjs /evolution/assert-runtime-model.mjs
 COPY Dockerfile /evolution/Dockerfile
 COPY nexi-transport.cjs /evolution/nexi-transport.cjs
-COPY bundle-patch.test.cjs nexi-transport.test.cjs redis-lua.integration.test.cjs runtime-model.test.cjs /evolution/
+COPY bundle-patch.test.cjs nexi-transport.test.cjs redis-lua.integration.test.cjs runtime-model.test.cjs financial-delivery-source.test.cjs /evolution/
 COPY select-provider-bundle.cjs /evolution/select-provider-bundle.cjs
 COPY prisma/postgresql-migrations/20260926000000_add_chatwoot_inbox_id /evolution/prisma/postgresql-migrations/20260926000000_add_chatwoot_inbox_id
 COPY prisma/mysql-migrations/20260926000000_add_chatwoot_inbox_id /evolution/prisma/mysql-migrations/20260926000000_add_chatwoot_inbox_id
 
 # The schema change must precede Prisma generation and tsup's bundled client.
 RUN node /tmp/patch-prisma-binding.mjs
+RUN node /tmp/patch-financial-delivery-source.mjs
 
 # tsup bakes licensing definitions into each bundle. Empty args retain the
 # pinned upstream source's official-endpoint fallback; no runtime ENV is added.

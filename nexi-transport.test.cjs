@@ -323,3 +323,16 @@ test('each event emission gets a signed ID, retry keeps object, QR is stripped',
   assert.equal(JSON.stringify(redactEventForLog({ event: 'qrcode.updated', instance: instanceName,
     apikey: 'do-not-log', data: { qrcode: { base64: 'secret-qr' } } })).includes('secret-qr'), false);
 });
+
+test('interactive PIX and URL sentinels are absent from captured event logs', () => {
+  const logs = [];
+  const logger = { info: entry => logs.push(JSON.stringify(entry)) };
+  const sentinel = 'PIX_SECRET_SENTINEL_NEVER_LOG';
+  logger.info(redactEventForLog({ event: 'send.message', instance: instanceName,
+    data: { key: { id: 'external-id' }, message: { interactiveMessage: { nativeFlowMessage: {
+      buttons: [{ name: 'cta_copy', buttonParamsJson: JSON.stringify({ copy_code: sentinel, url: `https://example.com/${sentinel}` }) }],
+    } } } } }));
+  assert.equal(logs.length, 1);
+  assert.equal(logs.join('').includes(sentinel), false);
+  assert.equal(logs[0].includes('external-id'), true);
+});

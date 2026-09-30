@@ -314,10 +314,14 @@ function eventKeyProof(instanceName) {
 }
 
 function redactEventForLog(body) {
-  if (body.event === 'qrcode.updated') {
-    return { event: body.event, instance: body.instance, data: { qrcode: { instance: body.instance } } };
-  }
-  return { ...body, apikey: undefined };
+  // Webhook payloads can contain interactive buttonParamsJson, PIX and URLs.
+  // Keep local diagnostics on a small immutable allowlist.
+  return {
+    event: body?.event,
+    instance: body?.instance,
+    messageId: body?.data?.key?.id,
+    status: body?.data?.status,
+  };
 }
 
 async function replayStoreReady() {
