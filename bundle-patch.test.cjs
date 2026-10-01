@@ -8,10 +8,124 @@ const path = require('node:path');
 const { createHash } = require('node:crypto');
 const { spawnSync } = require('node:child_process');
 
+test('Chatwoot service anchors preserve isolation and reject structural ambiguity', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'evolution-chatwoot-anchors-'));
+  const helper = 'require("/evolution/nexi-transport.cjs")';
+  const marker = '/* nexi-p3-chatwoot-transport */\n';
+
+  function fixture({ ctor = 'Qe', monitor = 'R', config = 'y', repository = 'x', cache = 'cn', singleton = 'ig' } = {}) {
+    const instance = `this.chatwootService=new ${ctor}(${monitor},this.configService,this.prismaRepository,this.chatwootCache)`;
+    const shared = `${singleton}=new ${ctor}(${monitor},${config},${repository},${cache})`;
+    const correctedInstance = instance.replace('=new ', `=${helper}.isolateChatwoot(new `) + ')';
+    const correctedShared = shared.replace('=new ', `=${helper}.isolateChatwoot(new `) + ')';
+    // Include unrelated constructor calls with the same arity and argument names.
+    const source = `class Channel{constructor(){${instance};this.openaiService=new Other(${monitor},this.configService,this.prismaRepository,this.chatwootCache);}};class Controller{constructor(service){this.chatwootService=service;}};let ${shared},other=new Other(${monitor},${config},${repository},${cache});`;
+    const corrected = source.replace(instance, correctedInstance).replace(shared, correctedShared);
+    return { source, corrected, instance, shared, correctedInstance, correctedShared };
+  }
+
+  function run(source, provider = 'mysql', full = false) {
+    const target = path.join(directory, 'candidate.js');
+    fs.writeFileSync(target, source);
+    const result = spawnSync(process.execPath,
+      [path.join(__dirname, 'patch-channel-transport.mjs'), ...(full ? [] : ['--chatwoot-services-only'])],
+      { env: { ...process.env, EVOLUTION_BUNDLE_PATH: target, EVOLUTION_PROVIDER: provider }, encoding: 'utf8' });
+    return { ...result, output: fs.readFileSync(target, 'utf8') };
+  }
+
+  function rejected(source, label, full = false) {
+    const result = run(source, 'mysql', full);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, label);
+    assert.equal(result.output, source, 'failure must leave the bundle byte-identical');
+  }
+
+  function webhookRoute(corrected) {
+    const execute = corrected
+      ? `execute:async i=>{let r=await svc.webhook.get(i.instanceName);if(r){r.nexi_event_signed=${helper}.eventSigningReady();r.nexi_event_key_check=${helper}.eventKeyProof(i.instanceName)}return r}`
+      : 'execute:i=>svc.webhook.get(i.instanceName)';
+    return '.post(this.routerPath("set"),...g,async(req,res)=>{svc.webhook.set(a.instanceName,b)})' +
+      '.get(this.routerPath("find"),...g,async(req,res)=>{let result=await this.dataValidate({request:req,schema:Schema,ClassRef:Dto,' +
+      execute + '});res.status(200).json(result)})}};';
+  }
+
+  try {
+    for (const [provider, symbols] of [
+      ['mysql', {}],
+      ['postgresql', { ctor: 'ye', monitor: 'O', config: 'E', repository: 'J' }],
+      ['psql_bouncer', { ctor: 'ye', monitor: 'O', config: 'E', repository: 'J' }],
+      ['mysql', { ctor: '$Renamed_42', monitor: '_monitor', config: '$config', repository: 'repo42', cache: '$cache', singleton: '_shared' }],
+      ['postgresql', { ctor: 'DifferentCtor', monitor: '$m', config: '_cfg', repository: '$repo', cache: '_cache', singleton: '$singleton' }],
+    ]) {
+      await t.test(`${provider}: unique targets with constructor ${symbols.ctor || 'Qe'}`, () => {
+        const f = fixture(symbols);
+        const result = run(f.source, provider);
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(result.output, f.corrected, 'only the two isolation wrappers change');
+        const marked = marker + result.output + webhookRoute(true);
+        const rerun = run(marked, provider, true);
+        assert.equal(rerun.status, 0, rerun.stderr);
+        assert.equal(rerun.output, marked, 'corrected marked bundle is byte-identical');
+      });
+    }
+
+    const f = fixture();
+    await t.test('wrapper receives both original constructor results and arguments', () => {
+      const result = run(f.source);
+      assert.equal(result.status, 0, result.stderr);
+      const seen = [];
+      const wrapped = [];
+      class Chatwoot { constructor(...args) { seen.push(args); } }
+      const monitor = {}, config = {}, repository = {}, cache = {};
+      const evaluate = new Function('require', 'Qe', 'Other', 'R', 'y', 'x', 'cn',
+        result.output.replace('constructor(){', 'constructor(){this.configService=y;this.prismaRepository=x;this.chatwootCache=cn;') + 'return {Channel,ig};');
+      const exports = evaluate(() => ({ isolateChatwoot(service) { wrapped.push(service); return service; } }),
+        Chatwoot, class Other {}, monitor, config, repository, cache);
+      const instance = new exports.Channel();
+      assert.deepEqual(seen, [[monitor, config, repository, cache], [monitor, config, repository, cache]]);
+      assert.equal(wrapped.length, 2);
+      assert.equal(exports.ig, wrapped[0]);
+      assert.equal(instance.chatwootService, wrapped[1]);
+    });
+
+    for (const [name, source, label] of [
+      ['absent instance', f.source.replace(f.instance, 'this.chatwootService=null'), /per-instance chatwoot service:/],
+      ['duplicate instance', f.source + `class Duplicate{constructor(){${f.instance};}}`, /per-instance chatwoot service:/],
+      ['changed instance cache', f.source.replace('this.chatwootCache)', 'this.otherCache)'), /per-instance chatwoot service:/],
+      ['missing monitor argument', f.source.replace('new Qe(R,this.configService', 'new Qe(this.configService'), /per-instance chatwoot service:/],
+      ['extra instance argument', f.source.replace('this.chatwootCache)', 'this.chatwootCache,extra)'), /per-instance chatwoot service:/],
+      ['valid instance plus malformed assignment', f.source + 'this.chatwootService=new Wrong();', /per-instance chatwoot service:/],
+      ['absent singleton', f.source.replace(f.shared, 'ig=null'), /singleton chatwoot service:/],
+      ['duplicate singleton', f.source + `let duplicate=new Qe(R,y,x,cn);`, /singleton chatwoot service:/],
+      ['changed singleton constructor', f.source.replace(f.shared, 'ig=new Wrong(R,y,x,cn)'), /singleton chatwoot service:/],
+      ['changed singleton monitor', f.source.replace(f.shared, 'ig=new Qe(other,y,x,cn)'), /singleton chatwoot service:/],
+      ['extra singleton argument', f.source.replace(f.shared, 'ig=new Qe(R,y,x,cn,extra)'), /singleton chatwoot service:/],
+      ['valid singleton plus malformed assignment', f.source + 'let malformed=new Qe(R,y,x);', /singleton chatwoot service:/],
+      ['only instance corrected', f.source.replace(f.instance, f.correctedInstance), /mixed isolation state/],
+      ['only singleton corrected', f.source.replace(f.shared, f.correctedShared), /mixed isolation state/],
+      ['unmarked already corrected', f.corrected, /first application expected unwrapped constructors/],
+    ]) {
+      await t.test(name, () => rejected(source, label));
+    }
+
+    for (const [name, services, route, label] of [
+      ['marked unwrapped services', f.source, webhookRoute(true), /marked bundle is not corrected/],
+      ['marked missing instance', f.corrected.replace(f.correctedInstance, 'this.chatwootService=null'), webhookRoute(true), /per-instance chatwoot service:/],
+      ['marked duplicate corrected instance', f.corrected + `class Duplicate{constructor(){${f.correctedInstance};}}`, webhookRoute(true), /per-instance chatwoot service:/],
+      ['marked duplicate corrected singleton', f.corrected + `let duplicate=${helper}.isolateChatwoot(new Qe(R,y,x,cn));`, webhookRoute(true), /singleton chatwoot service:/],
+      ['marked stale webhook proof', f.corrected, webhookRoute(false), /webhook\/find: marked bundle is not corrected/],
+    ]) {
+      await t.test(name, () => rejected(marker + services + route, label, true));
+    }
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('patched image bundle preserves the direct message path and fails closed', { skip: !process.env.EVOLUTION_BUNDLE_PATH }, () => {
   const bundle = fs.readFileSync(process.env.EVOLUTION_BUNDLE_PATH, 'utf8');
   const mysql = process.env.EVOLUTION_PROVIDER === 'mysql';
-  const route = bundle.indexOf('processChatwootWebhook(e,await ig.getProvider');
+  const route = bundle.search(/processChatwootWebhook\(e,await [A-Za-z_$][\w$]*\.getProvider/);
   const dispatchCall = `execute:(a,i)=>${mysql ? 'pn' : 'Cn'}.receiveWebhook(a,i)`;
   const dispatch = bundle.indexOf(dispatchCall, route);
   assert.ok(route >= 0 && dispatch > route);

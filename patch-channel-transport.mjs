@@ -85,13 +85,67 @@ function patchWebhookFindRoute(source) {
   return source.slice(0, target.start) + target.corrected + source.slice(target.end);
 }
 
+function escapePattern(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function chatwootServices(source) {
+  const wrapper = `${escapePattern(helper)}\\.isolateChatwoot`;
+  const instanceCall = `new (${identifier})\\((${identifier}),this\\.configService,this\\.prismaRepository,this\\.chatwootCache\\)`;
+  const instancePattern = new RegExp(`(?<![\\w$.])this\\.chatwootService=(?:${instanceCall}|${wrapper}\\(${instanceCall}\\))(?=[,;}])`, 'g');
+  const instances = [...source.matchAll(instancePattern)];
+  // Controllers also assign an injected service; only constructor assignments
+  // belong to this isolation patch, including malformed constructor candidates.
+  const assignments = [...source.matchAll(new RegExp(`(?<![\\w$.])this\\.chatwootService=(?:${wrapper}\\()?new ${identifier}\\(`, 'g'))];
+  if (instances.length !== 1 || assignments.length !== 1) {
+    throw new Error(`per-instance chatwoot service: expected one semantic assignment, found ${instances.length} targets / ${assignments.length} assignments`);
+  }
+  const instance = instances[0];
+  const ctor = instance[1] || instance[3];
+  const monitor = instance[2] || instance[4];
+  const instanceState = instance[1] ? 'old' : 'corrected';
+  // The pinned source constructs the same ChatwootService once at module scope.
+  // Bind it to the discovered class and monitor, retaining all four arguments.
+  const singletonCall = `new ${escapePattern(ctor)}\\((${identifier}),(${identifier}),(${identifier}),(${identifier})\\)`;
+  const singletonPattern = new RegExp(`(?<![\\w$.])(${identifier})=(?:${singletonCall}|${wrapper}\\(${singletonCall}\\))(?=[,;])`, 'g');
+  const singletons = [...source.matchAll(singletonPattern)];
+  const singletonAssignments = [...source.matchAll(new RegExp(`(?<![\\w$.])${identifier}=(?:${wrapper}\\()?new ${escapePattern(ctor)}\\(`, 'g'))];
+  if (singletons.length !== 1 || singletonAssignments.length !== 1) {
+    throw new Error(`singleton chatwoot service: expected one semantic assignment, found ${singletons.length} targets / ${singletonAssignments.length} assignments`);
+  }
+  const singleton = singletons[0];
+  const singletonState = singleton[2] ? 'old' : 'corrected';
+  if ((singleton[2] || singleton[6]) !== monitor) throw new Error('singleton chatwoot service: monitor binding changed');
+  if (instanceState !== singletonState) throw new Error('chatwoot services: mixed isolation state');
+  return { instance, singleton, singletonName: singleton[1], state: instanceState };
+}
+
+function patchChatwootServices(source) {
+  const targets = chatwootServices(source);
+  if (targets.state !== 'old') throw new Error('chatwoot services: first application expected unwrapped constructors');
+  // Apply by validated offsets; captured identifiers and constructor arguments
+  // are copied byte-for-byte. Only the existing isolation wrapper is inserted.
+  for (const target of [targets.instance, targets.singleton].sort((a, b) => b.index - a.index)) {
+    const equals = target[0].indexOf('=');
+    const corrected = target[0].slice(0, equals + 1) + `${helper}.isolateChatwoot(` + target[0].slice(equals + 1) + ')';
+    source = source.slice(0, target.index) + corrected + source.slice(target.index + target[0].length);
+  }
+  return { code: source, singletonName: targets.singletonName };
+}
+
 if (code.includes(marker)) {
+  if (chatwootServices(code).state !== 'corrected') throw new Error('chatwoot services: marked bundle is not corrected');
   if (webhookFindRoute(code).state !== 'corrected') throw new Error('webhook/find: marked bundle is not corrected');
   process.exit(0);
 }
 // Exercises the same route transformation on representative bundles without replaying unrelated P3 patches.
 if (process.argv[2] === '--webhook-route-only') {
   fs.writeFileSync(bundlePath, patchWebhookFindRoute(code));
+  process.exit(0);
+}
+// Focal fixtures exercise both service anchors through the production matcher.
+if (process.argv[2] === '--chatwoot-services-only') {
+  fs.writeFileSync(bundlePath, patchChatwootServices(code).code);
   process.exit(0);
 }
 
@@ -107,12 +161,9 @@ function replaceCount(before, after, expected, label) {
   code = code.split(before).join(after);
 }
 
-const chatwootCtor = provider === 'mysql' ? 'Qe(R' : 'ye(O';
-const singletonCtor = provider === 'mysql' ? 'Qe(R,y,x,cn)' : 'ye(O,E,J,cn)';
-replaceOnce(`this.chatwootService=new ${chatwootCtor},this.configService,this.prismaRepository,this.chatwootCache)`,
-  `this.chatwootService=${helper}.isolateChatwoot(new ${chatwootCtor},this.configService,this.prismaRepository,this.chatwootCache))`,
-  'per-instance chatwoot service');
-replaceOnce(`ig=new ${singletonCtor}`, `ig=${helper}.isolateChatwoot(new ${singletonCtor})`, 'singleton chatwoot service');
+const isolatedServices = patchChatwootServices(code);
+code = isolatedServices.code;
+const chatwootSingleton = isolatedServices.singletonName;
 
 replaceOnce('async setChatwoot(t){if(!this.configService.get("CHATWOOT").ENABLED)return;',
   'async setChatwoot(t){if(!this.configService.get("CHATWOOT").ENABLED)return;if(this.instanceName.startsWith("nexi-wa-")&&!/^[1-9][0-9]{0,18}$/.test(String(t.inboxId||"")))throw new Error("chatwoot_inbox_id_required");',
@@ -130,8 +181,8 @@ replaceOnce(mysql
   ? '.post(this.routerPath("webhook"),async(e,s)=>{let n=await this.dataValidate({request:e,schema:v,ClassRef:b,execute:(a,i)=>pn.receiveWebhook(a,i)});s.status(200).json(n)})'
   : '.post(this.routerPath("webhook"),async(e,s)=>{let n=await this.dataValidate({request:e,schema:T,ClassRef:P,execute:(a,i)=>Cn.receiveWebhook(a,i)});s.status(200).json(n)})',
   mysql
-    ? `.post(this.routerPath("webhook"),async(e,s)=>{let v=await ${helper}.processChatwootWebhook(e,await ig.getProvider({instanceName:e.params.instanceName}),()=>this.dataValidate({request:e,schema:v,ClassRef:b,execute:(a,i)=>pn.receiveWebhook(a,i)}));return s.status(v.status).json(v.body)})`
-    : `.post(this.routerPath("webhook"),async(e,s)=>{let v=await ${helper}.processChatwootWebhook(e,await ig.getProvider({instanceName:e.params.instanceName}),()=>this.dataValidate({request:e,schema:T,ClassRef:P,execute:(a,i)=>Cn.receiveWebhook(a,i)}));return s.status(v.status).json(v.body)})`,
+    ? `.post(this.routerPath("webhook"),async(e,s)=>{let v=await ${helper}.processChatwootWebhook(e,await ${chatwootSingleton}.getProvider({instanceName:e.params.instanceName}),()=>this.dataValidate({request:e,schema:v,ClassRef:b,execute:(a,i)=>pn.receiveWebhook(a,i)}));return s.status(v.status).json(v.body)})`
+    : `.post(this.routerPath("webhook"),async(e,s)=>{let v=await ${helper}.processChatwootWebhook(e,await ${chatwootSingleton}.getProvider({instanceName:e.params.instanceName}),()=>this.dataValidate({request:e,schema:T,ClassRef:P,execute:(a,i)=>Cn.receiveWebhook(a,i)}));return s.status(v.status).json(v.body)})`,
   'authenticated chatwoot webhook route');
 
 replaceOnce(mysql ? 'execute:a=>pn.findChatwoot(a)});s.status(200).json(n)' : 'execute:a=>Cn.findChatwoot(a)});s.status(200).json(n)',
