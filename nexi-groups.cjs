@@ -1,10 +1,15 @@
 'use strict';
 
 const { createHash, createHmac, randomUUID, timingSafeEqual } = require('node:crypto');
+const { AsyncLocalStorage } = require('node:async_hooks');
 const identity = require('./nexi-identity.cjs');
 const transport = require('./nexi-transport.cjs');
 const raw = new WeakMap();
-const workers = new Set();
+const provenance = Symbol('nexi.groups.source');
+const privacyScope = new AsyncLocalStorage();
+const groupReadScope = new AsyncLocalStorage();
+const MAX_ATTEMPTS = 12;
+const MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const GROUP = /^\d{5,20}(?:-\d{5,20})?@g\.us$/;
 const ID = /^[a-zA-Z0-9_-]{1,128}$/;
 const HASH = /^[0-9a-f]{64}$/;
@@ -18,6 +23,136 @@ function groupEventPayload(event, data) {
   if (!events.has(event)) return null;
   if (data?.version !== 1 || !HASH.test(data.session_identity || '')) throw new Error('nexi_groups_event_invalid');
   return data;
+}
+
+function groupSource(value) {
+  if (!value || typeof value !== 'object') return false;
+  if (value[provenance] || value.isGroup === true) return true;
+  if (value.attrs?.type === 'group') return true;
+  if (Array.isArray(value)) return value.some(groupSource);
+  return Object.entries(value).some(([key, child]) =>
+    (['from', 'to', 'id', 'jid', 'remoteJid', 'groupJid', 'group_jid', 'group-jid', 'chatId'].includes(key) && groupLike(child)) ||
+    (child && typeof child === 'object' && groupSource(child)));
+}
+
+// Called at the derivation site, before buffering can combine a participant
+// update with a legitimate direct update for the same PN/LID.
+function deriveContact(message, contact) {
+  if (groupSource(message)) Object.defineProperty(contact, provenance, { value: true, enumerable: true });
+  return contact;
+}
+
+function packetLogger(logger, node, isManaged) {
+  if (!isManaged || !groupSource(node)) return logger;
+  return new Proxy(logger, { get(target, key) {
+    if (['trace', 'debug', 'info', 'warn', 'error', 'fatal'].includes(key)) {
+      return () => target[key]?.('nexi_groups_packet_filtered');
+    }
+    return target[key];
+  } });
+}
+
+function privacyLogger(logger, isManaged) {
+  if (!isManaged) return logger;
+  return new Proxy(logger, { get(target, key) {
+    if (key === 'child') return (...args) => privacyLogger(target.child(...args), true);
+    if (['trace', 'debug', 'info', 'warn', 'error', 'fatal'].includes(key)) return (...args) => {
+      const contains = value => typeof value === 'string' ? value.includes('@g.us')
+        : value && typeof value === 'object' && !ArrayBuffer.isView(value) && Object.values(value).some(contains);
+      if (privacyScope.getStore() || args.some(value => groupSource(value) || contains(value))) {
+        return target[key]('nexi_groups_packet_filtered');
+      }
+      return target[key](...args);
+    };
+    return target[key];
+  } });
+}
+
+function withPacketScope(node, isManaged, work) {
+  return privacyScope.run(isManaged && groupSource(node), work);
+}
+
+function groupRead(work) {
+  return privacyScope.run(true, () => groupReadScope.run(true, work));
+}
+
+function guardSocket(socket, isManaged) {
+  if (!isManaged) return socket;
+  const targetIndexes = { sendMessage: 0, relayMessage: 0, chatModify: 1, sendPresenceUpdate: 1,
+    readMessages: 0, sendReceipt: 0, sendReceipts: 0, updateBlockStatus: 0, rejectCall: 1,
+    star: 0, updateMediaMessage: 0, onWhatsApp: 0, fetchStatus: 0, profilePictureUrl: 0,
+    groupParticipantsUpdate: 0, groupLeave: 0, groupUpdateSubject: 0, groupUpdateDescription: 0,
+    groupSettingUpdate: 0, groupToggleEphemeral: 0 };
+  return new Proxy(socket, { get(target, key) {
+    const original = target[key];
+    if (typeof original !== 'function') return original;
+    if (String(key).startsWith('group')) return (...args) => {
+      if (!['groupMetadata', 'groupFetchAllParticipating'].includes(key) || !groupReadScope.getStore()) {
+        throw new Error('nexi_groups_outbound_disabled_wave1');
+      }
+      return original.apply(target, args);
+    };
+    if (!(key in targetIndexes)) return original;
+    return (...args) => {
+      const candidate = args[targetIndexes[key]];
+      validateTargets(true, { target: typeof candidate === 'string' ? { jid: candidate } : candidate });
+      return original.apply(target, args);
+    };
+  } });
+}
+
+async function metadataWatermark(service) {
+  const binding = managed(service.instance.name) ? await bindingFor(service) : null;
+  return { session: identity.sessionFingerprint(service.instance?.authState?.state?.creds) || 'unproved',
+    instanceId: service.instanceId, name: service.instance.name, generation: binding?.generation, revision: binding?.revision };
+}
+async function metadataCurrent(service, watermark) {
+  const current = await metadataWatermark(service);
+  return current.session === watermark.session && current.instanceId === watermark.instanceId && current.name === watermark.name &&
+    current.generation === watermark.generation && current.revision === watermark.revision;
+}
+
+function admissionError() {
+  const error = new Error('nexi_groups_admission_suspended');
+  error.code = 'NEXI_GROUPS_ADMISSION_SUSPENDED';
+  return error;
+}
+
+async function admit(config, message, node, credentials, history, protocolTypes) {
+  if (!config.nexiFinancialManaged || !groupLike(node?.attrs?.from)) return;
+  observeDecrypted(message, node, credentials, history, protocolTypes);
+  const projection = take(message, 'notify');
+  if (!projection) return;
+  try {
+    if (typeof config.nexiGroupsAdmit !== 'function') throw admissionError();
+    await config.nexiGroupsAdmit(projection);
+  } catch {
+    const error = admissionError();
+    throw error;
+  }
+}
+
+async function admitProjection(service, projection) {
+  return service.prismaRepository.$transaction(async tx => {
+    const binding = await bindingFor({ ...service, prismaRepository: tx });
+    const room = binding?.rooms?.[projection.group_jid];
+    if (!binding || !room?.enabled) return; // explicitly outside admitted authority
+    if (projection.session_identity !== binding.sessionIdentity) throw admissionError();
+    // Take a DB write lock via CAS in the same transaction as enqueue. A revoke
+    // cannot race admission into an incompatible binding or room generation.
+    const fence = await tx.nexiGroupControl.updateMany({ where: { instanceId: service.instanceId,
+      revision: binding.revision, generation: binding.generation, sessionIdentity: binding.sessionIdentity, state: 'active' },
+    data: { revision: { increment: 1 } } });
+    if (fence.count !== 1) throw admissionError();
+    await enqueue({ ...service, prismaRepository: tx }, binding, { ...projection, room_generation: room.generation },
+      [projection.event, projection.group_jid, projection.source_id]);
+    if (projection.reason === 'local_left') {
+      const result = await tx.nexiGroupControl.updateMany({ where: { instanceId: service.instanceId,
+        revision: binding.revision + 1, generation: binding.generation, sessionIdentity: binding.sessionIdentity },
+      data: { rooms: { ...binding.rooms, [projection.group_jid]: { ...room, enabled: false } }, revision: { increment: 1 } } });
+      if (result.count !== 1) throw admissionError();
+    }
+  });
 }
 
 function participant(value) {
@@ -65,7 +200,7 @@ function content(message, groupJid) {
 function observeDecrypted(message, node, credentials, history, protocolTypes) {
   const a = node?.attrs, key = message?.key;
   if (!a || !key || !isGroup(a.from) || a.from !== key.remoteJid || !ID.test(a.id || '') || key.id !== a.id ||
-      a.offline || a.category === 'peer' || history || message.broadcast || message.messageStubType != null ||
+      a.category === 'peer' || history || message.broadcast || message.messageStubType != null ||
       !message.message) return;
   const sender = participant(a.participant), session = identity.sessionFingerprint(credentials), timestamp = seconds(a.t);
   if (!sender || sender !== participant(key.participant) || !session || !timestamp || typeof key.fromMe !== 'boolean') return;
@@ -78,8 +213,13 @@ function observeDecrypted(message, node, credentials, history, protocolTypes) {
   if (protocol) {
     if (protocolTypes && [protocolTypes.REVOKE, protocolTypes.MESSAGE_EDIT].includes(protocol.type) &&
         ID.test(protocol.key?.id || '') && (!protocol.key.remoteJid || protocol.key.remoteJid === a.from)) {
+      const targetSender = participant(protocol.key.participant);
+      // rc13 does not authenticate moderator privilege. Support only self
+      // mutations: explicit target participant or the author's own-key bit.
+      if (targetSender ? ![sender, alternate].includes(targetSender) : protocol.key.fromMe !== true) return;
       raw.set(message, Object.freeze({ event: 'group.message.redacted', group_jid: a.from, session_identity: session,
         source_id: a.id, occurred_at: timestamp, target_message_id: protocol.key.id, actor_id: sender,
+        target_sender_id: sender, target_sender_alternate_id: alternate || null, actor_from_me: key.fromMe,
         reason: protocol.type === protocolTypes.REVOKE ? 'deleted' : 'edited' }));
     }
     return;
@@ -93,7 +233,7 @@ function observeDecrypted(message, node, credentials, history, protocolTypes) {
 
 function observeNotification(message, node, credentials) {
   const a = node?.attrs, session = identity.sessionFingerprint(credentials), timestamp = seconds(a?.t);
-  if (!isGroup(a?.from) || a.offline || !ID.test(a.id || '') || !session || !timestamp) return;
+  if (!isGroup(a?.from) || !ID.test(a.id || '') || !session || !timestamp) return;
   // The public participant/update event has no notification ID. Retain the
   // authenticated raw ID and invalidate a snapshot; never invent member history.
   const self = [participant(credentials.me?.id), participant(credentials.me?.lid)].filter(Boolean);
@@ -112,7 +252,7 @@ function take(message, type, requestId) {
 }
 
 function denyOutbound(isManaged, jid) {
-  if (isManaged && groupLike(jid)) throw new Error('nexi_groups_outbound_disabled_wave1');
+  validateTargets(isManaged, { jid }, jid);
 }
 
 function filterGeneric(name, data) {
@@ -123,6 +263,7 @@ function filterGeneric(name, data) {
     return result.length === data.length && result.every((value, index) => value === data[index]) ? data : result;
   }
   if (!data || typeof data !== 'object') return data;
+  if (data[provenance] || data.isGroup === true) return null;
   if (['remoteJid', 'groupJid', 'group_jid', 'jid', 'id', 'chatId', 'from', 'to'].some(key => groupLike(data[key])) ||
       groupLike(data.key?.remoteJid) || groupLike(data.message?.protocolMessage?.key?.remoteJid)) return null;
   if (ArrayBuffer.isView(data) || data instanceof Date) return data;
@@ -135,19 +276,26 @@ function filterGeneric(name, data) {
   return changed ? result : data;
 }
 
-function hasGroupTarget(value) {
+const targetFields = new Set(['chat', 'number', 'numbers', 'groupJid', 'group_jid', 'remoteJid', 'jid', 'jids',
+  'chatId', 'id', 'identifier', 'source_id', 'to', 'recipient', 'participants', 'mentions']);
+function normalizedGroup(target) {
+  if (typeof target !== 'string') return false;
+  if (groupLike(target)) return true;
+  if (/@(s\.whatsapp\.net|lid|newsletter|broadcast)/.test(target)) return false;
+  const number = target.replace(/:\d+/, '').replace(/[\s+()]/g, '').split(':')[0].split('@')[0];
+  return (number.includes('-') && number.length >= 24) || number.replace(/\D/g, '').length >= 18;
+}
+function hasGroupTarget(value, targetContext = false) {
+  if (typeof value === 'string') return targetContext && normalizedGroup(value);
   if (!value || typeof value !== 'object') return false;
-  if (Array.isArray(value)) return value.some(hasGroupTarget);
-  return Object.entries(value).some(([key, target]) => {
-    if (['number', 'groupJid', 'remoteJid', 'jid', 'chatId', 'id', 'identifier', 'source_id'].includes(key) && typeof target === 'string') {
-      if (groupLike(target)) return true;
-      // Mirror the pinned createJid heuristics only for target fields. A long
-      // PIX code or text body in a direct send must never be classified here.
-      if (key === 'number' && !target.includes('@') && (target.replace(/\D/g, '').length >= 18 ||
-          (target.includes('-') && target.replace(/[\s+()]/g, '').length >= 24))) return true;
-    }
-    return hasGroupTarget(target);
-  });
+  if (Array.isArray(value)) return value.some(child => hasGroupTarget(child, targetContext));
+  return Object.entries(value).some(([key, target]) => hasGroupTarget(target, targetFields.has(key)));
+}
+function validateTargets(isManaged, value, normalized) {
+  if (isManaged && (hasGroupTarget(value) || (normalized !== undefined && normalizedGroup(normalized)))) {
+    throw new Error('nexi_groups_outbound_disabled_wave1');
+  }
+  return normalized;
 }
 
 async function bindingFor(service) {
@@ -162,8 +310,12 @@ async function enqueue(service, binding, projection, sourceKey) {
     binding_generation: binding.generation, ...projection };
   delete data.event;
   const payload = { event: projection.event, instance: service.instance.name, data };
-  const sourceIdentity = hash([binding.generation, projection.session_identity, sourceKey]);
-  const fingerprint = hash(payload);
+  // Message IDs collide closed across session/generation/direction. Metadata
+  // controls retain their explicit generation namespace.
+  const sourceIdentity = hash(projection.event.startsWith('group.message.') ? sourceKey
+    : [binding.generation, projection.session_identity, sourceKey]);
+  const fingerprint = hash(projection.event === 'group.message.observed'
+    ? { ...payload, data: { ...data, message: { ...data.message, display_name: null } } } : payload);
   const row = await service.prismaRepository.nexiGroupEventOutbox.upsert({
     where: { instanceId_sourceKey: { instanceId: service.instanceId, sourceKey: sourceIdentity } },
     create: { instanceId: service.instanceId, eventId: randomUUID(), sourceKey: sourceIdentity, fingerprint,
@@ -178,14 +330,7 @@ async function ingest(service, message, type, requestId) {
   // or storage failures. The caller must not re-enter any direct handler.
   const projection = take(message, type, requestId);
   if (!projection) return true;
-  const binding = await bindingFor(service);
-  const room = binding?.rooms?.[projection.group_jid];
-  if (!binding || !room || room.enabled !== true) return true;
-  await enqueue(service, binding, { ...projection, room_generation: room.generation },
-    [projection.event, projection.group_jid, projection.source_id]);
-  if (projection.reason === 'local_left') await service.prismaRepository.nexiGroupControl.updateMany({
-    where: { instanceId: service.instanceId, revision: binding.revision, sessionIdentity: binding.sessionIdentity },
-    data: { rooms: { ...binding.rooms, [projection.group_jid]: { ...room, enabled: false } }, revision: { increment: 1 } } });
+  await admitProjection(service, projection);
   return true;
 }
 
@@ -226,8 +371,12 @@ async function interceptEvents(service, original) {
           group_jid: jid, room_generation: binding.rooms[jid].generation, source_id: randomUUID(),
           occurred_at: Math.floor(Date.now() / 1000), reason: 'public_event' }, ['invalidation', randomUUID()]);
       }
-      if (binding) await service.prismaRepository.nexiGroupControl.updateMany({ where: { instanceId: service.instanceId,
-        sessionIdentity: binding.sessionIdentity, generation: binding.generation }, data: { catalogStale: true } });
+      if (binding) {
+        const changed = await service.prismaRepository.nexiGroupControl.updateMany({ where: { instanceId: service.instanceId,
+        sessionIdentity: binding.sessionIdentity, generation: binding.generation },
+        data: { catalogStale: true, revision: { increment: 1 } } });
+        if (changed.count !== 1) throw new Error('nexi_groups_invalidation_superseded');
+      }
     } catch { service.logger?.warn('nexi_groups_metadata_unavailable'); }
   }
   for (const key of ['groups.upsert', 'groups.update', 'group-participants.update']) delete result[key];
@@ -273,6 +422,7 @@ function controlClaims(service, dto, now = Date.now()) {
 
 async function control(service, dto) {
   const claims = controlClaims(service, dto), boundary = await endpoint(service), p = claims.parameters;
+  const instanceId = service.instanceId, instanceName = service.instance.name;
   if (String(claims.account_id) !== boundary.headers['X-Nexi-Chatwoot-Account-Id']) throw new Error('nexi_groups_control_rejected');
   const session = identity.sessionFingerprint(service.instance?.authState?.state?.creds);
   if (!session || service.client?.ws?.isOpen !== true) throw new Error('nexi_groups_session_unavailable');
@@ -309,23 +459,28 @@ async function control(service, dto) {
     // No photos or per-group network fanout. The persistent cache is already
     // scoped by instance+session; stale returns do not prove local membership.
     if (!binding.catalogAt || binding.catalogAt.getTime() < Date.now() - 15 * 60000) {
-      const metadata = await service.client.groupFetchAllParticipating();
+      const metadata = await groupRead(() => service.client.groupFetchAllParticipating());
       const catalog = Object.values(metadata).filter(m => isGroup(m.id) && !m.isCommunity && !m.isCommunityAnnounce)
         .map(m => ({ group_jid: m.id, name: typeof m.subject === 'string' ? m.subject.slice(0, 256) : '',
           participant_count: Array.isArray(m.participants) ? m.participants.length : 0 })).sort((a, b) => a.group_jid.localeCompare(b.group_jid));
       if (catalog.length > 2000) throw new Error('nexi_groups_catalog_limit');
-      await store.nexiGroupControl.updateMany({ where: { instanceId: service.instanceId, generation: binding.generation,
-        sessionIdentity: session }, data: { catalog, catalogAt: new Date(), catalogStale: false } });
+      if (service.instanceId !== instanceId || service.instance.name !== instanceName ||
+          identity.sessionFingerprint(service.instance?.authState?.state?.creds) !== session) throw new Error('nexi_groups_fetch_superseded');
+      const result = await store.nexiGroupControl.updateMany({ where: { instanceId: service.instanceId, generation: binding.generation,
+        sessionIdentity: session, revision: binding.revision, state: 'active' },
+        data: { catalog, catalogAt: new Date(), catalogStale: false, revision: { increment: 1 } } });
+      if (result.count !== 1) throw new Error('nexi_groups_fetch_superseded');
       return { groups: catalog, stale: false };
     }
     return { groups: binding.catalog || [], stale: binding.catalogStale };
   }
   if (Object.keys(p).sort().join(',') !== 'enabled,group_jid,metadata_revision,room_generation' || !isGroup(p.group_jid) ||
       typeof p.enabled !== 'boolean' || !Number.isSafeInteger(p.room_generation) || p.room_generation <= 0 ||
-      !Number.isSafeInteger(p.metadata_revision) || p.metadata_revision <= 0) throw new Error('nexi_groups_control_rejected');
+      p.room_generation > 2147483647 || !Number.isSafeInteger(p.metadata_revision) || p.metadata_revision <= 0 ||
+      p.metadata_revision > 2147483647) throw new Error('nexi_groups_control_rejected');
   let snapshot = null;
   if (p.enabled) {
-    const meta = await service.client.groupMetadata(p.group_jid);
+    const meta = await groupRead(() => service.client.groupMetadata(p.group_jid));
     if (!meta || meta.id !== p.group_jid || meta.isCommunity || meta.isCommunityAnnounce) throw new Error('nexi_groups_room_unavailable');
     const members = participants(meta.participants), self = [participant(service.client.user?.id), participant(service.client.user?.lid)];
     if (!members.some(m => self.includes(m.id) || (m.alternate_id && self.includes(m.alternate_id)))) throw new Error('nexi_groups_membership_unavailable');
@@ -337,7 +492,10 @@ async function control(service, dto) {
     // restoring an older authorization after a newer disable.
     const current = await tx.nexiGroupControl.findUnique({ where: { instanceId: service.instanceId } });
     const old = current?.rooms?.[p.group_jid];
-    if (!current || current.generation !== binding.generation || current.sessionIdentity !== session ||
+    if (!current || current.generation !== binding.generation || current.sessionIdentity !== session || current.state !== 'active' ||
+        service.instanceId !== instanceId || service.instance.name !== instanceName ||
+        identity.sessionFingerprint(service.instance?.authState?.state?.creds) !== session ||
+        (p.enabled && current.revision !== binding.revision) ||
         (old && (old.generation > p.room_generation || (old.generation === p.room_generation &&
         (old.enabled !== p.enabled || old.metadata_revision > p.metadata_revision))))) throw new Error('nexi_groups_control_rejected');
     const result = await tx.nexiGroupControl.updateMany({ where: { instanceId: service.instanceId, revision: current.revision },
@@ -351,37 +509,51 @@ async function control(service, dto) {
   return { accepted: true };
 }
 
+async function expireOutbox(db, instanceId) {
+    const now = new Date();
+    // Runs even with an unavailable webhook. Expired content is observable as
+    // quarantined; opaque sourceKey/fingerprint/eventId are never purged.
+    return db.updateMany({ where: { ...(instanceId ? { instanceId } : {}), state: 'queued',
+      AND: [{ OR: [{ attempts: { gte: MAX_ATTEMPTS } }, { createdAt: { lte: new Date(+now - MAX_AGE_MS) } }] },
+        { OR: [{ leaseUntil: null }, { leaseUntil: { lte: now } }] }] },
+    data: { state: 'quarantined', payload: {}, leaseToken: null, leaseUntil: null } });
+}
+
 async function drain(service, fetchImpl = fetch, limit = 20) {
-  if (workers.has(service.instanceId)) return;
-  workers.add(service.instanceId);
-  try {
-    const boundary = await endpoint(service), db = service.prismaRepository.nexiGroupEventOutbox;
+    const db = service.prismaRepository.nexiGroupEventOutbox;
+    await expireOutbox(db, service.instanceId);
+    const boundary = await endpoint(service);
     for (let i = 0; i < limit; i++) {
-      const row = await db.findFirst({ where: { instanceId: service.instanceId, state: 'queued' }, orderBy: { id: 'asc' } });
-      if (!row || row.nextAttemptAt > new Date() || (row.leaseUntil && row.leaseUntil > new Date())) break;
+      const clock = new Date();
+      const eligible = { instanceId: service.instanceId, state: 'queued', nextAttemptAt: { lte: clock },
+        attempts: { lt: MAX_ATTEMPTS }, createdAt: { gt: new Date(+clock - MAX_AGE_MS) },
+        OR: [{ leaseUntil: null }, { leaseUntil: { lte: clock } }] };
+      const row = await db.findFirst({ where: eligible, orderBy: { id: 'asc' } });
+      if (!row) break;
       const token = randomUUID();
-      const claim = await db.updateMany({ where: { id: row.id, state: 'queued', OR: [{ leaseUntil: null }, { leaseUntil: { lte: new Date() } }] },
+      const claim = await db.updateMany({ where: { id: row.id, ...eligible },
         data: { leaseToken: token, leaseUntil: new Date(Date.now() + 30000), attempts: { increment: 1 } } });
-      if (claim.count !== 1) break;
+      if (claim.count !== 1) continue;
       try {
         const prepared = transport.prepareEvent(boundary.headers, row.payload, service.instance.name, service.instanceId);
         prepared.headers['X-Nexi-Event-Id'] = row.eventId;
         const response = await fetchImpl(boundary.url, { method: 'POST', redirect: 'error',
           headers: transport.freshEventHeaders(prepared.headers, row.payload), body: JSON.stringify(row.payload), signal: AbortSignal.timeout(10000) });
         if (response.ok || [400, 401, 403, 404, 409, 410, 422].includes(response.status)) {
-          await db.updateMany({ where: { id: row.id, leaseToken: token }, data: { state: response.ok ? 'delivered' : 'rejected',
+          await db.updateMany({ where: { id: row.id, state: 'queued', leaseToken: token, leaseUntil: { gt: new Date() } }, data: { state: response.ok ? 'delivered' : 'rejected',
             payload: {}, leaseToken: null, leaseUntil: null } });
           continue;
         }
       } catch { /* Durable retry: exact UUID/body; never a transport send. */ }
-      await db.updateMany({ where: { id: row.id, leaseToken: token }, data: { leaseToken: null, leaseUntil: null,
+      const terminal = row.attempts + 1 >= MAX_ATTEMPTS || Date.now() - +row.createdAt >= MAX_AGE_MS;
+      await db.updateMany({ where: { id: row.id, state: 'queued', leaseToken: token, leaseUntil: { gt: new Date() } }, data: {
+        ...(terminal ? { state: 'quarantined', payload: {} } : {}), leaseToken: null, leaseUntil: null,
         nextAttemptAt: new Date(Date.now() + Math.min(300000, 5000 * 2 ** Math.min(row.attempts, 6))) } });
       break;
     }
-  } finally { workers.delete(service.instanceId); }
 }
 
-function installRoutes(router, monitor, guard) {
+function installRoutes(router, monitor, guard, repository) {
   // Reject managed legacy group operations before validation, media download,
   // chatbot dispatch, read receipts or any WhatsApp network call.
   for (const prefix of ['group', 'message', 'chat', 'call']) router.use(`/${prefix}/:operation/:instanceName`, guard, (req, res, next) => {
@@ -398,6 +570,10 @@ function installRoutes(router, monitor, guard) {
     } catch { return res.status(422).json({ error: 'nexi_groups_control_rejected' }); }
   });
   const timer = setInterval(async () => {
+    // Sweep EVERY instance, even disconnected/unloaded ones. Retention must not
+    // depend on a live WhatsApp socket or a successfully configured webhook.
+    try { await expireOutbox(repository.nexiGroupEventOutbox); }
+    catch { console.warn('nexi_groups_retention_unavailable'); }
     for (const service of Object.values(monitor.waInstances)) if (managed(service?.instance?.name)) {
       try { await drain(service); } catch { service.logger?.warn('nexi_groups_outbox_unavailable'); }
     }
@@ -406,4 +582,6 @@ function installRoutes(router, monitor, guard) {
 }
 
 module.exports = { managed, isGroup, groupLike, participant, participants, observeDecrypted, observeNotification, take, groupEventPayload,
-  denyOutbound, filterGeneric, hasGroupTarget, ingest, interceptEvents, bindingFor, enqueue, controlClaims, control, drain, installRoutes, content };
+  denyOutbound, filterGeneric, hasGroupTarget, validateTargets, groupSource, deriveContact, packetLogger, privacyLogger,
+  guardSocket, withPacketScope, metadataWatermark, metadataCurrent, admit, admitProjection,
+  MAX_ATTEMPTS, MAX_AGE_MS, ingest, interceptEvents, bindingFor, enqueue, controlClaims, control, drain, expireOutbox, installRoutes, content };

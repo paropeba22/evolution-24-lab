@@ -25,6 +25,7 @@ COPY Dockerfile /evolution/Dockerfile
 COPY nexi-transport.cjs /evolution/nexi-transport.cjs
 COPY patch-trusted-baileys.mjs patch-managed-retry.mjs nexi-identity.cjs /evolution/
 COPY patch-groups-source.mjs nexi-groups.cjs groups-wave1.test.cjs /evolution/
+COPY groups-postgresql.integration.test.cjs /evolution/
 COPY identity-foundation-source.test.cjs recipient-contract-test-support.cjs /evolution/
 COPY bundle-patch.test.cjs nexi-transport.test.cjs redis-lua.integration.test.cjs runtime-model.test.cjs financial-delivery-source.test.cjs /evolution/
 COPY select-provider-bundle.cjs /evolution/select-provider-bundle.cjs
@@ -32,6 +33,8 @@ COPY prisma/postgresql-migrations/20260926000000_add_chatwoot_inbox_id /evolutio
 COPY prisma/mysql-migrations/20260926000000_add_chatwoot_inbox_id /evolution/prisma/mysql-migrations/20260926000000_add_chatwoot_inbox_id
 COPY prisma/postgresql-migrations/20261002000000_nexi_groups_wave1 /evolution/prisma/postgresql-migrations/20261002000000_nexi_groups_wave1
 COPY prisma/mysql-migrations/20261002000000_nexi_groups_wave1 /evolution/prisma/mysql-migrations/20261002000000_nexi_groups_wave1
+COPY prisma/postgresql-migrations/20261002000001_harden_groups_wave1 /evolution/prisma/postgresql-migrations/20261002000001_harden_groups_wave1
+COPY prisma/mysql-migrations/20261002000001_harden_groups_wave1 /evolution/prisma/mysql-migrations/20261002000001_harden_groups_wave1
 
 # The schema change must precede Prisma generation and tsup's bundled client.
 RUN node /tmp/patch-prisma-binding.mjs

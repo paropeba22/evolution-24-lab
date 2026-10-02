@@ -17,6 +17,7 @@ const baileysFile = 'src/api/integrations/channel/whatsapp/whatsapp.baileys.serv
 const recvFile = 'node_modules/baileys/lib/Socket/messages-recv.js';
 const sendFile = 'node_modules/baileys/lib/Socket/messages-send.js';
 const sourceFiles = [baileysFile, 'src/api/integrations/event/event.manager.ts', 'src/api/routes/index.router.ts',
+  'src/api/abstract/abstract.router.ts', 'node_modules/baileys/lib/Socket/chats.js', 'node_modules/baileys/lib/Socket/socket.js',
   'src/api/integrations/chatbot/chatbot.controller.ts',
   'src/api/integrations/chatbot/chatwoot/services/chatwoot.service.ts', recvFile, sendFile, 'tsup.config.ts',
   ...['postgresql', 'psql_bouncer', 'mysql'].map(provider => `prisma/${provider}-schema.prisma`)];
@@ -26,7 +27,7 @@ const sender = '5511999999999@s.whatsapp.net', lid = '100000000000001@lid';
 const creds = { me: { id: '5500000000000:1@s.whatsapp.net', lid: '200000000000001@lid' },
   registrationId: 1, signedIdentityKey: { public: Buffer.alloc(32, 7) } };
 const session = identity.sessionFingerprint(creds);
-let scratch, sources, ts;
+let scratch, sources, ts, acceptedSources, acceptedGroups;
 
 before(() => {
   ts = require(require.resolve('typescript', { paths: [__dirname, upstream] }));
@@ -53,6 +54,25 @@ before(() => {
       execFileSync(process.execPath, [path.join(__dirname, patch), scratch]);
     }
   }
+  // Reproduce findings against immutable accepted history when locally present.
+  const available = require('node:child_process').spawnSync('git', ['cat-file', '-e', 'c04855465d9e93596f248a73e4e9f8a731053f84'],
+    { cwd: __dirname, stdio: 'ignore' }).status === 0;
+  if (available) {
+    const acceptedRoot = path.join(scratch, 'accepted');
+    for (const file of sourceFiles) {
+      const target = path.join(acceptedRoot, file); fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.copyFileSync(path.join(scratch, file), target);
+    }
+    const script = path.join(scratch, 'accepted-patch.mjs');
+    fs.writeFileSync(script, execFileSync('git', ['show', 'c04855465d9e93596f248a73e4e9f8a731053f84:patch-groups-source.mjs'], { cwd: __dirname }));
+    execFileSync(process.execPath, [script, acceptedRoot]);
+    acceptedSources = Object.fromEntries(sourceFiles.map(file => [file, fs.readFileSync(path.join(acceptedRoot, file), 'utf8')]));
+    const Module = require('node:module'), isolated = new Module(path.join(__dirname, 'accepted-groups.cjs'), module);
+    isolated.filename = path.join(__dirname, 'accepted-groups.cjs'); isolated.paths = module.paths;
+    isolated._compile(execFileSync('git', ['show', 'c04855465d9e93596f248a73e4e9f8a731053f84:nexi-groups.cjs'],
+      { cwd: __dirname, encoding: 'utf8' }), isolated.filename);
+    acceptedGroups = isolated.exports;
+  }
   execFileSync(process.execPath, [path.join(__dirname, 'patch-groups-source.mjs'), scratch, '--snapshot']);
   sources = Object.fromEntries(sourceFiles.map(file => [file, fs.readFileSync(path.join(scratch, file), 'utf8')]));
 });
@@ -73,7 +93,7 @@ function database() {
   const rows = [], controls = new Map();
   let failCreate = false;
   const controlStore = {
-    async findUnique({ where }) { return controls.get(where.instanceId) || null; },
+    async findUnique({ where }) { return structuredClone(controls.get(where.instanceId) || null); },
     async create({ data }) {
       if (controls.has(data.instanceId)) throw new Error('unique');
       const row = { revision: 0, catalogStale: true, catalog: [], catalogAt: null, ...structuredClone(data) };
@@ -91,16 +111,16 @@ function database() {
       if (failCreate) throw new Error('synthetic_db_down');
       const row = rows.find(r => r.instanceId === where.instanceId_sourceKey.instanceId && r.sourceKey === where.instanceId_sourceKey.sourceKey);
       if (row) return structuredClone(row);
-      const next = { id: BigInt(rows.length + 1), attempts: 0, leaseUntil: null, leaseToken: null, ...structuredClone(create) };
+      const next = { id: BigInt(rows.length + 1), createdAt: new Date(), attempts: 0, leaseUntil: null, leaseToken: null, ...structuredClone(create) };
       rows.push(next); return structuredClone(next);
     },
-    async findFirst({ where }) { return structuredClone(rows.find(r => r.instanceId === where.instanceId && r.state === where.state) || null); },
+    async findFirst({ where }) { return structuredClone(rows.find(r => matches(r, where)) || null); },
     async updateMany({ where, data }) {
-      const row = rows.find(r => r.id === where.id);
-      if (!row || (where.state && row.state !== where.state) || (where.leaseToken && row.leaseToken !== where.leaseToken) ||
-          (where.OR && row.leaseUntil && row.leaseUntil > new Date())) return { count: 0 };
-      for (const [key, value] of Object.entries(data)) row[key] = value?.increment ? row[key] + value.increment : structuredClone(value);
-      return { count: 1 };
+      const selected = rows.filter(r => matches(r, where));
+      for (const row of selected) for (const [key, value] of Object.entries(data)) {
+        row[key] = value?.increment ? row[key] + value.increment : structuredClone(value);
+      }
+      return { count: selected.length };
     },
   };
   const db = { nexiGroupControl: controlStore, nexiGroupEventOutbox: outbox,
@@ -117,6 +137,18 @@ function database() {
     },
   };
   return { db, rows, controls, failCreate: value => failCreate = value };
+}
+
+function matches(row, where) {
+  return Object.entries(where).every(([key, value]) => {
+    if (key === 'OR') return value.some(child => matches(row, child));
+    if (key === 'AND') return value.every(child => matches(row, child));
+    if (value && typeof value === 'object' && !(value instanceof Date)) {
+      return Object.entries(value).every(([op, bound]) => row[key] != null &&
+        ({ lte: row[key] <= bound, gt: row[key] > bound, gte: row[key] >= bound, lt: row[key] < bound })[op]);
+    }
+    return row[key] === value;
+  });
 }
 
 function service(store = database(), instanceId = 'synthetic-instance-1') {
@@ -162,7 +194,7 @@ test('classification is exact and malformed/history/status/newsletter/direct/for
     const f = fixture({ remote }); groups.observeDecrypted(f.received, f.node, creds, false);
     assert.equal(groups.take(f.received, 'notify'), null);
   }
-  for (const change of [{ attrs: { offline: '1' } }, { attrs: { category: 'peer' } }, { fromMe: true },
+  for (const change of [{ attrs: { category: 'peer' } }, { fromMe: true },
     { attrs: { participant: 'malformed' } }, { key: { id: 'forged-id' } },
     { key: { participantAlt: 'other@lid' }, attrs: { participant_lid: lid } }]) {
     const f = fixture(change); groups.observeDecrypted(f.received, f.node, creds, false);
@@ -245,13 +277,14 @@ test('instance-scoped outbox keeps stable UUID/raw body across crash, retry and 
 
 test('lease recovery and concurrent workers only redeliver the same inbound event, and terminal rejection retains tombstones', () => withMaster(async () => {
   const s = service(); await enabled(s);
+  s.store.rows[1].state = 'delivered'; s.store.rows[1].payload = {};
   const row = s.store.rows[0]; row.leaseUntil = new Date(Date.now() + 60000); row.leaseToken = 'old-worker';
   let calls = 0;
   await groups.drain(s, async () => { calls++; return { ok: false, status: 401 }; }); assert.equal(calls, 0);
   row.leaseUntil = new Date(0);
   await Promise.all([groups.drain(s, async () => { calls++; return { ok: false, status: 401 }; }),
     groups.drain(s, async () => { calls++; return { ok: false, status: 401 }; })]);
-  assert.equal(calls, 2); assert.equal(s.store.rows.length, 2);
+  assert.equal(calls, 1); assert.equal(s.store.rows.length, 2);
   assert.equal(row.state, 'rejected'); assert.ok(row.fingerprint); assert.ok(row.sourceKey);
 }));
 
@@ -260,6 +293,7 @@ test('catalog performs no photo fanout and uses persistent instance/session cach
   s.client.groupFetchAllParticipating = async () => { catalogs++; return { [jid]: { id: jid, subject: 'A', participants: [] },
     [otherJid]: { id: otherJid, isCommunityAnnounce: true, participants: [] } }; };
   s.client.groupMetadata = async () => { metadata++; throw new Error('not for discovery'); };
+  s.client = groups.guardSocket(s.client, true);
   await groups.control(s, sign(s, 'bootstrap', { nonce: 'b'.repeat(64) }));
   const first = await groups.control(s, sign(s, 'catalog')), second = await groups.control(s, sign(s, 'catalog'));
   assert.equal(catalogs, 1); assert.equal(metadata, 0); assert.deepEqual(first.groups, second.groups); assert.equal(first.groups.length, 1);
@@ -305,7 +339,7 @@ test('raw protocol redactions retain target identity without edited text, and fo
   const { proto } = require(path.join(baileysRoot, 'WAProto/index.js'));
   const types = proto.Message.ProtocolMessage.Type;
   for (const type of [types.REVOKE, types.MESSAGE_EDIT]) {
-    const f = fixture({ message: { protocolMessage: { type, key: { id: 'original-id', remoteJid: jid }, editedMessage: { conversation: 'secret' } } } });
+    const f = fixture({ message: { protocolMessage: { type, key: { id: 'original-id', remoteJid: jid, participant: sender }, editedMessage: { conversation: 'secret' } } } });
     groups.observeDecrypted(f.received, f.node, creds, false, types);
     const projection = groups.take(f.received, 'notify');
     assert.equal(projection.event, 'group.message.redacted'); assert.equal(projection.target_message_id, 'original-id');
@@ -317,6 +351,9 @@ test('raw protocol redactions retain target identity without edited text, and fo
 });
 
 test('actual patched source compiles and places authority gates before content and all generic handlers', () => {
+  for (const file of sourceFiles.filter(f => f.endsWith('.js'))) {
+    execFileSync(process.execPath, ['--check', path.join(scratch, file)], { stdio: 'pipe' });
+  }
   for (const file of sourceFiles.filter(f => f.endsWith('.ts'))) {
     const compiled = ts.transpileModule(sources[file], { compilerOptions: { target: ts.ScriptTarget.ES2022,
       module: ts.ModuleKind.CommonJS }, reportDiagnostics: true });
@@ -329,7 +366,7 @@ test('actual patched source compiles and places authority gates before content a
   assert.match(source, /groupMetadataCache.set\(nexiCacheKey/); assert.match(source, /sessionFingerprint\(this.instance.authState/);
   assert.doesNotMatch(source, /participants: string\[\]/); assert.doesNotMatch(source, /normalizePhoneNumber\(participantId\)/);
   const recv = sources[recvFile];
-  assert.ok(recv.indexOf('nexiGroups.observeDecrypted') < recv.indexOf('cleanMessage(msg,'));
+  assert.ok(recv.indexOf('await nexiGroups.admit') < recv.indexOf('await sendReceipt(msg.key.remoteJid'));
   assert.ok(recv.indexOf('nexiGroups.observeNotification') < recv.indexOf("upsertMessage(fullMsg, 'append')"));
   assert.match(recv, /config.nexiFinancialManaged && nexiGroups.groupLike\(key.remoteJid\)/);
   const send = sources[sendFile];
@@ -364,7 +401,8 @@ test('actual patched Baileys decrypt function captures a group before cleanMessa
     const f = fixture(); let projection = null;
     const logger = Object.fromEntries(['debug', 'info', 'error', 'warn', 'trace'].map(name => [name, () => {}]));
     const bindings = { nexiGroups: groups, nexiIdentity: identity, nexiFinancial: financial,
-      config: { nexiFinancialManaged: true }, logger, authState: { creds },
+      config: { nexiFinancialManaged: true, nexiGroupsAdmit: async p => { projection = p; } }, logger, nexiBaseLogger: logger,
+      authState: { creds, keys: { transaction: async fn => fn() } },
       signalRepository: { lidMapping: { getPNForLID: async () => sender, storeLIDPNMappings: async () => {} }, migrateSession: async () => {} },
       getBinaryNodeChild: () => ({ attrs: { type: 'msg' } }), jidDecode: value => ({ server: value.split('@')[1] }),
       decryptMessageNode: () => ({ fullMessage: f.received, author: sender, category: undefined,
@@ -376,7 +414,7 @@ test('actual patched Baileys decrypt function captures a group before cleanMessa
       isLidUser: value => typeof value === 'string' && value.endsWith('@lid'), getHistoryMsg: () => false,
       jidNormalizedUser: value => value, binaryNodeToString: () => 'synthetic',
       cleanMessage: message => { message.key.participant = 'normalized'; message.message = { conversation: 'normalized' }; },
-      upsertMessage: async (message, type) => { projection = groups.take(message, type); },
+      upsertMessage: async () => {},
     };
     const handle = new Function(...Object.keys(bindings), recv.slice(start, end) + 'return handleMessage;')(...Object.values(bindings));
     await handle(f.node);
@@ -395,3 +433,335 @@ test('Prisma validates all provider schemas without connecting or generating a c
     assert.match(result, /is valid/);
   }
 });
+
+test('F1 actual Baileys derivation and contact sinks isolate Group participants but preserve direct PN/LID', async () => {
+  const source = sources['node_modules/baileys/lib/Socket/chats.js'];
+  const start = source.indexOf('    const upsertMessage = ev.createBufferedFunction(async (msg, type) => {');
+  const end = source.indexOf('        const historyMsg =', start);
+  assert.ok(start >= 0 && end > start);
+  const effects = [];
+  const derive = new Function('nexiGroups', 'config', 'authState', 'jidNormalizedUser', 'ev',
+    source.slice(start, end) + '\n}); return upsertMessage;')(groups, { nexiFinancialManaged: true }, { creds },
+    value => value, { createBufferedFunction: fn => fn, emit: (name, data) => effects.push({ name, data }) });
+  await derive(fixture().received, 'notify');
+  assert.deepEqual(effects, [], 'no contact events, message events or credential pushname writes');
+  const provider = sources[baileysFile];
+  const a = provider.indexOf('  private readonly contactHandle = {'), b = provider.indexOf('  private readonly messageHandle =', a);
+  const code = ts.transpileModule(`class Subject { ${provider.slice(a, b)} }; return Subject;`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
+  const Subject = new Function('require', 'Events', code)(() => groups, { CONTACTS_UPDATE: 'contacts.update' });
+  const target = new Subject();
+  target.instance = { name: 'nexi-wa-synthetic' }; target.instanceId = 'synthetic';
+  const sinkEffects = [];
+  target.logger = { debug: () => sinkEffects.push('log') };
+  target.profilePicture = async () => { sinkEffects.push('profile'); return {}; };
+  target.sendDataWebhook = () => sinkEffects.push('event');
+  target.configService = { get: () => ({ SAVE_DATA: { CONTACTS: true } }) };
+  target.prismaRepository = { contact: { upsert: () => { sinkEffects.push('upsert'); return {}; } }, $transaction: async () => {} };
+  const marked = groups.deriveContact(fixture().received, { id: sender, notify: 'Group participant' });
+  await target.contactHandle['contacts.update']([marked]);
+  assert.deepEqual(sinkEffects, []);
+  for (const id of [sender, lid]) {
+    await derive(fixture({ remote: id, attrs: { participant: undefined } }).received, 'notify');
+    await target.contactHandle['contacts.update']([{ id, notify: 'Direct' }]);
+  }
+  assert.equal(effects.filter(e => e.name === 'contacts.update').length, 2);
+  assert.equal(sinkEffects.filter(e => e === 'upsert').length, 2);
+});
+
+test('F2 actual receive path commits canonical data before Signal consumption/receipt; failures and replay remain safe', () => withMaster(async () => {
+  const baileysRoot = path.dirname(require.resolve('baileys/package.json', { paths: [__dirname, upstream] }));
+  const { proto } = require(path.join(baileysRoot, 'WAProto/index.js'));
+  const { pathToFileURL } = require('node:url');
+  const { addTransactionCapability } = await import(pathToFileURL(path.join(baileysRoot, 'lib/Utils/auth-utils.js')).href);
+  const s = service(); await enabled(s);
+  const timeline = [], logs = [];
+  const logger = Object.fromEntries(['debug', 'info', 'error', 'warn', 'trace'].map(name => [name, (...args) => logs.push(args)]));
+  let keysCommitted = 0, beforeFail = false, afterFail = false, suspended = 0;
+  const keys = addTransactionCapability({ get: async () => ({}), set: async () => { keysCommitted++; timeline.push('keys'); } }, logger,
+    { maxCommitRetries: 1, delayBetweenTriesMs: 0 });
+  async function run(offline = false, direct = false) {
+    const f = fixture({ remote: direct ? sender : jid, attrs: offline ? { offline: '1' } : {} });
+    const bindings = { nexiGroups: groups, nexiIdentity: identity, nexiFinancial: financial,
+      config: { nexiFinancialManaged: true, nexiGroupsSuspend: () => { suspended++; }, nexiGroupsAdmit: async p => {
+        if (beforeFail) throw new Error('failure before canonical enqueue');
+        await groups.admitProjection(s, p); timeline.push('canonical');
+        if (afterFail) throw new Error('simulated process death after canonical commit');
+      } }, logger, nexiBaseLogger: logger, authState: { creds, keys },
+      signalRepository: { lidMapping: { getPNForLID: async () => sender, storeLIDPNMappings: async () => {} }, migrateSession: async () => {} },
+      getBinaryNodeChild: () => ({ attrs: { type: 'msg' } }), jidDecode: value => ({ server: value.split('@')[1] }),
+      decryptMessageNode: () => ({ fullMessage: f.received, author: sender, category: undefined,
+        decrypt: async () => keys.transaction(async () => { timeline.push('decrypt'); await keys.set({ 'sender-key': { synthetic: 'new-ratchet' } }); }, jid) }),
+      messageMutex: { mutex: fn => fn() }, messageRetryManager: null, proto,
+      MISSING_KEYS_ERROR_TEXT: 'missing', NO_MESSAGE_FOUND_ERROR_TEXT: 'absent', NACK_REASONS: { UnhandledError: 2 },
+      sendMessageAck: async () => timeline.push('ack'), sendReceipt: async () => timeline.push('receipt'), sendActiveReceipts: true,
+      isJidNewsletter: () => false, isLidUser: () => false, getHistoryMsg: () => false, jidNormalizedUser: value => value,
+      binaryNodeToString: () => 'RAW GROUP SECRET', cleanMessage: () => timeline.push('clean'), upsertMessage: async () => timeline.push('upsert') };
+    const recv = sources[recvFile], a = recv.indexOf('    const handleMessage = async (node) => {'), b = recv.indexOf('    const handleCall =', a);
+    const handle = new Function(...Object.keys(bindings), recv.slice(a, b) + 'return handleMessage;')(...Object.values(bindings));
+    await handle(f.node);
+  }
+  s.store.failCreate(true); await run();
+  assert.equal(keysCommitted, 0); assert.equal(s.store.rows.length, 2);
+  assert.ok(!timeline.includes('receipt') && !timeline.includes('ack') && !timeline.includes('upsert'));
+  s.store.failCreate(false); beforeFail = true; timeline.length = 0; await run();
+  assert.equal(keysCommitted, 0); assert.equal(s.store.rows.length, 2); assert.ok(!timeline.includes('receipt'));
+  beforeFail = false; afterFail = true; timeline.length = 0; await run();
+  assert.equal(s.store.rows.length, 3); assert.equal(keysCommitted, 0); assert.ok(!timeline.includes('receipt'));
+  const eventId = s.store.rows[2].eventId;
+  afterFail = false; timeline.length = 0; await run(true);
+  assert.equal(s.store.rows.length, 3); assert.equal(s.store.rows[2].eventId, eventId);
+  assert.ok(timeline.indexOf('canonical') < timeline.indexOf('keys') && timeline.indexOf('keys') < timeline.indexOf('receipt'));
+  timeline.length = 0; await run(); assert.equal(s.store.rows.length, 3);
+  assert.ok(suspended > 0); assert.ok(!JSON.stringify(logs).includes('RAW GROUP SECRET'));
+  timeline.length = 0; await run(false, true);
+  assert.ok(timeline.includes('receipt')); assert.ok(!timeline.includes('canonical'), 'direct path is not subject to Groups admission');
+}));
+
+test('F3 canonical boundary covers arrays, normalized suffixes, multipart and socket controls', async () => {
+  for (const field of ['chat', 'number', 'jid', 'remoteJid', 'numbers', 'participants', 'mentions']) {
+    const value = ['numbers', 'participants', 'mentions'].includes(field) ? [jid] : jid;
+    assert.throws(() => groups.validateTargets(true, { nested: { [field]: value } }), /outbound_disabled/);
+    groups.validateTargets(false, { [field]: value });
+  }
+  assert.throws(() => groups.validateTargets(true, { number: '120363000000000001@unknown' }), /outbound_disabled/);
+  assert.throws(() => groups.validateTargets(true, {}, jid), /outbound_disabled/);
+  const calls = [];
+  const socket = groups.guardSocket({ chatModify: (...args) => calls.push(args), sendMessage: (...args) => calls.push(args),
+    groupMetadata: () => calls.push('metadata'), groupCreate: () => calls.push('create') }, true);
+  assert.throws(() => socket.chatModify({ archive: true }, jid), /outbound_disabled/);
+  assert.throws(() => socket.sendMessage(jid, { text: 'denied' }), /outbound_disabled/);
+  socket.chatModify({ archive: true }, sender); socket.sendMessage(lid, { text: 'direct' }); assert.equal(calls.length, 2);
+  assert.throws(() => socket.groupMetadata(jid), /outbound_disabled/);
+  assert.throws(() => socket.groupCreate('Generic group', [sender]), /outbound_disabled/);
+  const source = sources['src/api/abstract/abstract.router.ts'];
+  const a = source.indexOf('  public async dataValidate<T>('), b = source.indexOf('  public async groupNoValidate', a);
+  const code = ts.transpileModule(`class Subject { ${source.slice(a, b)} }; return Subject;`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
+  const Subject = new Function('require', 'sanitizeUntrustedInput', 'validate', code)(() => groups, value => value, () => ({ valid: true }));
+  let invoked = false;
+  await assert.rejects(new Subject().dataValidate({ request: { params: { instanceName: 'nexi-wa-synthetic' },
+    body: { number: jid }, query: {}, originalUrl: '/message/sendMedia/nexi-wa-synthetic' },
+  ClassRef: class {}, execute: async () => { invoked = true; } }), /outbound_disabled/);
+  assert.equal(invoked, false, 'parsed multipart field denied before operation executes');
+});
+
+test('F4 metadata completions discard invalidated catalog, replacement session and concurrent room disable', () => withMaster(async () => {
+  for (const race of ['invalidation', 'session', 'instance', 'disable']) {
+    const s = service(); await enabled(s);
+    let release; const pending = new Promise(resolve => { release = resolve; });
+    s.client.groupFetchAllParticipating = async () => pending;
+    s.client.groupMetadata = async () => pending;
+    const request = groups.control(s, sign(s, race === 'disable' ? 'room' : 'catalog', race === 'disable'
+      ? { group_jid: jid, enabled: true, room_generation: 2, metadata_revision: 2 } : {}));
+    await new Promise(resolve => setImmediate(resolve));
+    if (race === 'session') s.instance.authState.state.creds = { ...creds, registrationId: 2 };
+    else if (race === 'instance') s.instance.name = 'nexi-wa-replacement';
+    else if (race === 'invalidation') await groups.interceptEvents(s, { 'groups.update': [{ id: jid }] });
+    else await groups.control(s, sign(s, 'room', { group_jid: jid, enabled: false, room_generation: 3, metadata_revision: 3 }));
+    release(race === 'disable' ? { id: jid, subject: 'STALE', participants: [{ id: creds.me.lid }] }
+      : { [jid]: { id: jid, subject: 'STALE', participants: [] } });
+    await assert.rejects(request, /superseded|control_rejected/);
+    const row = s.store.controls.get(s.instanceId);
+    assert.ok(!JSON.stringify(row.catalog).includes('STALE'));
+    if (race === 'disable') assert.equal(row.rooms[jid].enabled, false);
+  }
+}));
+
+test('F5 forged protocol target and unproved moderation cannot acquire a tombstone projection', () => {
+  const types = { REVOKE: 0, MESSAGE_EDIT: 14 };
+  for (const target of [{ id: 'original-id' }, { id: 'original-id', participant: lid },
+    { id: 'original-id', remoteJid: otherJid, participant: sender }]) {
+    const f = fixture({ message: { protocolMessage: { type: types.REVOKE, key: target } } });
+    groups.observeDecrypted(f.received, f.node, creds, false, types);
+    assert.equal(groups.take(f.received, 'notify'), null);
+  }
+  const own = fixture({ fromMe: true, attrs: { participant: creds.me.lid },
+    message: { protocolMessage: { type: types.REVOKE, key: { id: 'own-id', fromMe: true } } } });
+  groups.observeDecrypted(own.received, own.node, creds, false, types);
+  assert.equal(groups.take(own.received, 'notify').actor_from_me, true);
+});
+
+test('F6 source collisions reject incompatible session/direction while valid retransmission is idempotent', () => withMaster(async () => {
+  const s = service(); await enabled(s);
+  const f = fixture(); groups.observeDecrypted(f.received, f.node, creds, false);
+  const projection = groups.take(f.received, 'notify');
+  await groups.admitProjection(s, projection);
+  await groups.admitProjection(s, { ...projection, message: { ...projection.message, display_name: 'Different display' } });
+  assert.equal(s.store.rows.length, 3);
+  await assert.rejects(groups.admitProjection(s, { ...projection, message: { ...projection.message, from_me: true } }), /source_conflict/);
+  const binding = s.store.controls.get(s.instanceId);
+  const replaced = { ...binding, generation: binding.generation + 1, sessionIdentity: 'c'.repeat(64) };
+  await assert.rejects(groups.enqueue(s, replaced, { ...projection, session_identity: replaced.sessionIdentity, room_generation: 2 },
+    [projection.event, jid, projection.source_id]), /source_conflict/);
+  assert.equal(s.store.rows.length, 3);
+}));
+
+function independentGroups() {
+  const Module = require('node:module');
+  const isolated = new Module(path.join(__dirname, 'nexi-groups.cjs'), module);
+  isolated.filename = path.join(__dirname, 'nexi-groups.cjs'); isolated.paths = module.paths;
+  isolated._compile(fs.readFileSync(isolated.filename, 'utf8'), isolated.filename);
+  return isolated.exports;
+}
+
+test('F9 independent worker modules contend using DB predicates; stale claim/backoff, lease death and old ACK cannot win', () => withMaster(async () => {
+  const s = service(); await enabled(s);
+  s.store.rows[1].state = 'delivered'; s.store.rows[1].payload = {};
+  const row = s.store.rows[0], workerA = independentGroups(), workerB = independentGroups();
+  let release; const pending = new Promise(resolve => { release = resolve; });
+  let calls = 0;
+  const runningA = workerA.drain(service(s.store), async () => { calls++; return pending; });
+  await new Promise(resolve => setImmediate(resolve));
+  await workerB.drain(service(s.store), async () => { calls++; return { ok: true, status: 200 }; });
+  assert.equal(calls, 1, 'separate helpers have no shared Set or process-local lock');
+  row.leaseUntil = new Date(0); // worker A dies; B claims a new lease
+  await workerB.drain(service(s.store), async () => { calls++; return { ok: false, status: 503 }; });
+  const retryTime = +row.nextAttemptAt;
+  release({ ok: true, status: 200 }); await runningA;
+  assert.equal(row.state, 'queued'); assert.equal(+row.nextAttemptAt, retryTime, 'expired ACK cannot erase B retry');
+  const originalFind = s.store.db.nexiGroupEventOutbox.findFirst;
+  row.nextAttemptAt = new Date(0);
+  s.store.db.nexiGroupEventOutbox.findFirst = async args => {
+    const selected = await originalFind(args);
+    if (selected) row.nextAttemptAt = new Date(Date.now() + 60000); // changes after SELECT
+    return selected;
+  };
+  await workerB.drain(service(s.store), async () => { throw new Error('stale retry schedule must not dispatch'); }, 1);
+  assert.equal(row.attempts, 2);
+  s.store.db.nexiGroupEventOutbox.findFirst = originalFind;
+  row.nextAttemptAt = new Date(0); row.attempts = groups.MAX_ATTEMPTS - 1;
+  await workerB.drain(service(s.store), async () => ({ ok: false, status: 503 }));
+  assert.equal(row.state, 'quarantined'); assert.deepEqual(row.payload, {}); assert.ok(row.sourceKey && row.fingerprint && row.eventId);
+  row.state = 'queued'; row.attempts = 0; row.payload = { secret: 'expired' }; row.createdAt = new Date(Date.now() - groups.MAX_AGE_MS - 1);
+  await workerB.drain(service(s.store), async () => { throw new Error('expired payload'); });
+  assert.equal(row.state, 'quarantined'); assert.deepEqual(row.payload, {});
+  const unloaded = { ...structuredClone(row), id: 99n, instanceId: 'unloaded-instance', state: 'queued', payload: { body: 'expired' } };
+  s.store.rows.push(unloaded);
+  await groups.expireOutbox(s.store.db.nexiGroupEventOutbox);
+  assert.equal(unloaded.state, 'quarantined'); assert.deepEqual(unloaded.payload, {});
+}));
+
+test('F10 Group loggers filter packet, decrypt errors and participant data before logging while direct logs are unchanged', async () => {
+  const output = [];
+  const logger = { error: (...args) => output.push(args), debug: (...args) => output.push(args), warn: (...args) => output.push(args) };
+  const protectedLogger = groups.packetLogger(logger, { attrs: { from: jid } }, true);
+  protectedLogger.error({ error: new Error('body secret'), sender, lid }, 'raw group');
+  const packet = groups.privacyLogger(logger, true);
+  packet.debug({ xml: `<message from="${jid}">secret body ${sender}</message>` });
+  packet.debug({ tag: 'call', attrs: { from: sender }, content: [{ attrs: { 'group-jid': jid, caller_pn: sender } }] });
+  assert.deepEqual(output, Array(3).fill(['nexi_groups_packet_filtered']));
+  assert.equal(groups.packetLogger(logger, { attrs: { from: sender } }, true), logger);
+  packet.debug({ direct: 'operational' }); assert.deepEqual(output[3], [{ direct: 'operational' }]);
+  await groups.withPacketScope({ attrs: { from: jid } }, true, () =>
+    Promise.reject(new Error(`decrypt failure ${sender} private body`)).catch(error => packet.error(error.message)));
+  assert.deepEqual(output[4], ['nexi_groups_packet_filtered']);
+  assert.ok(sources[recvFile].includes('() => exec(node, false).catch(err => onUnexpectedError(err, identifier))'),
+    'unexpected-error logging must execute inside the same privacy scope');
+  const provider = sources[baileysFile];
+  for (const event of ['CB:call', 'CB:ack,class:call']) {
+    const a = provider.indexOf(`this.client.ws.on('${event}'`), b = provider.indexOf("console.log(", a);
+    assert.ok(provider.indexOf('groupSource(packet)', a) < b);
+  }
+});
+
+test('F11 provider migration parity rejects nonpositive generation, negative revisions/attempts and invalid states', () => {
+  const sql = provider => fs.readFileSync(path.join(__dirname, `prisma/${provider}-migrations/20261002000001_harden_groups_wave1/migration.sql`), 'utf8')
+    .replace(/["`]/g, '').replace(/\s+/g, ' ').trim();
+  assert.equal(sql('mysql'), sql('postgresql'));
+  for (const fragment of ['generation > 0', 'revision >= 0', 'attempts >= 0', "'quarantined'"]) assert.ok(sql('mysql').includes(fragment));
+  const validControl = (generation, revision, state) => generation > 0 && revision >= 0 && ['active', 'revoked'].includes(state);
+  for (const provider of ['mysql', 'postgresql', 'psql_bouncer']) {
+    assert.equal(validControl(0, 0, 'active'), false, provider); assert.equal(validControl(-1, 0, 'active'), false, provider);
+    assert.equal(validControl(1, -1, 'active'), false, provider); assert.equal(validControl(1, 0, 'unknown'), false, provider);
+  }
+});
+
+test('strict self-review reproduces original F1/F2/F3/F4/F5/F6/F9/F10/F11 from the accepted commit', () => withMaster(async () => {
+  if (!acceptedGroups) return; // current source-graph image has no overlay history
+  const old = acceptedGroups;
+  // F1: Group-origin participant event loses room provenance, survives filter.
+  const source = acceptedSources['node_modules/baileys/lib/Socket/chats.js'];
+  const a = source.indexOf('    const upsertMessage = ev.createBufferedFunction(async (msg, type) => {');
+  const b = source.indexOf('        const historyMsg =', a);
+  const events = [];
+  const derive = new Function('config', 'authState', 'jidNormalizedUser', 'ev', source.slice(a, b) + '\n});return upsertMessage;')(
+    { nexiFinancialManaged: true }, { creds }, value => value,
+    { createBufferedFunction: fn => fn, emit: (name, data) => events.push({ name, data }) });
+  await derive(fixture().received, 'notify');
+  const derived = events.find(e => e.name === 'contacts.update').data;
+  assert.equal(old.filterGeneric('nexi-wa-synthetic', derived)[0].id, sender);
+  // F2: accepted hook follows the irreversible receipt in actual pinned source.
+  const receivedSource = acceptedSources[recvFile];
+  assert.ok(receivedSource.indexOf('await sendReceipt(msg.key.remoteJid') < receivedSource.indexOf('nexiGroups.observeDecrypted'));
+  assert.doesNotMatch(receivedSource, /keys.transaction[\s\S]*nexiGroups.admit/);
+  const baileysRoot = path.dirname(require.resolve('baileys/package.json', { paths: [__dirname, upstream] }));
+  const { proto } = require(path.join(baileysRoot, 'WAProto/index.js'));
+  const packet = fixture(), order = [], logger = Object.fromEntries(['debug', 'info', 'error', 'warn', 'trace'].map(key => [key, () => {}]));
+  const oldService = service(); await old.control(oldService, sign(oldService, 'bootstrap', { nonce: 'b'.repeat(64) }));
+  await old.control(oldService, sign(oldService, 'room', { group_jid: jid, enabled: true, room_generation: 2, metadata_revision: 1 }));
+  const bindings = { nexiGroups: old, nexiIdentity: identity, nexiFinancial: financial, config: { nexiFinancialManaged: true },
+    logger, authState: { creds }, signalRepository: {}, getBinaryNodeChild: () => ({ attrs: { type: 'msg' } }),
+    decryptMessageNode: () => ({ fullMessage: packet.received, author: sender, decrypt: async () => order.push('decrypt') }),
+    messageMutex: { mutex: fn => fn() }, messageRetryManager: null, proto,
+    MISSING_KEYS_ERROR_TEXT: 'missing', NO_MESSAGE_FOUND_ERROR_TEXT: 'absent', NACK_REASONS: { UnhandledError: 2 },
+    sendMessageAck: async () => order.push('ack'), sendReceipt: async () => order.push('receipt'), sendActiveReceipts: true,
+    isJidNewsletter: () => false, isLidUser: () => false, getHistoryMsg: () => false, jidNormalizedUser: value => value,
+    binaryNodeToString: () => 'raw', cleanMessage: () => order.push('clean'), upsertMessage: async msg => {
+      order.push('volatile'); await old.ingest(oldService, msg, 'notify'); order.push('canonical');
+    } };
+  const oldStart = receivedSource.indexOf('    const handleMessage = async (node) => {');
+  const oldEnd = receivedSource.indexOf('    const handleCall =', oldStart);
+  await new Function(...Object.keys(bindings), receivedSource.slice(oldStart, oldEnd) + 'return handleMessage;')(...Object.values(bindings))(packet.node);
+  assert.ok(order.indexOf('receipt') < order.indexOf('canonical')); assert.equal(oldService.store.rows.length, 3);
+  // F3: concrete target shapes from review bypass the old classifier.
+  for (const value of [{ chat: jid }, { numbers: [jid] }, { number: '120363000000000001@unknown' }]) {
+    assert.equal(old.hasGroupTarget(value), false); assert.equal(groups.hasGroupTarget(value), true);
+  }
+  // F4: completion erases an in-flight invalidation and claims fresh catalog.
+  const s = service(); await old.control(s, sign(s, 'bootstrap', { nonce: 'b'.repeat(64) }));
+  let release; const pending = new Promise(resolve => { release = resolve; });
+  s.client.groupFetchAllParticipating = async () => pending;
+  const request = old.control(s, sign(s, 'catalog'));
+  await new Promise(resolve => setImmediate(resolve));
+  s.store.controls.get(s.instanceId).catalogStale = true;
+  release({ [jid]: { id: jid, subject: 'STALE', participants: [] } });
+  assert.equal((await request).stale, false);
+  // F5: target ID with no own-target key proof used to gain a redaction.
+  const f = fixture({ message: { protocolMessage: { type: 0, key: { id: 'foreign-target' } } } });
+  old.observeDecrypted(f.received, f.node, creds, false, { REVOKE: 0, MESSAGE_EDIT: 14 });
+  assert.equal(old.take(f.received, 'notify').target_message_id, 'foreign-target');
+  groups.observeDecrypted(f.received, f.node, creds, false, { REVOKE: 0, MESSAGE_EDIT: 14 });
+  assert.equal(groups.take(f.received, 'notify'), null);
+  // F6: same external identity under a new session used to create another row.
+  const scoped = service(), binding = { accountId: '4', managedChannelId: '8', generation: 2 };
+  const projection = { event: 'group.message.observed', group_jid: jid, session_identity: session,
+    source_id: 'same-id', message: { external_message_id: 'same-id', from_me: false } };
+  await old.enqueue(scoped, binding, projection, [projection.event, jid, 'same-id']);
+  await old.enqueue(scoped, { ...binding, generation: 3 }, { ...projection, session_identity: 'c'.repeat(64) }, [projection.event, jid, 'same-id']);
+  assert.equal(scoped.store.rows.length, 2);
+  // F9: large attempt count has no terminal cap and retains canonical payload.
+  const queue = service(); await old.control(queue, sign(queue, 'bootstrap', { nonce: 'b'.repeat(64) }));
+  queue.store.rows[0].attempts = 100;
+  await old.drain(queue, async () => ({ ok: false, status: 503 }));
+  assert.equal(queue.store.rows[0].state, 'queued'); assert.ok(queue.store.rows[0].payload.data);
+  // F10: raw call callback logs a Group-shaped packet before any gate.
+  const provider = acceptedSources[baileysFile];
+  const call = provider.indexOf("this.client.ws.on('CB:call'");
+  const log = provider.indexOf("console.log('CB:call', packet)", call);
+  assert.ok(log > call); assert.ok(!provider.slice(call, log).includes('groupSource'));
+  for (const [version, implementation] of [[provider, old], [sources[baileysFile], groups]]) {
+    const a = version.indexOf("    this.client.ws.on('CB:call', (packet) => {");
+    const b = version.indexOf("    this.client.ws.on('CB:ack,class:call'", a);
+    const effects = [], subject = { instance: { name: 'nexi-wa-synthetic' }, sendDataWebhook: () => effects.push('webhook'),
+      client: { ws: { on: (_, callback) => callback({ attrs: { from: jid }, content: [{ attrs: { caller_pn: sender } }] }) } } };
+    new Function('require', 'console', 'Events', `return function() { ${version.slice(a, b)} };`)(() => implementation,
+      { log: () => effects.push('raw-log') }, { CALL: 'call' }).call(subject);
+    assert.deepEqual(effects, implementation === old ? ['raw-log', 'webhook'] : []);
+  }
+  // F11: PostgreSQL had positive generation CHECK, MySQL did not.
+  const migration = provider => execFileSync('git', ['show', `c04855465d9e93596f248a73e4e9f8a731053f84:prisma/${provider}-migrations/20261002000000_nexi_groups_wave1/migration.sql`],
+    { cwd: __dirname, encoding: 'utf8' });
+  assert.match(migration('postgresql'), /CHECK \("generation" > 0\)/);
+  assert.doesNotMatch(migration('mysql'), /CHECK/);
+}));
