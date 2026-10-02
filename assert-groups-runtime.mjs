@@ -21,8 +21,10 @@ while (pos < bundle.length) {
 assert.equal(bundle[pos + 1], ')');
 const models = JSON.parse(vm.runInNewContext(bundle.slice(begin, pos + 1), Object.create(null))).models;
 const required = {
+  Instance: ['nexiGroupsSocketOwner'],
   NexiGroupControl: ['instanceId', 'accountId', 'managedChannelId', 'generation', 'revision', 'sessionIdentity', 'nonce', 'rooms'],
-  NexiGroupEventOutbox: ['id', 'instanceId', 'eventId', 'sourceKey', 'fingerprint', 'payload', 'state', 'leaseToken', 'leaseUntil', 'nextAttemptAt'],
+  NexiGroupEventOutbox: ['id', 'instanceId', 'eventId', 'sourceKey', 'sourceSession', 'sourceGeneration', 'legacyGeneration',
+    'fingerprint', 'payload', 'state', 'leaseToken', 'leaseUntil', 'nextAttemptAt'],
 };
 for (const [name, fields] of Object.entries(required)) {
   assert.ok(models[name], `compiled ${name} missing`);
@@ -30,5 +32,11 @@ for (const [name, fields] of Object.entries(required)) {
 }
 for (const gate of ['interceptEvents(this,', 'installRoutes(', 'nexi_groups_outbound_disabled_wave1', 'nexi-groups.cjs']) {
   assert.ok(bundle.includes(gate), `compiled Groups gate missing: ${gate}`);
+}
+for (const file of ['session_record.js', 'session_cipher.js', 'session_builder.js', 'queue_job.js', 'curve.js']) {
+  const source = fs.readFileSync(path.join(process.env.EVOLUTION_SIGNAL_DIR || '/evolution/node_modules/libsignal/src', file), 'utf8');
+  assert.ok(source.includes("require('/evolution/nexi-groups.cjs').signalDiagnostic("), `Signal privacy routing missing: ${file}`);
+  assert.doesNotMatch(source, /^\s*console\.(info|warn|error)\(/m, `raw Signal diagnostic remains: ${file}`);
+  if (file === 'queue_job.js') assert.ok(source.includes('.bindSignalJob(awaitable)'), 'Signal queued job scope missing');
 }
 console.log(`Groups Wave 1 ${provider}: compiled authority, outbox and routing gates verified`);

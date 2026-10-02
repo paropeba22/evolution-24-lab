@@ -35,6 +35,8 @@ COPY prisma/postgresql-migrations/20261002000000_nexi_groups_wave1 /evolution/pr
 COPY prisma/mysql-migrations/20261002000000_nexi_groups_wave1 /evolution/prisma/mysql-migrations/20261002000000_nexi_groups_wave1
 COPY prisma/postgresql-migrations/20261002000001_harden_groups_wave1 /evolution/prisma/postgresql-migrations/20261002000001_harden_groups_wave1
 COPY prisma/mysql-migrations/20261002000001_harden_groups_wave1 /evolution/prisma/mysql-migrations/20261002000001_harden_groups_wave1
+COPY prisma/postgresql-migrations/20261002000002_namespace_groups_source /evolution/prisma/postgresql-migrations/20261002000002_namespace_groups_source
+COPY prisma/mysql-migrations/20261002000002_namespace_groups_source /evolution/prisma/mysql-migrations/20261002000002_namespace_groups_source
 
 # The schema change must precede Prisma generation and tsup's bundled client.
 RUN node /tmp/patch-prisma-binding.mjs
@@ -88,6 +90,7 @@ COPY --from=source-builder /evolution/nexi-financial-transport.cjs /evolution/ne
 COPY --from=source-builder /evolution/nexi-identity.cjs /evolution/nexi-identity.cjs
 COPY --from=source-builder /evolution/nexi-groups.cjs /evolution/nexi-groups.cjs
 COPY --from=source-builder /evolution/node_modules/baileys /evolution/node_modules/baileys
+COPY --from=source-builder /evolution/node_modules/libsignal /evolution/node_modules/libsignal
 COPY select-provider-bundle.cjs /evolution/select-provider-bundle.cjs
 COPY assert-runtime-model.mjs /tmp/assert-runtime-model.mjs
 COPY assert-groups-runtime.mjs /tmp/assert-groups-runtime.mjs

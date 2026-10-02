@@ -16,25 +16,42 @@ function patch(file, transform) {
 }
 const helper = "require('/evolution/nexi-groups.cjs')";
 
+// libsignal bypasses the socket logger for session/key diagnostics. Pin every
+// executable console site and retain the original arguments outside Group scope.
+for (const [file, expected] of [['session_record.js', 7], ['session_cipher.js', 3], ['session_builder.js', 1],
+  ['queue_job.js', 1], ['curve.js', 1]]) {
+  patch(`node_modules/libsignal/src/${file}`, source => {
+    let count = 0;
+    source = source.replace(/^(\s*)console\.(info|warn|error)\(/gm, (_, indentation, level) => {
+      count++;
+      return `${indentation}${helper}.signalDiagnostic('${level}', `;
+    });
+    if (count !== expected) throw new Error(`Groups Signal diagnostic anchors changed: ${file} (${count})`);
+    if (file === 'queue_job.js') source = once(source, '    let inactive;',
+      `    // Executor may belong to a different packet sharing this device queue.
+    awaitable = ${helper}.bindSignalJob(awaitable);
+    let inactive;`);
+    return source;
+  });
+}
+
 patch('src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts', source => {
   if (!source.includes('nexi-financial-transport.cjs') || !source.includes('nexi-identity.cjs')) throw new Error('Groups require accepted financial/identity patches');
-  source = once(source, '    this.client.ev.process(async (events) => {', '    this.client.ev.process(async (events) => {');
+  source = once(source, '    this.client.ev.process(async (events) => {',
+    '    const nexiEventSocket = this.client;\n    this.client.ev.process(async (events) => {');
+  source = once(source, "              this.connectionUpdate(events['connection.update']);",
+    "              if (this.client === nexiEventSocket) this.connectionUpdate(events['connection.update']);");
+  source = once(source, '  private async createClient(number?: string): Promise<WASocket> {',
+    `  private async createClient(number?: string): Promise<WASocket> {
+    if (!await ${helper}.beforeConnect(this)) return this.client;`);
+  source = once(source, "keys: makeCacheableSignalKeyStore(this.instance.authState.state.keys, P({ level: 'error' }) as any)",
+    `keys: makeCacheableSignalKeyStore(this.instance.authState.state.keys,
+          ${helper}.privacyLogger(P({ level: 'error' }), ${helper}.managed(this.instance.name)) as any)`);
   source = once(source, "    this.client = makeWASocket(require('/evolution/nexi-financial-transport.cjs').socketConfig(this.instance.name, socketConfig));",
-    `    (socketConfig as any).nexiGroupsAdmit = async projection => ${helper}.admitProjection(this, projection);
-    (socketConfig as any).nexiGroupsSuspend = error => this.client?.end(error);
-    socketConfig.logger = ${helper}.privacyLogger(socketConfig.logger, ${helper}.managed(this.instance.name));
-    this.client = ${helper}.guardSocket(makeWASocket(require('/evolution/nexi-financial-transport.cjs').socketConfig(this.instance.name, socketConfig)), ${helper}.managed(this.instance.name));`);
+    `    this.client = await ${helper}.installAdmissionSocket(this, socketConfig,
+      config => makeWASocket(require('/evolution/nexi-financial-transport.cjs').socketConfig(this.instance.name, config)));`);
   source = once(source, "    if (connection === 'close') {", `    if (connection === 'close') {
-      if ((lastDisconnect?.error as any)?.code === 'NEXI_GROUPS_ADMISSION_SUSPENDED') {
-        // No automatic reconnect storm and no logout/credential deletion.
-        // Explicit restore or process restart can resume after storage recovers.
-        this.logger.warn('nexi_groups_admission_suspended');
-        await this.prismaRepository.instance.update({ where: { id: this.instanceId },
-          data: { connectionStatus: 'close', disconnectionReasonCode: 503,
-            disconnectionObject: 'nexi_groups_admission_suspended' } }).catch(() => {});
-        this.sendDataWebhook(Events.CONNECTION_UPDATE, { instance: this.instance.name, state: 'close', statusReason: 503 });
-        return;
-      }`);
+      if (await ${helper}.recordSuspension(this, lastDisconnect?.error, Events.CONNECTION_UPDATE)) return;`);
   for (const event of ['contacts.upsert', 'contacts.update']) {
     const anchor = event === 'contacts.upsert' ? "    'contacts.upsert': async (contacts: Contact[]) => {"
       : "    'contacts.update': async (contacts: Partial<Contact>[]) => {";
@@ -133,10 +150,28 @@ patch('src/api/routes/index.router.ts', source => once(once(source,
   `${helper}.installRoutes(router, waMonitor, authGuard['apikey'], prismaRepository);
 
 const telemetry = new Telemetry();`));
+patch('src/api/services/monitor.service.ts', source => {
+  const record = '          connectionStatus: instance.connectionStatus as any, // Pass connection status';
+  if (source.split(record).length !== 3) throw new Error('Groups pinned instance recovery metadata changed');
+  source = source.replaceAll(record, record + `\n          ...${helper}.suspensionMetadata(instance),`);
+  source = once(source, '            connectionStatus: instanceData.connectionStatus as any, // Pass connection status',
+    `            connectionStatus: instanceData.connectionStatus as any, // Pass connection status
+            ...${helper}.suspensionMetadata(instanceData),`);
+  return once(source,
+  "      instanceData.connectionStatus === 'open' ||",
+  `      (instanceData.integration === Integration.WHATSAPP_BAILEYS &&
+        await ${helper}.restoreSuspension(instance, (instanceData as any).nexiGroupsAdmissionSuspended)) ||
+      instanceData.connectionStatus === 'open' ||`);
+});
 patch('src/api/integrations/chatbot/chatwoot/services/chatwoot.service.ts', source => {
   source = once(source, '  public async receiveWebhook(instance: InstanceDto, body: any) {',
     `  public async receiveWebhook(instance: InstanceDto, body: any) {
-    if (${helper}.managed(instance.instanceName) && ${helper}.hasGroupTarget(body)) throw new Error('nexi_groups_outbound_disabled_wave1');`);
+    ${helper}.validateTargets(${helper}.managed(instance.instanceName), {
+      jid: body?.conversation?.meta?.sender?.identifier,
+      number: body?.conversation?.meta?.sender?.phone_number,
+      target: body?.meta?.sender?.identifier,
+      payload: body
+    });`);
   return once(source,
   '  public async eventWhatsapp(event: string, instance: InstanceDto, body: any) {',
   `  public async eventWhatsapp(event: string, instance: InstanceDto, body: any) {
@@ -191,6 +226,12 @@ patch('node_modules/baileys/lib/Socket/messages-recv.js', source => {
                 if (projection) {
                     if (!config.nexiGroupsAdmit) throw new Error('nexi_groups_admission_suspended');
                     await config.nexiGroupsAdmit(projection);
+                } else {
+                    // Authenticated Group-server notifications may lack a room,
+                    // source ID or timestamp needed for an APP event. Discovery
+                    // invalidation still precedes ACK and catalog completion.
+                    if (!config.nexiGroupsInvalidate) throw new Error('nexi_groups_admission_suspended');
+                    await config.nexiGroupsInvalidate();
                 }
                 await sendMessageAck(node);
             } catch {
@@ -205,6 +246,16 @@ patch('node_modules/baileys/lib/Socket/messages-recv.js', source => {
     '    const sendMessageAck = async (node, errorCode) => {\n        const logger = nexiGroups.packetLogger(nexiBaseLogger, node, config.nexiFinancialManaged);');
   source = once(source, '            return exec(node, false).catch(err => onUnexpectedError(err, identifier));',
     '            return nexiGroups.withPacketScope(node, config.nexiFinancialManaged, () => exec(node, false).catch(err => onUnexpectedError(err, identifier)));');
+  for (const [type, handler] of [['message', 'handleMessage'], ['call', 'handleCall'],
+    ['receipt', 'handleReceipt'], ['notification', 'handleNotification']]) {
+    source = once(source, `        ['${type}', ${handler}]`,
+      `        ['${type}', node => nexiGroups.withPacketScope(node, config.nexiFinancialManaged,
+            () => ${handler}(node).catch(err => onUnexpectedError(err, 'processing offline ${type}')))]`);
+  }
+  source = once(source, '        onUnexpectedError,\n        yieldToEventLoop:',
+    `        onUnexpectedError: config.nexiFinancialManaged
+            ? () => logger.warn('nexi_groups_ambiguous_offline_error') : onUnexpectedError,
+        yieldToEventLoop:`);
   source = once(source, '    const handleCall = async (node) => {\n        const logger = nexiGroups.packetLogger(nexiBaseLogger, node, config.nexiFinancialManaged);',
     `    const handleCall = async (node) => {
         const logger = nexiGroups.packetLogger(nexiBaseLogger, node, config.nexiFinancialManaged);
@@ -254,7 +305,7 @@ for (const provider of ['postgresql', 'psql_bouncer', 'mysql']) patch(`prisma/${
   const start = source.indexOf('model Instance {'), end = source.indexOf('\n}', start);
   if (start < 0 || end < 0 || source.includes('model NexiGroupControl')) throw new Error('Groups Instance schema boundary changed');
   const json = provider === 'mysql' ? '@db.Json' : '@db.JsonB';
-  source = source.slice(0, end) + '\n  NexiGroupControl NexiGroupControl?\n  NexiGroupEventOutbox NexiGroupEventOutbox[]' + source.slice(end);
+  source = source.slice(0, end) + '\n  nexiGroupsSocketOwner String? @db.VarChar(36)\n  NexiGroupControl NexiGroupControl?\n  NexiGroupEventOutbox NexiGroupEventOutbox[]' + source.slice(end);
   return source + `
 
 model NexiGroupControl {
@@ -279,6 +330,9 @@ model NexiGroupEventOutbox {
   Instance Instance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
   eventId String @unique @db.VarChar(36)
   sourceKey String @db.VarChar(64)
+  sourceSession String? @db.VarChar(64)
+  sourceGeneration Int?
+  legacyGeneration Int?
   fingerprint String @db.VarChar(64)
   payload Json ${json}
   state String @db.VarChar(16)

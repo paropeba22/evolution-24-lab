@@ -25,18 +25,46 @@ test('real PostgreSQL: independent connections, stale claim, process-death lease
       for (const migration of ['20261002000000_nexi_groups_wave1', '20261002000001_harden_groups_wave1']) {
         await a.query(fs.readFileSync(path.join(__dirname, 'prisma/postgresql-migrations', migration, 'migration.sql'), 'utf8'));
       }
-      await a.query('INSERT INTO "Instance" VALUES ($1)', ['synthetic-instance']);
+      await a.query('INSERT INTO "Instance" (id) VALUES ($1)', ['synthetic-instance']);
       const control = 'INSERT INTO "NexiGroupControl" ("instanceId","accountId","managedChannelId",generation,revision,"sessionIdentity",nonce,state,rooms) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)';
+      await a.query(control, ['synthetic-instance', '4', '8', 2, 0, 'a'.repeat(64), 'b'.repeat(64), 'active', '{}']);
+      const legacyIds = [randomUUID(), randomUUID()];
+      const legacyInsert = `INSERT INTO "NexiGroupEventOutbox" ("instanceId","eventId","sourceKey",fingerprint,payload,state)
+        VALUES ('synthetic-instance',$1,$2,$3,$4,'delivered')`;
+      await a.query(legacyInsert, [legacyIds[0], '1'.repeat(64), '2'.repeat(64),
+        { data: { session_identity: 'a'.repeat(64), binding_generation: 2 } }]);
+      await a.query(legacyInsert, [legacyIds[1], '3'.repeat(64), '4'.repeat(64), {}]);
+      await a.query(fs.readFileSync(path.join(__dirname,
+        'prisma/postgresql-migrations/20261002000002_namespace_groups_source/migration.sql'), 'utf8'));
+      const migrated = (await a.query('SELECT * FROM "NexiGroupEventOutbox" ORDER BY id')).rows;
+      assert.equal(migrated[0].sourceSession, 'a'.repeat(64)); assert.equal(migrated[0].sourceGeneration, 2);
+      assert.equal(migrated[1].sourceSession, null); assert.equal(migrated[1].legacyGeneration, 2);
+      assert.deepEqual(migrated.map(row => row.eventId), legacyIds);
+      assert.deepEqual(migrated.map(row => row.sourceKey), ['1'.repeat(64), '3'.repeat(64)]);
+      // Independent socket owners: a write prepared by A cannot change B's
+      // status after B replaces the registered owner token.
+      const tokenA = randomUUID(), tokenB = randomUUID();
+      await a.query('UPDATE "Instance" SET "nexiGroupsSocketOwner"=$1 WHERE id=$2', [tokenA, 'synthetic-instance']);
+      assert.equal((await b.query('UPDATE "Instance" SET "nexiGroupsSocketOwner"=$1 WHERE id=$2 AND "nexiGroupsSocketOwner"=$3',
+        [tokenB, 'synthetic-instance', tokenA])).rowCount, 1);
+      assert.equal((await a.query('UPDATE "Instance" SET "nexiGroupsSocketOwner"=$1 WHERE id=$2 AND "nexiGroupsSocketOwner"=$3',
+        [randomUUID(), 'synthetic-instance', tokenA])).rowCount, 0);
       for (const [generation, revision, state] of [[0, 0, 'active'], [-1, 0, 'active'], [1, -1, 'active'], [1, 0, 'invalid']]) {
         await assert.rejects(a.query(control, ['synthetic-instance', '4', '8', generation, revision, 'a'.repeat(64), 'b'.repeat(64), state, '{}']),
           error => error.code === '23514');
       }
       const payload = { event: 'group.session.proved', instance: 'nexi-wa-synthetic', data: { version: 1, account_id: 4,
         managed_channel_id: 8, binding_generation: 2, session_identity: 'a'.repeat(64), nonce: 'b'.repeat(64) } };
-      const inserted = await a.query(`INSERT INTO "NexiGroupEventOutbox" ("instanceId","eventId","sourceKey",fingerprint,payload,state,"nextAttemptAt")
-        VALUES ($1,$2,$3,$4,$5,'queued',CURRENT_TIMESTAMP) RETURNING *`,
+      const inserted = await a.query(`INSERT INTO "NexiGroupEventOutbox" ("instanceId","eventId","sourceKey",fingerprint,payload,state,"nextAttemptAt","sourceSession","sourceGeneration")
+        VALUES ($1,$2,$3,$4,$5,'queued',CURRENT_TIMESTAMP,'${'a'.repeat(64)}',2) RETURNING *`,
       ['synthetic-instance', randomUUID(), 'c'.repeat(64), 'd'.repeat(64), payload]);
       const id = inserted.rows[0].id;
+      for (const [sourceSession, sourceGeneration, legacyGeneration] of [
+        ['a'.repeat(64), 0, null], ['a'.repeat(63), 1, null], [null, 1, 2], [null, null, 0], [null, null, null],
+      ]) {
+        await assert.rejects(a.query('UPDATE "NexiGroupEventOutbox" SET "sourceSession"=$1,"sourceGeneration"=$2,"legacyGeneration"=$3 WHERE id=$4',
+          [sourceSession, sourceGeneration, legacyGeneration, id]), e => e.code === '23514');
+      }
       for (const values of [{ attempts: -1 }, { state: 'invalid' }]) {
         const [column, value] = Object.entries(values)[0];
         await assert.rejects(a.query(`UPDATE "NexiGroupEventOutbox" SET "${column}"=$1 WHERE id=$2`, [value, id]), e => e.code === '23514');
