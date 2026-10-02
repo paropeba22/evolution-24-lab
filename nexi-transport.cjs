@@ -315,9 +315,9 @@ function prepareEvent(headers, body, instanceName, instanceId) {
       ? { qrcode: { instance: instanceName } }
       : body.event === 'connection.update'
         ? { state: body.data?.state }
-        : ['identity.observed', 'identity.correlated'].includes(body.event)
+        : require('./nexi-groups.cjs').groupEventPayload(body.event, body.data) || (['identity.observed', 'identity.correlated'].includes(body.event)
           ? identityPayload(body.data)
-          : {},
+          : {}),
   };
   const timestamp = String(Date.now());
   const eventId = randomUUID();
