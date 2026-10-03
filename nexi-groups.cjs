@@ -116,10 +116,41 @@ function manualLifecycle(context, work) {
     // credential cleanup; neither side waits on a task created after it began.
     if (pendingConnect) await pendingConnect.catch(() => {});
     lifecycleCheck(context);
+    if (!await resolveManualRegistration(context)) return;
+    lifecycleCheck(context);
     return work();
   });
   if (context.owner) context.owner.cleanup = task;
   return task.finally(() => { if (context.owner?.cleanup === task) delete context.owner.cleanup; });
+}
+async function resolveManualRegistration(context) {
+  const { service, owner } = context;
+  if (!owner?.pendingTokens?.size) return true;
+  // A rejected UPDATE response is not evidence that its registration failed.
+  // Resolve only this owner's immutable expected/proposed tokens, never a
+  // foreign generation. Manual intent is already set before waiting.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const row = await lifecycleAwait(context, () => service.prismaRepository.instance.findUnique({ where: { id: context.instanceId } }));
+    const authoritative = row?.nexiGroupsSocketOwner ?? null;
+    if (!row || authoritative !== context.token && !owner.pendingTokens.has(authoritative)) {
+      retirePending(service, owner); return false;
+    }
+    if (authoritative === context.token) { owner.pendingTokens.clear(); return true; }
+    try {
+      const restored = await lifecycleAwait(context, () => service.prismaRepository.instance.updateMany({
+        where: { id: context.instanceId, nexiGroupsSocketOwner: authoritative },
+        data: { nexiGroupsSocketOwner: context.token, connectionStatus: 'close',
+          disconnectionObject: 'nexi_socket_manual_close', disconnectionReasonCode: 401 } }));
+      if (restored.count === 1) { owner.pendingTokens.clear(); return true; }
+    } catch (error) {
+      lifecycleCheck(context); // Resolve a potentially committed refund once.
+    }
+  }
+  throw new Error('nexi_manual_ownership_unresolved');
+}
+function controlConnect(context, number) {
+  lifecycleCheck(context);
+  return lifecycleScope.run(context, () => context.service.connectToWhatsapp(number));
 }
 async function cleanupLifecycle(context, work) {
   lifecycleCheck(context);
@@ -140,10 +171,13 @@ function trackRecovery(monitor, service, name) {
   return true;
 }
 function retirePending(service, owner) {
+  const socket = admissionSockets.get(service) === owner && service.client === owner.socket ? owner.socket : undefined;
   owner.retired = true;
   owner.pendingTokens?.clear();
   const entry = monitorEntries.get(service);
   if (entry?.monitor.waInstances[entry.name] === service) delete entry.monitor.waInstances[entry.name];
+  // Retire only our exact old physical socket, never a replacement or DB owner.
+  if (socket?.ws?.isOpen) socket.end?.(staleLifecycle());
 }
 async function startupFailure(service) {
   const owner = admissionSockets.get(service);
@@ -253,9 +287,15 @@ async function recordSuspension(service, error, event) {
   const owner = admissionSockets.get(service);
   if (!owner || error[socketOwner] !== owner.token || !ownsSocket(service, owner)) return true;
   service.logger?.warn(SUSPENSION_REASON);
-  const changed = await service.prismaRepository.instance.updateMany({ where: { id: owner.instanceId,
-    nexiGroupsSocketOwner: owner.databaseToken },
-    data: { connectionStatus: 'connecting', disconnectionReasonCode: 503, disconnectionObject: SUSPENSION_REASON } })
+  const changed = await service.prismaRepository.$transaction(async tx => {
+    const locked = await tx.instance.updateMany({ where: { id: owner.instanceId, nexiGroupsSocketOwner: owner.databaseToken },
+      data: { nexiGroupsSocketOwner: owner.databaseToken } });
+    if (locked.count !== 1 || !ownsSocket(service, owner)) return { count: 0 };
+    // Serializes a status write already in flight with authoritative manual
+    // cleanup. If manual intent arrived while acquiring the lock, write nothing.
+    return tx.instance.updateMany({ where: { id: owner.instanceId, nexiGroupsSocketOwner: owner.databaseToken },
+      data: { connectionStatus: 'connecting', disconnectionReasonCode: 503, disconnectionObject: SUSPENSION_REASON } });
+  })
     .catch(() => null); // In-memory suspension still recovers if this DB write fails.
   if (changed?.count !== 0 && ownsSocket(service, owner)) {
     service.stateConnection.state = 'connecting';
@@ -993,7 +1033,7 @@ function installRoutes(router, monitor, guard, repository) {
 
 module.exports = { managed, isGroup, groupLike, participant, participants, observeDecrypted, observeNotification, take, groupEventPayload,
   lifecycleCapture, lifecycleCurrent, lifecycleCheck, lifecycleAwait, persistLifecycle, cancelLifecycle, scheduleLifecycle,
-  connectLifecycle, connectOwner, connectCheck, connectAwait, manualOwner, trackRecovery, startupFailure, manualLifecycle, cleanupLifecycle, staleLifecycle,
+  connectLifecycle, connectOwner, connectCheck, connectAwait, manualOwner, trackRecovery, startupFailure, manualLifecycle, cleanupLifecycle, staleLifecycle, controlConnect,
   installAdmissionSocket, recordSuspension, restoreSuspension, suspensionMetadata, beforeConnect, recoverAdmission, storageHealth,
   signalDiagnostic,
   bindSignalJob,

@@ -34,7 +34,7 @@ for (const gate of ['interceptEvents(this,', 'installRoutes(', 'nexi_groups_outb
   assert.ok(bundle.includes(gate), `compiled Groups gate missing: ${gate}`);
 }
 for (const gate of ['lifecycleCapture(', 'lifecycleCurrent(', 'lifecycleAwait(', 'persistLifecycle(',
-  'connectLifecycle(', 'trackRecovery(', 'cleanupLifecycle(', 'scheduleLifecycle(']) {
+  'connectLifecycle(', 'trackRecovery(', 'cleanupLifecycle(', 'scheduleLifecycle(', 'controlConnect(', 'manualLifecycle(']) {
   assert.ok(bundle.includes(gate), `compiled socket lifecycle fence missing: ${gate}`);
 }
 for (const file of ['session_record.js', 'session_cipher.js', 'session_builder.js', 'queue_job.js', 'curve.js']) {

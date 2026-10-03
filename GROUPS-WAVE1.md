@@ -4,6 +4,8 @@ Overlay baseline: `553a888ececf97bb60a80c1a5987185bbd56d0de`. APP baseline: `04f
 
 Final N1 lifecycle correction: all native status/cleanup/reconnect callbacks are fenced by captured socket ownership, and recoverable startup failures stay in monitor tracking. See [D1/D2 semantics, reproductions and runtime gates](GROUPS-WAVE1-N1-LIFECYCLE.md). APP and accepted N2–N6 source remain unchanged.
 
+Residual R1/R2 correction resolves committed-but-uncertain registration before manual cleanup and fences Chatwoot lifecycle commands across awaits. The final targeted audit also fences the settings websocket restart. See [reproductions, ownership outcomes, regression results and runtime gates](GROUPS-WAVE1-RESIDUAL-LIFECYCLE.md).
+
 ## Routing invariant
 
 Managed `nexi-wa-` group traffic terminates before placeholder/history requests, transcription, customer persistence, Chatwoot, every chatbot dispatcher (including n8n), generic webhook/event transports or financial interpretation. Storage or proof failure never permits fallback. Ordinary direct paths and accepted Financial Delivery/identity patches remain present. Unmanaged group traffic retains its transport, with the rc13 participant adapter corrected to GroupParticipant objects.

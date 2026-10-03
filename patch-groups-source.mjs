@@ -377,6 +377,20 @@ ${body}
   source = once(source, '    return instances;', `    return instances.map(({ nexiGroupsSocketOwner, ...instance }) => instance);`);
   return source;
 });
+patch('src/api/services/channel.service.ts', source => section(source,
+  '  public async setSettings(', '  public async findSettings(', block => {
+    block = once(block, '    await this.prismaRepository.setting.upsert({',
+      `    const nexiSettingsOwner = ${helper}.lifecycleCapture(this);
+    await this.prismaRepository.setting.upsert({`);
+    block = once(block, '    this.localSettings.rejectCall = data?.rejectCall;',
+      `    ${helper}.lifecycleCheck(nexiSettingsOwner);
+    this.localSettings.rejectCall = data?.rejectCall;`);
+    block = once(block, '      this.client.ws.close();',
+      `      ${helper}.lifecycleCheck(nexiSettingsOwner);
+      nexiSettingsOwner.socket.ws.close();
+      ${helper}.lifecycleCheck(nexiSettingsOwner);`);
+    return once(block, '      this.client.ws.connect();', '      nexiSettingsOwner.socket.ws.connect();');
+  }));
 patch('src/api/controllers/instance.controller.ts', source => {
   source = section(source, '  public async restartInstance(', '  public async connectionState(', block => {
     block = once(block, '      const state = instance?.connectionStatus?.state;',
@@ -424,6 +438,49 @@ patch('src/api/integrations/chatbot/chatwoot/services/chatwoot.service.ts', sour
       target: body?.meta?.sender?.identifier,
       payload: body
     });`);
+  source = section(source, '  public async receiveWebhook(', '  private async updateChatwootMessageId(', block => {
+    block = once(block, '    try {\n      await new Promise', `    const nexiControlService = this.waMonitor?.waInstances?.[instance.instanceName];
+    const nexiControlOwner = nexiControlService && ${helper}.lifecycleCapture(nexiControlService, nexiControlService.client, true);
+    const nexiBotCommand = body?.message_type === 'outgoing' &&
+      body?.conversation?.meta?.sender?.identifier === '123456';
+    const nexiCheckControl = () => { if (nexiBotCommand) ${helper}.lifecycleCheck(nexiControlOwner); };
+    try {\n      await new Promise`);
+    block = once(block, '      await new Promise((resolve) => setTimeout(resolve, 500));',
+      `      await new Promise((resolve) => setTimeout(resolve, 500));
+      nexiCheckControl();`);
+    block = once(block, '      const client = await this.clientCw(instance);',
+      `      const client = await this.clientCw(instance);
+      nexiCheckControl();`);
+    block = once(block, "      if (chatId === '123456' && body.message_type === 'outgoing') {",
+      `      if (chatId === '123456' && body.message_type === 'outgoing') {
+        nexiCheckControl();`);
+    block = once(block, '            await waInstance.connectToWhatsapp(number);',
+      `            await ${helper}.controlConnect(nexiControlOwner, number);`);
+    block = once(block, "          await this.createBotMessage(instance, msgLogout, 'incoming');\n\n          await waInstance?.client?.logout('Log out instance: ' + instance.instanceName);\n          await waInstance?.client?.ws?.close();",
+      `          await ${helper}.manualLifecycle(nexiControlOwner, async () => {
+            if (nexiControlOwner.owner) await ${helper}.cleanupLifecycle(nexiControlOwner, async () => {});
+            // A pending response cannot claim successful disconnection before
+            // the awaited control operation and ownership checks complete.
+            try {
+              await ${helper}.lifecycleAwait(nexiControlOwner, () => this.createBotMessage(instance,
+                i18next.t('cw.inbox.status', { inboxName: body.inbox.name, state: 'pending' }), 'incoming'));
+            } catch {
+              ${helper}.lifecycleCheck(nexiControlOwner);
+              this.logger.warn('nexi_socket_control_response_unavailable');
+            }
+            await ${helper}.lifecycleAwait(nexiControlOwner, () => nexiControlOwner.socket?.logout('Log out instance: ' + instance.instanceName));
+            await ${helper}.lifecycleAwait(nexiControlOwner, () => nexiControlOwner.socket?.ws?.close());
+            if (nexiControlOwner.owner) await ${helper}.cleanupLifecycle(nexiControlOwner, async repository =>
+              ${helper}.persistLifecycle(nexiControlOwner, { data: { connectionStatus: 'close' } }, repository));
+            ${helper}.lifecycleCheck(nexiControlOwner);
+            nexiControlOwner.service.stateConnection.state = 'close';
+            await ${helper}.lifecycleAwait(nexiControlOwner, () => this.createBotMessage(instance, msgLogout, 'incoming'));
+          });`);
+    block = once(block, '    } catch (error) {\n      this.logger.error(error);', `    } catch (error) {
+      if (error?.code === 'NEXI_SOCKET_LIFECYCLE_STALE') return { message: 'bot', lifecycle: 'superseded' };
+      this.logger.error(error);`);
+    return block;
+  });
   return once(source,
   '  public async eventWhatsapp(event: string, instance: InstanceDto, body: any) {',
   `  public async eventWhatsapp(event: string, instance: InstanceDto, body: any) {

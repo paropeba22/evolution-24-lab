@@ -100,6 +100,58 @@ test('real PostgreSQL: independent connections, stale claim, process-death lease
       await cleanup; assert.equal((await replacement).rowCount, 1);
       assert.equal((await b.query('SELECT "disconnectionObject" FROM "Instance" WHERE id=$1', [native.instanceId])).rows[0].disconnectionObject,
         'nexi_socket_manual_close');
+      // R1: production registration commits outside a transaction, but its
+      // local response is held and then lost while manual cancellation waits.
+      // An independent connection supplies the authoritative outcome.
+      for (const outcome of ['proposed', 'previous', 'foreign']) {
+        const isolated = repository(a);
+        isolated.$transaction = async work => {
+          await a.query('BEGIN');
+          try { const result = await work(isolated); await a.query('COMMIT'); return result; }
+          catch (error) { await a.query('ROLLBACK'); throw error; }
+        };
+        const svc = { instanceId: native.instanceId, instance: { name: 'nexi-wa-synthetic' },
+          prismaRepository: isolated, logger: { warn() {} } };
+        const socket = () => { const s = { ws: { isOpen: true }, end() { s.ws.isOpen = false; } }; return s; };
+        await groups.installAdmissionSocket(svc, { logger: svc.logger }, socket);
+        const captured = groups.lifecycleCapture(svc, svc.client, true), expected = captured.token;
+        await b.query('UPDATE "Instance" SET "connectionStatus"=$1,"disconnectionObject"=$2 WHERE id=$3',
+          ['connecting', JSON.stringify('nexi_groups_admission_suspended'), svc.instanceId]);
+        let enter, release, proposed;
+        const entered = new Promise(resolve => { enter = resolve; }), blocked = new Promise(resolve => { release = resolve; });
+        const update = isolated.instance.updateMany;
+        isolated.instance.updateMany = async args => {
+          if (!proposed && args.data.nexiGroupsSocketOwner !== expected) {
+            proposed = args.data.nexiGroupsSocketOwner;
+            if (outcome !== 'previous') await update(args);
+            enter(); await blocked; throw new Error('synthetic committed registration response lost');
+          }
+          return update(args);
+        };
+        const registration = groups.connectLifecycle(svc, () => groups.installAdmissionSocket(svc,
+          { logger: svc.logger }, socket, groups.connectOwner(svc)));
+        const rejected = assert.rejects(registration, /registration response lost/);
+        await entered;
+        const monitor = { waInstances: {} }; groups.trackRecovery(monitor, svc, svc.instance.name);
+        let cleaned = false;
+        const manual = groups.manualLifecycle(captured, () => groups.cleanupLifecycle(captured, async tx => {
+          await groups.persistLifecycle(captured, { data: { connectionStatus: 'close' } }, tx); cleaned = true;
+        }));
+        const foreign = randomUUID();
+        if (outcome === 'foreign') await b.query('UPDATE "Instance" SET "nexiGroupsSocketOwner"=$1,"connectionStatus"=$2,"disconnectionObject"=$3 WHERE id=$4',
+          [foreign, 'open', JSON.stringify('foreign-state'), svc.instanceId]);
+        release(); await rejected; await manual;
+        const persisted = (await b.query('SELECT * FROM "Instance" WHERE id=$1', [svc.instanceId])).rows[0];
+        if (outcome === 'foreign') {
+          assert.equal(cleaned, false); assert.equal(persisted.nexiGroupsSocketOwner, foreign);
+          assert.equal(persisted.connectionStatus, 'open'); assert.equal(persisted.disconnectionObject, 'foreign-state');
+          assert.equal(monitor.waInstances[svc.instance.name], undefined); assert.equal(svc.client.ws.isOpen, false);
+        } else {
+          assert.equal(cleaned, true); assert.equal(persisted.nexiGroupsSocketOwner, expected);
+          assert.equal(persisted.connectionStatus, 'close'); assert.equal(persisted.disconnectionObject, 'nexi_socket_manual_close');
+          assert.deepEqual(groups.suspensionMetadata(persisted), {});
+        }
+      }
       for (const [generation, revision, state] of [[0, 0, 'active'], [-1, 0, 'active'], [1, -1, 'active'], [1, 0, 'invalid']]) {
         await assert.rejects(a.query(control, ['synthetic-instance', '4', '8', generation, revision, 'a'.repeat(64), 'b'.repeat(64), state, '{}']),
           error => error.code === '23514');

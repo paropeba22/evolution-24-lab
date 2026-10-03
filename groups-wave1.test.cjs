@@ -19,6 +19,7 @@ const sendFile = 'node_modules/baileys/lib/Socket/messages-send.js';
 const sourceFiles = [baileysFile, 'src/api/integrations/event/event.manager.ts', 'src/api/routes/index.router.ts',
   'src/api/controllers/instance.controller.ts',
   'src/api/services/monitor.service.ts',
+  'src/api/services/channel.service.ts',
   'src/api/abstract/abstract.router.ts', 'node_modules/baileys/lib/Socket/chats.js', 'node_modules/baileys/lib/Socket/socket.js',
   'src/api/integrations/chatbot/chatbot.controller.ts',
   'src/api/integrations/chatbot/chatwoot/services/chatwoot.service.ts', recvFile, sendFile, 'tsup.config.ts',
@@ -31,7 +32,7 @@ const sender = '5511999999999@s.whatsapp.net', lid = '100000000000001@lid';
 const creds = { me: { id: '5500000000000:1@s.whatsapp.net', lid: '200000000000001@lid' },
   registrationId: 1, signedIdentityKey: { public: Buffer.alloc(32, 7) } };
 const session = identity.sessionFingerprint(creds);
-let scratch, sources, ts, acceptedSources, acceptedGroups, deltaSources, deltaGroups, lifecycleSources, lifecycleGroups;
+let scratch, sources, ts, acceptedSources, acceptedGroups, deltaSources, deltaGroups, lifecycleSources, lifecycleGroups, residualSources, residualGroups;
 
 before(() => {
   ts = require(require.resolve('typescript', { paths: [__dirname, upstream] }));
@@ -105,6 +106,22 @@ before(() => {
     reviewed._compile(execFileSync('git', ['show', 'a9fb4cbf9e3d0c84ef77b7e8ea728efdc37d1b3a:nexi-groups.cjs'],
       { cwd: __dirname, encoding: 'utf8' }), reviewed.filename);
     lifecycleGroups = reviewed.exports;
+  }
+  if (available) {
+    const residualRoot = path.join(scratch, 'residual-reviewed');
+    for (const file of sourceFiles) {
+      const target = path.join(residualRoot, file); fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.copyFileSync(path.join(scratch, file), target);
+    }
+    const script = path.join(scratch, 'residual-reviewed-patch.mjs');
+    fs.writeFileSync(script, execFileSync('git', ['show', '99ab770105fa6de3608a7dedf959ff845eb67048:patch-groups-source.mjs'], { cwd: __dirname }));
+    execFileSync(process.execPath, [script, residualRoot]);
+    residualSources = Object.fromEntries(sourceFiles.map(file => [file, fs.readFileSync(path.join(residualRoot, file), 'utf8')]));
+    const Module = require('node:module'), reviewed = new Module(path.join(__dirname, 'reviewed-residual.cjs'), module);
+    reviewed.filename = path.join(__dirname, 'reviewed-residual.cjs'); reviewed.paths = module.paths;
+    reviewed._compile(execFileSync('git', ['show', '99ab770105fa6de3608a7dedf959ff845eb67048:nexi-groups.cjs'],
+      { cwd: __dirname, encoding: 'utf8' }), reviewed.filename);
+    residualGroups = reviewed.exports;
   }
   execFileSync(process.execPath, [path.join(__dirname, 'patch-groups-source.mjs'), scratch, '--snapshot']);
   sources = Object.fromEntries(sourceFiles.map(file => [file, fs.readFileSync(path.join(scratch, file), 'utf8')]));
@@ -225,6 +242,268 @@ function pause() {
   const blocked = new Promise(resolve => { release = resolve; });
   return { waiting, release, enter: async () => { entered(); await blocked; } };
 }
+
+async function uncertainManualFixture(helper, code, { outcome = 'proposed', deletion = false, refundUncertain = false } = {}) {
+  const f = await lifecycleFixture(helper, code); await f.install('A');
+  Object.assign(f.row, { connectionStatus: 'connecting', disconnectionObject: 'nexi_groups_admission_suspended' });
+  const previous = f.row.nexiGroupsSocketOwner, p = pause(), update = f.subject.prismaRepository.instance.updateMany;
+  let proposal, held = false, reads = 0;
+  const read = f.subject.prismaRepository.instance.findUnique;
+  f.subject.prismaRepository.instance.findUnique = async args => { if (held) reads++; return read(args); };
+  f.subject.prismaRepository.instance.updateMany = async args => {
+    if (!held && args.data.nexiGroupsSocketOwner && args.data.nexiGroupsSocketOwner !== previous) {
+      proposal = args.data.nexiGroupsSocketOwner;
+      if (outcome !== 'previous') await update(args);
+      held = true; await p.enter(); throw new Error('synthetic lost registration response after possible commit');
+    }
+    if (refundUncertain && held && args.data.nexiGroupsSocketOwner === previous) {
+      refundUncertain = false; await update(args); throw new Error('synthetic manual refund response lost');
+    }
+    return update(args);
+  };
+  const connect = f.subject.connectToWhatsapp();
+  const connectFailure = assert.rejects(connect, /lost registration response/);
+  await p.waiting;
+  let manual;
+  const monitor = nativeMonitor(helper, code, f.subject);
+  helper.trackRecovery(monitor, f.subject, f.subject.instance.name);
+  if (deletion) {
+    const handlers = {};
+    monitor.logger.error = error => f.effects.push(error?.error?.message || error?.message || String(error));
+    monitor.logger.warn = message => f.effects.push(message);
+    monitor.eventEmitter = { on: (name, handler) => { handlers[name] = handler; } }; monitor.removeInstance();
+    const keys = ['chat', 'contact', 'messageUpdate', 'message', 'webhook', 'chatwoot', 'proxy', 'rabbitmq', 'nats', 'sqs', 'integrationSession', 'typebot', 'websocket', 'setting', 'label'];
+    for (const key of keys) {
+      f.subject.prismaRepository[key] ||= {};
+      f.subject.prismaRepository[key].deleteMany = async () => {};
+    }
+    monitor.configService = { get: () => ({ ENABLED: false }) };
+    manual = handlers['remove.instance'](f.subject.instance.name);
+  } else manual = f.subject.logoutInstance();
+  const result = manual.then(() => ({ success: true }), error => ({ error: error.code }));
+  await new Promise(resolve => setImmediate(resolve));
+  if (outcome === 'foreign') Object.assign(f.row, { nexiGroupsSocketOwner: 'foreign-newer-owner', connectionStatus: 'open', disconnectionObject: 'foreign-state' });
+  p.release(); await connectFailure;
+  return { ...f, monitor, previous, proposal, result: await result, reads };
+}
+
+test('R1 historical exact reproduction: manual cancellation + committed registration + failed response resurrects after restart', async t => {
+  if (!residualSources) return t.skip('reviewed Git history unavailable');
+  const f = await uncertainManualFixture(residualGroups, residualSources);
+  assert.equal(f.result.error, 'NEXI_SOCKET_LIFECYCLE_STALE');
+  assert.equal(f.row.connectionStatus, 'connecting'); assert.equal(f.row.disconnectionObject, 'nexi_groups_admission_suspended');
+  assert.equal(f.row.nexiGroupsSocketOwner, f.proposal); assert.equal(f.subject.client.ws.isOpen, false);
+  const restarted = await lifecycleFixture(residualGroups, residualSources); Object.assign(restarted.row, f.row);
+  const monitor = nativeMonitor(residualGroups, residualSources, restarted.subject);
+  await monitor.setInstance({ instanceId: restarted.subject.instanceId, instanceName: restarted.subject.instance.name,
+    integration: 'baileys', connectionStatus: f.row.connectionStatus, ...residualGroups.suspensionMetadata(f.row) });
+  assert.equal(restarted.sockets.length, 1);
+});
+
+function chatwootCommandFixture(helper, code, f, content = '/disconnect') {
+  const source = code['src/api/integrations/chatbot/chatwoot/services/chatwoot.service.ts'];
+  const method = lifecycleMethod(source, '  public async receiveWebhook(', '  private async updateChatwootMessageId(');
+  const Subject = new Function('require', 'setTimeout', 'i18next', 'sendTelemetry', ts.transpileModule('class Chatwoot { ' + method + ' }; return Chatwoot;',
+    { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText)(() => helper, resolve => { resolve(); return {}; }, { t: key => key }, async () => {});
+  const subject = new Subject();
+  Object.assign(subject, { waMonitor: { waInstances: { [f.subject.instance.name]: f.subject } },
+    configService: { get: () => ({ BOT_CONTACT: true }) }, clientCw: async () => ({}), provider: {},
+    logger: f.subject.logger, createBotMessage: async () => f.effects.push('bot.response') });
+  const body = { event: 'message_created', content, message_type: 'outgoing', inbox: { name: 'Synthetic' },
+    conversation: { meta: { sender: { identifier: '123456' } }, messages: [{ sender: { available_name: 'Synthetic' } }] } };
+  return { subject, body, instance: { instanceName: f.subject.instance.name, instanceId: f.subject.instanceId } };
+}
+
+test('R2 historical exact reproduction: actual Chatwoot disconnect await logs out and closes replacement B', async t => {
+  if (!residualSources) return t.skip('reviewed Git history unavailable');
+  const f = await lifecycleFixture(residualGroups, residualSources); await f.install('A');
+  const cw = chatwootCommandFixture(residualGroups, residualSources, f), p = pause();
+  cw.subject.createBotMessage = p.enter;
+  const command = cw.subject.receiveWebhook(cw.instance, cw.body);
+  await p.waiting; await f.install('B'); f.subject.client.logout = async () => f.effects.push('B.logout');
+  p.release(); await command;
+  assert.ok(f.effects.includes('B.logout')); assert.ok(f.effects.includes('B.ws')); assert.equal(f.subject.client.ws.isOpen, false);
+});
+
+test('R1-A/C actual manual logout resolves committed lost response and true noncommit; restart stays closed', async () => {
+  for (const outcome of ['proposed', 'previous']) {
+    const f = await uncertainManualFixture(groups, sources, { outcome });
+    assert.equal(f.result.error, undefined); assert.equal(f.row.nexiGroupsSocketOwner, f.previous);
+    assert.ok(f.reads >= 1, 'manual cleanup rereads authoritative ownership');
+    assert.equal(f.row.connectionStatus, 'close'); assert.equal(f.row.disconnectionObject, 'nexi_socket_manual_close');
+    assert.equal(f.subject.client.ws.isOpen, false);
+    const restarted = await lifecycleFixture(groups, sources); Object.assign(restarted.row, f.row);
+    const monitor = nativeMonitor(groups, sources, restarted.subject);
+    await monitor.setInstance({ instanceId: restarted.subject.instanceId, instanceName: restarted.subject.instance.name,
+      integration: 'baileys', connectionStatus: f.row.connectionStatus, ...groups.suspensionMetadata(f.row) });
+    await groups.recoverAdmission(restarted.subject, Date.now() + 600000);
+    assert.equal(restarted.sockets.length, 0);
+  }
+});
+
+test('R1-B foreign committed owner is never adopted, refunded, deleted or overwritten; pending service retires', async () => {
+  const f = await uncertainManualFixture(groups, sources, { outcome: 'foreign' });
+  assert.equal(f.result.error, undefined); assert.equal(f.row.nexiGroupsSocketOwner, 'foreign-newer-owner');
+  assert.equal(f.row.connectionStatus, 'open'); assert.equal(f.row.disconnectionObject, 'foreign-state');
+  assert.equal(f.monitor.waInstances[f.subject.instance.name], undefined);
+  assert.equal(f.sockets[0].ws.isOpen, false, 'retirement closes only the old physical socket');
+  assert.ok(!f.effects.includes('instance.delete')); assert.equal(f.sockets.length, 1);
+  await groups.recoverAdmission(f.subject, Date.now() + 600000); assert.equal(f.sockets.length, 1);
+});
+
+test('R1-D actual manual delete resolves uncertain committed token and clears recoverable state before deletion', async () => {
+  const f = await uncertainManualFixture(groups, sources, { deletion: true });
+  assert.equal(f.result.error, undefined); assert.equal(f.row.connectionStatus, 'close');
+  assert.equal(f.row.disconnectionObject, 'nexi_socket_manual_close');
+  assert.ok(f.effects.includes('instance.delete'), JSON.stringify(f.effects)); assert.equal(f.monitor.waInstances[f.subject.instance.name], undefined);
+});
+
+test('R1-E uncertain committed registration without manual action retains bounded automatic recovery', async () => {
+  const f = await lifecycleFixture(groups, sources); await f.install('A');
+  const failure = Object.assign(new Error('synthetic admission unavailable'), { code: 'NEXI_GROUPS_ADMISSION_SUSPENDED' });
+  f.configs[0].nexiGroupsSuspend(failure); await groups.recordSuspension(f.subject, failure, 'connection.update');
+  f.gate.registration = 'uncertain';
+  await groups.recoverAdmission(f.subject, Date.now() + 600000);
+  assert.equal(f.sockets.length, 1);
+  await groups.recoverAdmission(f.subject, Date.now() + 1200000);
+  assert.equal(f.sockets.length, 2); assert.equal(f.subject.client.ws.isOpen, true);
+});
+
+test('R1 manual refund response lost after commit resolves by authoritative reread without duplicate registration', async () => {
+  const f = await uncertainManualFixture(groups, sources, { refundUncertain: true });
+  assert.equal(f.result.error, undefined); assert.ok(f.reads >= 2);
+  assert.equal(f.row.nexiGroupsSocketOwner, f.previous);
+  assert.equal(f.row.disconnectionObject, 'nexi_socket_manual_close'); assert.equal(f.row.connectionStatus, 'close');
+  assert.equal(f.sockets.length, 1); assert.equal(f.subject.client.ws.isOpen, false);
+});
+
+test('R1 suspension write awaiting parent ownership lock cannot overwrite newer manual intent', async () => {
+  const f = await lifecycleFixture(groups, sources); await f.install('A');
+  const failure = Object.assign(new Error('synthetic admission unavailable'), { code: 'NEXI_GROUPS_ADMISSION_SUSPENDED' });
+  f.configs[0].nexiGroupsSuspend(failure);
+  const p = pause(), update = f.subject.prismaRepository.instance.updateMany; let first = true;
+  f.subject.prismaRepository.instance.updateMany = async args => {
+    if (first && args.data.nexiGroupsSocketOwner) { first = false; await p.enter(); }
+    return update(args);
+  };
+  const pending = groups.recordSuspension(f.subject, failure, 'connection.update');
+  await p.waiting; await f.subject.logoutInstance(); p.release(); await pending;
+  assert.equal(f.row.connectionStatus, 'close');
+  assert.notEqual(f.row.disconnectionObject, 'nexi_groups_admission_suspended');
+  assert.equal(f.subject.stateConnection.state, 'close');
+});
+
+test('R2-A actual Chatwoot disconnect/createBotMessage race preserves B, monitor, state and timers; no success reply', async () => {
+  const f = await lifecycleFixture(groups, sources); await f.install('A');
+  const cw = chatwootCommandFixture(groups, sources, f), p = pause(), replies = [];
+  cw.subject.createBotMessage = async (_instance, content) => { replies.push(content); await p.enter(); };
+  const command = cw.subject.receiveWebhook(cw.instance, cw.body);
+  await p.waiting; await f.install('B'); f.subject.client.logout = async () => f.effects.push('B.logout');
+  f.row.connectionStatus = 'open'; f.subject.stateConnection.state = 'open';
+  const ownerB = groups.lifecycleCapture(f.subject), timerB = groups.scheduleLifecycle(ownerB, async () => {}, 100000);
+  p.release(); const result = await command;
+  assert.equal(result.lifecycle, 'superseded'); assert.equal(f.subject.client.ws.isOpen, true);
+  assert.equal(f.row.connectionStatus, 'open'); assert.equal(f.subject.stateConnection.state, 'open');
+  assert.equal(cw.subject.waMonitor.waInstances[f.subject.instance.name], f.subject);
+  assert.ok(!f.effects.includes('B.logout')); assert.ok(!f.effects.includes('B.ws')); assert.ok(!f.effects.includes('B.end'));
+  assert.deepEqual(replies, ['cw.inbox.status']); assert.ok(ownerB.owner.timers.has(timerB));
+  groups.cancelLifecycle(ownerB);
+});
+
+test('R2-B current-owner Chatwoot disconnect retains logout/close behavior and persists explicit manual state', async () => {
+  for (const content of ['/disconnect', '/desconectar']) {
+    const f = await lifecycleFixture(groups, sources); await f.install('A');
+    f.row.disconnectionObject = 'nexi_groups_admission_suspended';
+    f.subject.client.logout = async () => f.effects.push('A.logout');
+    const cw = chatwootCommandFixture(groups, sources, f, content), replies = [];
+    cw.subject.createBotMessage = async (_instance, message) => replies.push(message);
+    const result = await cw.subject.receiveWebhook(cw.instance, cw.body);
+    assert.equal(result.lifecycle, undefined);
+    assert.ok(f.effects.includes('A.logout')); assert.ok(f.effects.includes('A.ws'));
+    assert.equal(f.subject.client.ws.isOpen, false); assert.equal(f.row.connectionStatus, 'close');
+    assert.equal(f.row.disconnectionObject, 'nexi_socket_manual_close');
+    assert.deepEqual(replies, ['cw.inbox.status', 'cw.inbox.disconnect']);
+    await groups.recoverAdmission(f.subject, Date.now() + 600000); assert.equal(f.sockets.length, 1);
+  }
+});
+
+test('R2 current disconnect notification failure cannot strand a manual owner with a live socket', async () => {
+  const f = await lifecycleFixture(groups, sources); await f.install('A');
+  f.row.disconnectionObject = 'nexi_groups_admission_suspended';
+  f.subject.client.logout = async () => f.effects.push('A.logout');
+  const cw = chatwootCommandFixture(groups, sources, f);
+  cw.subject.createBotMessage = async () => { throw new Error('synthetic control response unavailable'); };
+  await cw.subject.receiveWebhook(cw.instance, cw.body);
+  assert.ok(f.effects.includes('A.logout')); assert.equal(f.subject.client.ws.isOpen, false);
+  assert.equal(f.row.connectionStatus, 'close'); assert.equal(f.row.disconnectionObject, 'nexi_socket_manual_close');
+});
+
+test('R2 historical audit: native setSettings closes/connects B after its awaited settings write', async t => {
+  if (!residualSources) return t.skip('reviewed Git history unavailable');
+  const f = await lifecycleFixture(residualGroups, residualSources); await f.install('A');
+  const method = lifecycleMethod(residualSources['src/api/services/channel.service.ts'], '  public async setSettings(', '  public async findSettings(');
+  const Settings = new Function(ts.transpileModule('class Settings { ' + method + ' }; return Settings;',
+    { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText)();
+  f.subject.setSettings = Settings.prototype.setSettings; f.subject.localSettings = {};
+  const p = pause(); f.subject.prismaRepository.setting = { upsert: p.enter };
+  const update = f.subject.setSettings({ wavoipToken: 'synthetic-setting' });
+  await p.waiting; await f.install('B'); f.subject.client.ws.connect = () => f.effects.push('B.connect');
+  p.release(); await update; assert.ok(f.effects.includes('B.ws')); assert.ok(f.effects.includes('B.connect'));
+});
+
+test('R2-C entry/clientCw and captured logout awaits fence disconnect and init/iniciar commands', async () => {
+  for (const content of ['/disconnect', '/init', '/iniciar']) {
+    const f = await lifecycleFixture(groups, sources); await f.install('A');
+    const cw = chatwootCommandFixture(groups, sources, f, content), p = pause();
+    cw.subject.clientCw = async () => { await p.enter(); return {}; };
+    const command = cw.subject.receiveWebhook(cw.instance, cw.body);
+    await p.waiting; await f.install('B'); f.subject.client.logout = async () => f.effects.push('B.logout');
+    p.release(); assert.equal((await command).lifecycle, 'superseded');
+    assert.equal(f.subject.client.ws.isOpen, true); assert.equal(f.sockets.length, 2); assert.equal(f.row.connectionStatus, 'open');
+  }
+  const f = await lifecycleFixture(groups, sources); await f.install('A');
+  const cw = chatwootCommandFixture(groups, sources, f), p = pause(); f.subject.client.logout = p.enter;
+  const command = cw.subject.receiveWebhook(cw.instance, cw.body);
+  await p.waiting; await f.install('B'); f.row.connectionStatus = 'open'; p.release();
+  assert.equal((await command).lifecycle, 'superseded'); assert.equal(f.subject.client.ws.isOpen, true);
+  assert.ok(!f.effects.includes('B.ws')); assert.equal(f.row.connectionStatus, 'open');
+});
+
+test('R2-D actual direct Chatwoot receive and current init command preserve direct behavior', async () => {
+  for (const destination of [sender, lid]) {
+    const f = await lifecycleFixture(groups, sources); await f.install('A');
+    const cw = chatwootCommandFixture(groups, sources, f, 'direct realistic fixture'), sent = [];
+    cw.body.conversation.meta.sender.identifier = destination; cw.body.conversation.messages[0].source_id = 'WAID:0123456789ABCDEF';
+    f.subject.textMessage = async value => sent.push(value);
+    assert.deepEqual(await cw.subject.receiveWebhook(cw.instance, cw.body), { message: 'bot' });
+    assert.equal(f.subject.client.ws.isOpen, true);
+    cw.body.message_type = 'template'; cw.body.conversation.messages[0].source_id = undefined;
+    await cw.subject.receiveWebhook(cw.instance, cw.body);
+    assert.equal(sent.length, 1); assert.equal(sent[0].number, destination);
+  }
+  const f = await lifecycleFixture(groups, sources); await f.install('A'); f.subject.connectionStatus = { state: 'close' };
+  const cw = chatwootCommandFixture(groups, sources, f, '/init');
+  await cw.subject.receiveWebhook(cw.instance, cw.body); assert.equal(f.sockets.length, 2);
+});
+
+test('R2 targeted audit: actual setSettings await cannot close/connect replacement; current owner remains functional', async () => {
+  for (const stale of [true, false]) {
+    const f = await lifecycleFixture(groups, sources); await f.install('A');
+    const method = lifecycleMethod(sources['src/api/services/channel.service.ts'], '  public async setSettings(', '  public async findSettings(');
+    const Settings = new Function('require', ts.transpileModule('class Settings { ' + method + ' }; return Settings;',
+      { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText)(() => groups);
+    f.subject.setSettings = Settings.prototype.setSettings; f.subject.localSettings = {};
+    const p = pause(); f.subject.prismaRepository.setting = { upsert: p.enter };
+    f.subject.client.ws.connect = () => f.effects.push('A.connect');
+    const update = f.subject.setSettings({ wavoipToken: 'synthetic-setting' });
+    const result = update.then(() => ({}), error => ({ code: error.code }));
+    await p.waiting;
+    if (stale) { await f.install('B'); f.subject.client.ws.connect = () => f.effects.push('B.connect'); }
+    p.release(); const final = await result;
+    if (stale) { assert.equal(final.code, 'NEXI_SOCKET_LIFECYCLE_STALE'); assert.ok(!f.effects.includes('B.ws')); assert.ok(!f.effects.includes('B.connect')); }
+    else { assert.ok(f.effects.includes('A.ws')); assert.ok(f.effects.includes('A.connect')); }
+  }
+});
 
 test('D1 historical reproduction: native 408 callback across DB await closes replacement and persists close', async t => {
   if (!lifecycleSources) return t.skip('reviewed Git history unavailable');
