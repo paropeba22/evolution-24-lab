@@ -2,6 +2,8 @@
 
 Overlay baseline: `553a888ececf97bb60a80c1a5987185bbd56d0de`. APP baseline: `04fef75df45fa3eb86335c7d7f13c4c78b3dbc91`. Docker source remains pinned to `e273b904d53f5726970fd6a244ed9caa61dfeb9a` with Baileys `7.0.0-rc13`.
 
+Final N1 lifecycle correction: all native status/cleanup/reconnect callbacks are fenced by captured socket ownership, and recoverable startup failures stay in monitor tracking. See [D1/D2 semantics, reproductions and runtime gates](GROUPS-WAVE1-N1-LIFECYCLE.md). APP and accepted N2–N6 source remain unchanged.
+
 ## Routing invariant
 
 Managed `nexi-wa-` group traffic terminates before placeholder/history requests, transcription, customer persistence, Chatwoot, every chatbot dispatcher (including n8n), generic webhook/event transports or financial interpretation. Storage or proof failure never permits fallback. Ordinary direct paths and accepted Financial Delivery/identity patches remain present. Unmanaged group traffic retains its transport, with the rc13 participant adapter corrected to GroupParticipant objects.

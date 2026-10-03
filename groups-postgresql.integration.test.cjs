@@ -21,7 +21,7 @@ test('real PostgreSQL: independent connections, stale claim, process-death lease
     try {
       await a.query(`CREATE SCHEMA "${schema}"`);
       await Promise.all([a.query(`SET search_path TO "${schema}"`), b.query(`SET search_path TO "${schema}"`)]);
-      await a.query('CREATE TABLE "Instance" (id VARCHAR(100) PRIMARY KEY)');
+      await a.query('CREATE TABLE "Instance" (id VARCHAR(100) PRIMARY KEY, "connectionStatus" VARCHAR(100), "disconnectionObject" JSONB, "disconnectionReasonCode" INTEGER)');
       for (const migration of ['20261002000000_nexi_groups_wave1', '20261002000001_harden_groups_wave1']) {
         await a.query(fs.readFileSync(path.join(__dirname, 'prisma/postgresql-migrations', migration, 'migration.sql'), 'utf8'));
       }
@@ -49,6 +49,57 @@ test('real PostgreSQL: independent connections, stale claim, process-death lease
         [tokenB, 'synthetic-instance', tokenA])).rowCount, 1);
       assert.equal((await a.query('UPDATE "Instance" SET "nexiGroupsSocketOwner"=$1 WHERE id=$2 AND "nexiGroupsSocketOwner"=$3',
         [randomUUID(), 'synthetic-instance', tokenA])).rowCount, 0);
+      // Execute the production lifecycle persistence boundary while A remains
+      // physically current but the independent DB connection has registered B.
+      const repository = client => ({ instance: {
+        findUnique: async ({ where }) => (await client.query('SELECT * FROM "Instance" WHERE id=$1', [where.id])).rows[0],
+        updateMany: async ({ where, data }) => {
+          const columns = new Set(['id', 'nexiGroupsSocketOwner', 'connectionStatus', 'disconnectionObject', 'disconnectionReasonCode']);
+          const params = [], bind = value => { params.push(value); return '$' + params.length; };
+          const set = Object.entries(data).map(([column, value]) => {
+            assert.ok(columns.has(column)); return '"' + column + '"=' + bind(column === 'disconnectionObject' ? JSON.stringify(value) : value);
+          }).join(',');
+          const predicate = Object.entries(where).map(([column, value]) => {
+            assert.ok(columns.has(column)); const bound = value?.equals ?? value;
+            return '"' + column + '"' + (bound === null ? ' IS NULL' : '=' + bind(column === 'disconnectionObject' ? JSON.stringify(bound) : bound));
+          }).join(' AND ');
+          return { count: (await client.query('UPDATE "Instance" SET ' + set + ' WHERE ' + predicate, params)).rowCount };
+        }
+      } });
+      const repoA = repository(a), native = { instanceId: 'synthetic-instance', instance: { name: 'nexi-wa-synthetic' },
+        prismaRepository: repoA, logger: { warn() {} } };
+      await groups.installAdmissionSocket(native, { logger: native.logger }, () => ({ ws: { isOpen: true }, end() {} }));
+      const ownerA = groups.lifecycleCapture(native), physicalA = native.client;
+      await b.query('UPDATE "Instance" SET "nexiGroupsSocketOwner"=$1,"connectionStatus"=$2 WHERE id=$3',
+        [tokenB, 'open', native.instanceId]);
+      await assert.rejects(groups.persistLifecycle(ownerA, { data: { connectionStatus: 'close' } }),
+        error => error.code === 'NEXI_SOCKET_LIFECYCLE_STALE');
+      assert.equal(native.client, physicalA);
+      assert.equal((await b.query('SELECT "connectionStatus" FROM "Instance" WHERE id=$1', [native.instanceId])).rows[0].connectionStatus, 'open');
+      await a.query('UPDATE "Instance" SET "nexiGroupsSocketOwner"=$1 WHERE id=$2', [ownerA.token, native.instanceId]);
+      await a.query('UPDATE "Instance" SET "disconnectionObject"=$1 WHERE id=$2',
+        [JSON.stringify('nexi_groups_admission_suspended'), native.instanceId]);
+      groups.cancelLifecycle(ownerA);
+      const manualA = groups.lifecycleCapture(native, native.client, true);
+      repoA.$transaction = async work => {
+        await a.query('BEGIN');
+        try { const result = await work(repoA); await a.query('COMMIT'); return result; }
+        catch (error) { await a.query('ROLLBACK'); throw error; }
+      };
+      let enteredCleanup, releaseCleanup;
+      const held = new Promise(resolve => { enteredCleanup = resolve; }), wait = new Promise(resolve => { releaseCleanup = resolve; });
+      const cleanup = groups.cleanupLifecycle(manualA, async () => { enteredCleanup(); await wait; });
+      await held;
+      let replacementFinished = false;
+      const replacement = b.query('UPDATE "Instance" SET "nexiGroupsSocketOwner"=$1 WHERE id=$2 AND "nexiGroupsSocketOwner"=$3',
+        [tokenB, native.instanceId, ownerA.token]).then(result => { replacementFinished = true; return result; });
+      try {
+        await new Promise(resolve => setTimeout(resolve, 25));
+        assert.equal(replacementFinished, false, 'per-instance cleanup lock serializes replacement registration');
+      } finally { releaseCleanup(); }
+      await cleanup; assert.equal((await replacement).rowCount, 1);
+      assert.equal((await b.query('SELECT "disconnectionObject" FROM "Instance" WHERE id=$1', [native.instanceId])).rows[0].disconnectionObject,
+        'nexi_socket_manual_close');
       for (const [generation, revision, state] of [[0, 0, 'active'], [-1, 0, 'active'], [1, -1, 'active'], [1, 0, 'invalid']]) {
         await assert.rejects(a.query(control, ['synthetic-instance', '4', '8', generation, revision, 'a'.repeat(64), 'b'.repeat(64), state, '{}']),
           error => error.code === '23514');

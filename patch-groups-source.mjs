@@ -15,6 +15,18 @@ function patch(file, transform) {
   changes.push({ target, file, before, after });
 }
 const helper = "require('/evolution/nexi-groups.cjs')";
+function section(source, start, end, transform) {
+  const a = source.indexOf(start), b = source.indexOf(end, a);
+  if (a < 0 || b < 0) throw new Error('Pinned lifecycle section changed');
+  return source.slice(0, a) + transform(source.slice(a, b)) + source.slice(b);
+}
+function guardedAwait(source, expressions, context = 'nexiLifecycle') {
+  for (const expression of expressions) {
+    if (!source.includes(`await ${expression}`)) throw new Error(`Pinned lifecycle await changed: ${expression}`);
+    source = source.replaceAll(`await ${expression}`, `await ${helper}.${context === 'nexiConnectOwner' ? 'connectAwait' : 'lifecycleAwait'}(${context}, () => ${expression})`);
+  }
+  return source;
+}
 
 // libsignal bypasses the socket logger for session/key diagnostics. Pin every
 // executable console site and retain the original arguments outside Group scope.
@@ -38,20 +50,115 @@ for (const [file, expected] of [['session_record.js', 7], ['session_cipher.js', 
 patch('src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts', source => {
   if (!source.includes('nexi-financial-transport.cjs') || !source.includes('nexi-identity.cjs')) throw new Error('Groups require accepted financial/identity patches');
   source = once(source, '    this.client.ev.process(async (events) => {',
-    '    const nexiEventSocket = this.client;\n    this.client.ev.process(async (events) => {');
+    `    const nexiEventSocket = this.client;
+    const nexiEventOwner = ${helper}.lifecycleCapture(this, nexiEventSocket);
+    const nexiEventAuth = this.instance.authState;
+    this.client.ev.process(async (events) => {
+      if (!${helper}.lifecycleCurrent(nexiEventOwner)) return;`);
+  source = once(source, '              this.instance.authState.saveCreds();',
+    `              await ${helper}.cleanupLifecycle(nexiEventOwner, async () => nexiEventAuth.saveCreds());`);
   source = once(source, "              this.connectionUpdate(events['connection.update']);",
-    "              if (this.client === nexiEventSocket) this.connectionUpdate(events['connection.update']);");
+    `              if (${helper}.lifecycleCurrent(nexiEventOwner)) await this.connectionUpdate(events['connection.update'], nexiEventOwner);`);
   source = once(source, '  private async createClient(number?: string): Promise<WASocket> {',
     `  private async createClient(number?: string): Promise<WASocket> {
-    if (!await ${helper}.beforeConnect(this)) return this.client;`);
+    const nexiConnectOwner = ${helper}.connectOwner(this);
+    if (!await ${helper}.connectAwait(nexiConnectOwner, () => ${helper}.beforeConnect(this))) return this.client;`);
   source = once(source, "keys: makeCacheableSignalKeyStore(this.instance.authState.state.keys, P({ level: 'error' }) as any)",
     `keys: makeCacheableSignalKeyStore(this.instance.authState.state.keys,
           ${helper}.privacyLogger(P({ level: 'error' }), ${helper}.managed(this.instance.name)) as any)`);
   source = once(source, "    this.client = makeWASocket(require('/evolution/nexi-financial-transport.cjs').socketConfig(this.instance.name, socketConfig));",
-    `    this.client = await ${helper}.installAdmissionSocket(this, socketConfig,
-      config => makeWASocket(require('/evolution/nexi-financial-transport.cjs').socketConfig(this.instance.name, config)));`);
+    `    const nexiCreatedSocket = await ${helper}.installAdmissionSocket(this, socketConfig,
+      config => makeWASocket(require('/evolution/nexi-financial-transport.cjs').socketConfig(this.instance.name, config)), nexiConnectOwner);
+    if (this.client !== nexiCreatedSocket) throw ${helper}.staleLifecycle();`);
   source = once(source, "    if (connection === 'close') {", `    if (connection === 'close') {
       if (await ${helper}.recordSuspension(this, lastDisconnect?.error, Events.CONNECTION_UPDATE)) return;`);
+  source = section(source, '  private async connectionUpdate(', '  private async getMessage(', block => {
+    block = once(block, ': Partial<ConnectionState>) {', `: Partial<ConnectionState>, nexiLifecycle = ${helper}.lifecycleCapture(this)) {
+    if (!${helper}.lifecycleCurrent(nexiLifecycle)) return;
+    try {`);
+    block = block.replaceAll('this.client', 'nexiLifecycle.socket');
+    block = once(block, '        nexiLifecycle.socket?.ws?.close();',
+      `        nexiLifecycle.socket?.ws?.close();
+        if (!${helper}.lifecycleCurrent(nexiLifecycle)) return;`);
+    block = block.replaceAll('await this.prismaRepository.instance.update(', `await ${helper}.persistLifecycle(nexiLifecycle, `);
+    block = guardedAwait(block, ['this.getProfileName()', 'delay(1000)',
+      'nexiLifecycle.socket.requestPairingCode(this.phoneNumber)', 'this.profilePicture(this.instance.wuid)',
+      `${helper}.recordSuspension(this, lastDisconnect?.error, Events.CONNECTION_UPDATE)`]);
+    block = once(block, "      } catch {\n        this.instance.profilePictureUrl = null;",
+      `      } catch {
+        if (!${helper}.lifecycleCurrent(nexiLifecycle)) return;
+        this.instance.profilePictureUrl = null;`);
+    block = once(block, '      qrcode.toDataURL(qr, optsQrcode, (error, base64) => {',
+      `      qrcode.toDataURL(qr, optsQrcode, (error, base64) => {
+        if (!${helper}.lifecycleCurrent(nexiLifecycle)) return;`);
+    block = once(block, '      qrcodeTerminal.generate(qr, { small: true }, (qrcode) =>',
+      `      qrcodeTerminal.generate(qr, { small: true }, (qrcode) =>
+        ${helper}.lifecycleCurrent(nexiLifecycle) &&`);
+    block = once(block, '        setTimeout(async () => {', `        ${helper}.scheduleLifecycle(nexiLifecycle, async () => {`);
+    block = once(block, '        this.endSession = true;', `        ${helper}.cancelLifecycle(nexiLifecycle);
+        this.endSession = true;`);
+    block = once(block, "return this.eventEmitter.emit('no.connection', this.instance.name);",
+      `return this.eventEmitter.emit('no.connection', this.instance.name, ${helper}.lifecycleCapture(this, nexiLifecycle.socket, true));`);
+    block = once(block, "        this.eventEmitter.emit('logout.instance', this.instance.name, 'inner');",
+      `        ${helper}.cancelLifecycle(nexiLifecycle);
+        nexiLifecycle = ${helper}.lifecycleCapture(this, nexiLifecycle.socket, true);
+        this.eventEmitter.emit('logout.instance', this.instance.name, 'inner', nexiLifecycle);
+        if (!${helper}.lifecycleCurrent(nexiLifecycle)) return;`);
+    const last = block.lastIndexOf('\n  }');
+    return block.slice(0, last) + `
+    } catch (error) {
+      if (error?.code === 'NEXI_SOCKET_LIFECYCLE_STALE') return;
+      throw error;
+    }` + block.slice(last);
+  });
+  source = section(source, '  private async createClient(', '  public async connectToWhatsapp(', block => {
+    block = guardedAwait(block, ['this.defineAuthState()', 'fetchLatestWaWebVersion({}, this.cache)',
+      'axios.get(this.localProxy?.host)'], 'nexiConnectOwner');
+    block = once(block, "        } catch (error) {\n          this.logger.error(error);",
+      `        } catch (error) {
+          ${helper}.connectCheck(nexiConnectOwner);
+          this.logger.error(error);`);
+    block = once(block, "    this.client.ws.on('CB:stream:error', (node: { attrs?: { code?: string | number } }) => {",
+      `    const nexiStreamOwner = ${helper}.lifecycleCapture(this);
+    this.client.ws.on('CB:stream:error', (node: { attrs?: { code?: string | number } }) => {
+      if (!${helper}.lifecycleCurrent(nexiStreamOwner)) return;`);
+    return block;
+  });
+  for (const [start, end] of [['  public async connectToWhatsapp(', '  public async reloadConnection('],
+    ['  public async reloadConnection(', '  private readonly chatHandle']]) source = section(source, start, end, block => {
+    block = once(block, '    try {', `    return ${helper}.connectLifecycle(this, async () => {
+    try {`);
+    const last = block.lastIndexOf('\n  }');
+    return block.slice(0, last) + '\n    });' + block.slice(last);
+  });
+  source = section(source, '  public async logoutInstance()', '  public async getProfileName()', block => {
+    block = once(block, '  public async logoutInstance() {', `  public async logoutInstance() {
+    const nexiLifecycle = await ${helper}.manualOwner(this);
+    if (!${helper}.lifecycleCurrent(nexiLifecycle)) return;
+    return ${helper}.manualLifecycle(nexiLifecycle, async () => {`);
+    block = block.replaceAll('this.client', 'nexiLifecycle.socket');
+    // The declaration must capture the real socket, rather than self-reference.
+    block = guardedAwait(block, ["nexiLifecycle.socket.logout('Log out instance: ' + this.instanceName)"]);
+    block = once(block, '        nexiLifecycle.socket.ws?.close();',
+      `        nexiLifecycle.socket.ws?.close();
+        ${helper}.lifecycleCheck(nexiLifecycle);`);
+    block = once(block, '      } catch (error) {', `      } catch (error) {
+        if (!${helper}.lifecycleCurrent(nexiLifecycle)) return;`);
+    const tail = block.indexOf('    // Force the in-memory');
+    const last = block.lastIndexOf('\n  }');
+    let cleanup = block.slice(tail, last).replaceAll('this.prismaRepository', 'nexiRepository');
+    cleanup = guardedAwait(cleanup, ['this.authStateProvider.authStateProvider(this.instance.id)', 'authState.removeCreds()',
+      'useMultiFileAuthStateRedisDb(this.instance.id, this.cache)', 'useMultiFileAuthStatePrisma(this.instance.id, this.cache)',
+      'nexiRepository.session.findFirst({ where: { sessionId: this.instanceId } })',
+      'nexiRepository.session.delete({ where: { sessionId: this.instanceId } })']);
+    cleanup = cleanup.replaceAll('await nexiRepository.instance.update(', `await ${helper}.persistLifecycle(nexiLifecycle, `);
+    // Parent ownership lock fences credential/session cleanup against replacement.
+    cleanup = once(cleanup, "data: { connectionStatus: 'close' },\n    });", "data: { connectionStatus: 'close' },\n    }, nexiRepository);");
+    return block.slice(0, tail) + `    return ${helper}.cleanupLifecycle(nexiLifecycle, async nexiRepository => {
+${cleanup}
+    });
+    });` + block.slice(last);
+  });
   for (const event of ['contacts.upsert', 'contacts.update']) {
     const anchor = event === 'contacts.upsert' ? "    'contacts.upsert': async (contacts: Contact[]) => {"
       : "    'contacts.update': async (contacts: Partial<Contact>[]) => {";
@@ -67,8 +174,9 @@ patch('src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts', sourc
   source = once(source, "            const database = this.configService.get<Database>('DATABASE');\n            const settings = await this.findSettings();",
     `            // Group ingress precedes content interpretation and every shared handler.
             events = await ${helper}.interceptEvents(this, events);
+            if (!${helper}.lifecycleCurrent(nexiEventOwner)) return;
             const database = this.configService.get<Database>('DATABASE');
-            const settings = await this.findSettings();`);
+            const settings = await ${helper}.lifecycleAwait(nexiEventOwner, () => this.findSettings());`);
   source = once(source, '        for (const received of messages) {', `        for (const received of messages) {
           // Defense in depth if called outside ev.process. Storage failure is
           // never permission to enter the direct-message/AI/Chatwoot pipeline.
@@ -157,11 +265,155 @@ patch('src/api/services/monitor.service.ts', source => {
   source = once(source, '            connectionStatus: instanceData.connectionStatus as any, // Pass connection status',
     `            connectionStatus: instanceData.connectionStatus as any, // Pass connection status
             ...${helper}.suspensionMetadata(instanceData),`);
-  return once(source,
+  source = once(source,
   "      instanceData.connectionStatus === 'open' ||",
   `      (instanceData.integration === Integration.WHATSAPP_BAILEYS &&
         await ${helper}.restoreSuspension(instance, (instanceData as any).nexiGroupsAdmissionSuspended)) ||
       instanceData.connectionStatus === 'open' ||`);
+  source = once(source, '  private async setInstance(instanceData: InstanceDto) {',
+    `  private async setInstance(instanceData: InstanceDto) {
+    if (this.waInstances[instanceData.instanceName]) return this.waInstances[instanceData.instanceName];`);
+  source = once(source, `      (instanceData.integration === Integration.WHATSAPP_BAILEYS &&
+        await ${helper}.restoreSuspension(instance, (instanceData as any).nexiGroupsAdmissionSuspended)) ||`, '      nexiRecoverable ||');
+  source = once(source, "    if (\n      nexiRecoverable ||", `    const nexiRecoverable = instanceData.integration === Integration.WHATSAPP_BAILEYS &&
+      await ${helper}.restoreSuspension(instance, (instanceData as any).nexiGroupsAdmissionSuspended);
+    if (instanceData.integration === Integration.WHATSAPP_BAILEYS &&
+      !${helper}.trackRecovery(this, instance, instanceData.instanceName)) return;
+    if (
+      nexiRecoverable ||`);
+  source = once(source, '      await instance.connectToWhatsapp();', `      try {
+        await instance.connectToWhatsapp();
+      } catch (error) {
+        const nexiPending = await ${helper}.startupFailure(instance);
+        if (!nexiRecoverable && !nexiPending) throw error;
+        this.logger.warn('nexi_groups_startup_recovery_pending');
+      }`);
+  source = once(source, '    this.waInstances[instanceData.instanceName] = instance;',
+    `    ${helper}.trackRecovery(this, instance, instanceData.instanceName);`);
+  source = section(source, '  public delInstanceTime(', '  public clearDelInstanceTime(', block => {
+    block = once(block, '    const time =', `    const nexiService = this.waInstances[instance];
+    if (!nexiService) return;
+    const nexiLifecycle = ${helper}.lifecycleCapture(nexiService);
+    const time =`);
+    block = once(block, '      this.delInstanceTimeouts[instance] = setTimeout(', '      const nexiTimer = setTimeout(');
+    block = once(block, '          try {', `          if (!${helper}.lifecycleCurrent(nexiLifecycle)) return;
+          try {`);
+    block = block.replaceAll('this.waInstances[instance]?.client', 'nexiLifecycle.socket')
+      .replaceAll('this.waInstances[instance]', 'nexiService');
+    block = once(block, 'const nexiService = nexiService;', 'const nexiService = this.waInstances[instance];');
+    block = guardedAwait(block, ['nexiService.integration', "nexiLifecycle.socket?.logout('Log out instance: ' + instance)"]);
+    block = block.replaceAll("this.eventEmitter.emit('remove.instance', instance, 'inner');",
+      `this.eventEmitter.emit('remove.instance', instance, 'inner', nexiLifecycle);`);
+    block = once(block, '          } finally {', `          } catch (error) {
+            if (error?.code !== 'NEXI_SOCKET_LIFECYCLE_STALE') this.logger.warn('nexi_socket_expiry_unavailable');
+          } finally {`);
+    block = once(block, '            delete this.delInstanceTimeouts[instance];',
+      '            if (this.delInstanceTimeouts[instance] === nexiTimer) delete this.delInstanceTimeouts[instance];');
+    return once(block, '        1000 * 60 * time,\n      );', '        1000 * 60 * time,\n      );\n      this.delInstanceTimeouts[instance] = nexiTimer;');
+  });
+  for (const [start, end] of [['  public async cleaningUp(', '  public async cleaningStoreData('],
+    ['  public async cleaningStoreData(', '  public async loadInstance()']]) source = section(source, start, end, block => {
+    const signature = block.slice(0, block.indexOf('{') + 1);
+    const body = block.slice(signature.length, block.lastIndexOf('\n  }'));
+    let fenced = body.replaceAll('this.prismaRepository', 'nexiRepository');
+    fenced = guardedAwait(fenced, ["nexiRepository.instance.findFirst({\n      where: { name: instanceName },\n    })"].filter(expression => fenced.includes(`await ${expression}`)));
+    fenced = fenced.replace(/await ((?:nexiRepository|this\.cache|this\.providerFiles)\.[^\n;]+\([^\n;]*\));/g,
+      `await ${helper}.lifecycleAwait(nexiLifecycle, () => $1);`);
+    if (start.includes('cleaningUp(')) fenced = guardedAwait(fenced,
+      ["nexiRepository.instance.findFirst({\n        where: { name: instanceName },\n      })"]);
+    if (start.includes('cleaningUp(')) fenced = once(fenced, 'await nexiRepository.instance.update(',
+      `await ${helper}.persistLifecycle(nexiLifecycle, `).replace("data: { connectionStatus: 'close' },\n        });",
+        "data: { connectionStatus: 'close' },\n        }, nexiRepository);");
+    const fencedSignature = signature.replace('instanceName: string)', 'instanceName: string, nexiOrigin?: any)');
+    return `${fencedSignature}
+    const nexiService = this.waInstances[instanceName];
+    const nexiLifecycle = nexiOrigin || (nexiService && ${helper}.lifecycleCapture(nexiService, nexiService.client, true));
+    if (nexiLifecycle && !${helper}.lifecycleCurrent(nexiLifecycle)) return;
+    if (nexiLifecycle?.owner) {
+      if (!${helper}.lifecycleCurrent(nexiLifecycle)) return;
+      return ${helper}.cleanupLifecycle(nexiLifecycle, async nexiRepository => {${fenced}
+      });
+    }
+${body}
+  }
+
+`;
+  });
+  for (const [event, next] of [['remove.instance', "    this.eventEmitter.on('logout.instance'"],
+    ['logout.instance', '\n  private noConnection()'], ['no.connection', '\n}\n']]) {
+    source = section(source, `    this.eventEmitter.on('${event}'`, next, block => {
+      const begin = block.indexOf('=> {') + 4, finish = block.lastIndexOf('    });');
+      let body = block.slice(begin, finish);
+      body = body.replaceAll('this.waInstances[instanceName]?.client', 'nexiLifecycle.socket');
+      body = body.replaceAll('this.waInstances[instanceName]', 'nexiService');
+      body = body.replaceAll('this.cleaningUp(instanceName);', 'await this.cleaningUp(instanceName, nexiLifecycle);');
+      body = body.replaceAll('this.cleaningStoreData(instanceName);', 'await this.cleaningStoreData(instanceName, nexiLifecycle);');
+      // Recheck after each existing async webhook/logout boundary.
+      body = guardedAwait(body, event === 'no.connection'
+        ? ["nexiLifecycle.socket?.logout('Log out instance: ' + instanceName)"]
+        : [`nexiService?.sendDataWebhook(Events.${event === 'remove.instance' ? 'REMOVE_INSTANCE' : 'LOGOUT_INSTANCE'}, null)`]);
+      if (event !== 'no.connection') body = guardedAwait(body,
+        ['this.cleaningUp(instanceName, nexiLifecycle)', 'this.cleaningStoreData(instanceName, nexiLifecycle)']
+          .filter(expression => body.includes(`await ${expression}`)));
+      if (event === 'no.connection') body = once(body, '      try {', `      try {
+        if (nexiLifecycle.owner) await ${helper}.cleanupLifecycle(nexiLifecycle, async () => {});`);
+      if (event === 'remove.instance') body = body.replace('delete nexiService;',
+        'if (this.waInstances[instanceName] === nexiService) delete this.waInstances[instanceName];');
+      const header = `    this.eventEmitter.on('${event}', async (instanceName: string, nexiArgument?: any, nexiOwner?: any) => {
+      const nexiService = this.waInstances[instanceName];
+      if (!nexiService) return;
+      const nexiLifecycle = nexiOwner || (nexiArgument?.owner ? nexiArgument : ${helper}.lifecycleCapture(nexiService, nexiService.client, true));
+      if (!${helper}.lifecycleCurrent(nexiLifecycle)) return;
+      try {
+        await ${helper}.manualLifecycle(nexiLifecycle, async () => {`;
+      return header + body + `
+        });
+      } catch (error) {
+        if (error?.code !== 'NEXI_SOCKET_LIFECYCLE_STALE') this.logger.warn('nexi_socket_cleanup_unavailable');
+      }
+    });` + block.slice(finish + '    });'.length);
+    });
+  }
+  source = once(source, '    return instances;', `    return instances.map(({ nexiGroupsSocketOwner, ...instance }) => instance);`);
+  return source;
+});
+patch('src/api/controllers/instance.controller.ts', source => {
+  source = section(source, '  public async restartInstance(', '  public async connectionState(', block => {
+    block = once(block, '      const state = instance?.connectionStatus?.state;',
+      `      const nexiLifecycle = instance && ${helper}.lifecycleCapture(instance, instance.client, true);
+      const state = instance?.connectionStatus?.state;`);
+    block = once(block, '        instance.client?.ws?.close();',
+      `        ${helper}.lifecycleCheck(nexiLifecycle);
+        nexiLifecycle.socket?.ws?.close();
+        ${helper}.lifecycleCheck(nexiLifecycle);`);
+    return once(block, "        instance.client?.end(new Error('restart'));", `        nexiLifecycle.socket?.end(new Error('restart'));
+        ${helper}.lifecycleCheck(nexiLifecycle);`);
+  });
+  for (const [start, end] of [['  public async logout(', '  public async deleteInstance('],
+    ['  public async deleteInstance(', '\n}\n']]) source = section(source, start, end, block => {
+    block = once(block, '    const { instance } = await this.connectionState({ instanceName });',
+      `    const nexiService = this.waMonitor.waInstances[instanceName];
+    const nexiLifecycle = nexiService && ${helper}.lifecycleCapture(nexiService, nexiService.client, true);
+    const { instance } = await this.connectionState({ instanceName });
+    if (nexiLifecycle) ${helper}.lifecycleCheck(nexiLifecycle);`);
+    if (start.includes('logout(')) {
+      block = once(block, 'await this.waMonitor.waInstances[instanceName]?.logoutInstance();',
+        `await nexiService?.logoutInstance();
+      if (nexiLifecycle) ${helper}.lifecycleCheck(nexiLifecycle);`);
+    } else {
+      block = once(block, 'const waInstances = this.waMonitor.waInstances[instanceName];', 'const waInstances = nexiService;');
+      block = once(block, '          await this.logout({ instanceName });',
+        `          await this.logout({ instanceName });
+          if (nexiLifecycle) ${helper}.lifecycleCheck(nexiLifecycle);`);
+      block = once(block, '        } catch (error) {', `        } catch (error) {
+          if (nexiLifecycle) ${helper}.lifecycleCheck(nexiLifecycle);`);
+      block = once(block, "      this.eventEmitter.emit('remove.instance', instanceName, 'inner');",
+        `      if (nexiLifecycle) ${helper}.lifecycleCheck(nexiLifecycle);
+      this.eventEmitter.emit('remove.instance', instanceName, 'inner', nexiLifecycle);`);
+    }
+    return block;
+  });
+  return source;
 });
 patch('src/api/integrations/chatbot/chatwoot/services/chatwoot.service.ts', source => {
   source = once(source, '  public async receiveWebhook(instance: InstanceDto, body: any) {',

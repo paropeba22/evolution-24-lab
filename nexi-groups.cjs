@@ -11,27 +11,195 @@ const groupReadScope = new AsyncLocalStorage();
 const admissionSockets = new WeakMap();
 const socketOwner = Symbol('nexi.groups.socketOwner');
 const SUSPENSION_REASON = 'nexi_groups_admission_suspended';
+const connecting = new WeakMap();
+const monitorEntries = new WeakMap();
+const lifecycleScope = new AsyncLocalStorage();
+
+function lifecycleCapture(service, socket = service.client, allowStopped = false) {
+  const owner = admissionSockets.get(service);
+  const values = { service, socket, owner, token: owner?.databaseToken, instanceId: service.instanceId,
+    name: service.instance.name, session: owner?.session, connectEpoch: owner?.connectEpoch || 0, allowStopped };
+  // Internal event arguments must never serialize sockets, credentials or tokens.
+  return Object.freeze(Object.defineProperties({}, Object.fromEntries(Object.entries(values)
+    .map(([key, value]) => [key, { value, enumerable: false }]))));
+}
+
+function lifecycleCurrent(context) {
+  if (!context) return false;
+  const { service, owner } = context, entry = monitorEntries.get(service);
+  return service.client === context.socket && service.instanceId === context.instanceId && service.instance.name === context.name &&
+    admissionSockets.get(service) === owner && !owner?.retired && owner?.databaseToken === context.token &&
+    owner?.session === context.session && (!entry || entry.monitor.waInstances[entry.name] === service) &&
+    (context.allowStopped || !service.isDeleting && !service.endSession && !owner?.manual);
+}
+
+function staleLifecycle() { const error = new Error('nexi_socket_lifecycle_stale'); error.code = 'NEXI_SOCKET_LIFECYCLE_STALE'; return error; }
+function lifecycleCheck(context) { if (!lifecycleCurrent(context)) throw staleLifecycle(); }
+function connectCheck(context) {
+  lifecycleCheck(context);
+  if (context.service.isDeleting || (context.owner?.connectEpoch || 0) !== context.connectEpoch) throw staleLifecycle();
+}
+async function connectAwait(context, work) {
+  connectCheck(context);
+  const result = await work();
+  connectCheck(context);
+  return result;
+}
+async function lifecycleAwait(context, work) {
+  lifecycleCheck(context);
+  const result = await work();
+  lifecycleCheck(context);
+  return result;
+}
+async function persistLifecycle(context, args, repository = context.service.prismaRepository) {
+  lifecycleCheck(context);
+  if (context.token === undefined) throw staleLifecycle();
+  const result = await repository.instance.updateMany({ where: { id: context.instanceId,
+    nexiGroupsSocketOwner: context.token }, data: args.data });
+  if (result.count !== 1) throw staleLifecycle();
+  lifecycleCheck(context);
+  return { id: context.instanceId };
+}
+function cancelLifecycle(context) {
+  lifecycleCheck(context);
+  if (!context.owner) return;
+  context.owner.connectEpoch = (context.owner.connectEpoch || 0) + 1;
+  context.owner.manual = true;
+  context.owner.suspended = false;
+  for (const timer of context.owner.timers || []) clearTimeout(timer);
+  context.owner.timers?.clear();
+}
+function scheduleLifecycle(context, work, milliseconds) {
+  lifecycleCheck(context);
+  const timers = context.owner.timers ||= new Set();
+  const timer = setTimeout(async () => {
+    timers.delete(timer); // Only this owner's handles; never the replacement's.
+    if (!lifecycleCurrent(context)) return;
+    try { await lifecycleScope.run(context, work); }
+    catch { if (lifecycleCurrent(context)) context.service.logger?.warn('nexi_socket_reconnect_unavailable'); }
+  }, milliseconds);
+  timers.add(timer);
+  return timer;
+}
+function connectLifecycle(service, work) {
+  const expected = lifecycleScope.getStore();
+  if (expected && (expected.service !== service || !lifecycleCurrent(expected))) return Promise.reject(staleLifecycle());
+  if (connecting.has(service)) return connecting.get(service);
+  const current = lifecycleCapture(service, service.client, true);
+  const priorCleanup = current.owner?.cleanup;
+  const task = Promise.resolve().then(async () => {
+    if (service.isDeleting) throw staleLifecycle();
+    if (priorCleanup) await priorCleanup;
+    connectCheck(current);
+    return lifecycleScope.run(expected || current, work);
+  });
+  connecting.set(service, task);
+  return task.finally(() => { if (connecting.get(service) === task) connecting.delete(service); });
+}
+function connectOwner(service) { return lifecycleScope.getStore() || lifecycleCapture(service, service.client, true); }
+async function manualOwner(service) {
+  const current = lifecycleCapture(service, service.client, true);
+  if (current.owner) return current;
+  const row = await lifecycleAwait(current, () => service.prismaRepository.instance.findUnique({ where: { id: current.instanceId } }));
+  if (!row) throw staleLifecycle();
+  admissionSockets.set(service, { token: Symbol(), socket: current.socket, databaseToken: row.nexiGroupsSocketOwner ?? null,
+    instanceId: current.instanceId, name: current.name, manual: false, suspended: false });
+  return lifecycleCapture(service, current.socket, true);
+}
+function manualLifecycle(context, work) {
+  lifecycleCheck(context);
+  cancelLifecycle(context);
+  if (context.owner?.cleanup) return context.owner.cleanup;
+  const pendingConnect = connecting.get(context.service);
+  const task = Promise.resolve().then(async () => {
+    // Cancellation is immediate. Finish/resolve our pending registration before
+    // credential cleanup; neither side waits on a task created after it began.
+    if (pendingConnect) await pendingConnect.catch(() => {});
+    lifecycleCheck(context);
+    return work();
+  });
+  if (context.owner) context.owner.cleanup = task;
+  return task.finally(() => { if (context.owner?.cleanup === task) delete context.owner.cleanup; });
+}
+async function cleanupLifecycle(context, work) {
+  lifecycleCheck(context);
+  return context.service.prismaRepository.$transaction(async tx => {
+    await persistLifecycle(context, { data: { nexiGroupsSocketOwner: context.token } }, tx);
+    if (context.owner.manual) await lifecycleAwait(context, () => tx.instance.updateMany({
+      where: { id: context.instanceId, nexiGroupsSocketOwner: context.token, disconnectionObject: { equals: SUSPENSION_REASON } },
+      data: { connectionStatus: 'close', disconnectionObject: 'nexi_socket_manual_close', disconnectionReasonCode: 401 } }));
+    const result = await work(tx);
+    lifecycleCheck(context);
+    return result;
+  });
+}
+function trackRecovery(monitor, service, name) {
+  if (monitor.waInstances[name] && monitor.waInstances[name] !== service) return false;
+  monitor.waInstances[name] = service;
+  monitorEntries.set(service, { monitor, name });
+  return true;
+}
+function retirePending(service, owner) {
+  owner.retired = true;
+  owner.pendingTokens?.clear();
+  const entry = monitorEntries.get(service);
+  if (entry?.monitor.waInstances[entry.name] === service) delete entry.monitor.waInstances[entry.name];
+}
+async function startupFailure(service) {
+  const owner = admissionSockets.get(service);
+  if (!managed(service.instance.name) || !owner || !ownsSocket(service, owner)) return false;
+  owner.suspended = true;
+  owner.attempts = Math.min(16, owner.attempts + 1);
+  owner.nextAt = Date.now() + Math.min(300000, 5000 * 2 ** owner.attempts);
+  const error = admissionError(); Object.defineProperty(error, socketOwner, { value: owner.token });
+  if (owner.socket?.ws?.isOpen) owner.socket.end(error);
+  await recordSuspension(service, error, 'connection.update');
+  return ownsSocket(service, owner);
+}
 
 function ownsSocket(service, owner) {
   return admissionSockets.get(service) === owner && service.client === owner.socket &&
-    service.instanceId === owner.instanceId && service.instance.name === owner.name && !service.isDeleting && !service.endSession;
+    service.instanceId === owner.instanceId && service.instance.name === owner.name && !owner.retired && !owner.manual &&
+    !service.isDeleting && !service.endSession &&
+    (!monitorEntries.has(service) || monitorEntries.get(service).monitor.waInstances[owner.name] === service);
 }
 
-async function installAdmissionSocket(service, config, factory) {
-  if (!managed(service.instance.name)) return factory(config);
-  const previous = admissionSockets.get(service);
+async function installAdmissionSocket(service, config, factory, expected = lifecycleCapture(service, service.client, true)) {
+  connectCheck(expected);
+  let previous = admissionSockets.get(service);
   const original = service.client;
+  let rollbackOwner = lifecycleCapture(service, original, true);
   const owner = { token: randomUUID(), instanceId: service.instanceId, name: service.instance.name,
-    attempts: previous?.attempts || 0, suspended: false, recovering: false, nextAt: 0, socket: undefined };
+    attempts: previous?.attempts || 0, suspended: false, recovering: false, nextAt: 0, socket: undefined,
+    session: identity.sessionFingerprint(config.auth?.creds) };
   owner.databaseToken = owner.token;
-  if (managed(owner.name)) {
+  {
     const row = await service.prismaRepository.instance.findUnique({ where: { id: owner.instanceId } });
-    const expected = row?.nexiGroupsSocketOwner ?? null;
+    connectCheck(expected);
+    const registered = row?.nexiGroupsSocketOwner ?? null;
     if (!row || service.client !== original || admissionSockets.get(service) !== previous ||
-        previous && previous.databaseToken !== expected && !previous.pendingTokens?.has(expected)) throw admissionError();
+        previous && previous.databaseToken !== registered && !previous.pendingTokens?.has(registered)) throw admissionError();
+    if (!previous && managed(owner.name)) {
+      previous = { token: Symbol(), instanceId: owner.instanceId, name: owner.name, socket: original,
+        databaseToken: registered, session: owner.session, attempts: 0, suspended: false, recovering: false, nextAt: 0 };
+      admissionSockets.set(service, previous);
+      expected = rollbackOwner = lifecycleCapture(service, original, true);
+    }
     if (previous) (previous.pendingTokens ||= new Set()).add(owner.token);
     const claimed = await service.prismaRepository.instance.updateMany({ where: { id: owner.instanceId,
-      nexiGroupsSocketOwner: expected }, data: { nexiGroupsSocketOwner: owner.token } });
+      nexiGroupsSocketOwner: registered }, data: { nexiGroupsSocketOwner: owner.token } });
+    try { connectCheck(expected); }
+    catch (error) {
+      // A manual stop during the registration await must not strand a new
+      // pending token or revive its persisted suspension on restart. Refund
+      // only our own proposal while this same local owner still exists.
+      if (claimed.count === 1 && lifecycleCurrent(rollbackOwner)) {
+        const restored = await service.prismaRepository.instance.updateMany({ where: { id: owner.instanceId,
+          nexiGroupsSocketOwner: owner.token }, data: { nexiGroupsSocketOwner: registered } });
+        if (restored.count === 1 && lifecycleCurrent(rollbackOwner)) previous?.pendingTokens?.delete(owner.token);
+      }
+      throw error;
+    }
     if (claimed.count !== 1 || service.client !== original || admissionSockets.get(service) !== previous) throw admissionError();
   }
   admissionSockets.set(service, owner);
@@ -61,11 +229,13 @@ async function installAdmissionSocket(service, config, factory) {
   };
   config.logger = privacyLogger(config.logger, managed(owner.name));
   try {
-    owner.socket = guardSocket(factory(config), true);
-  } catch {
+    owner.socket = guardSocket(factory(config), managed(owner.name));
+    service.client = owner.socket; // Publish once, before callbacks can observe it.
+  } catch (cause) {
     // Constructor failure after registration leaves a recoverable, owned
     // placeholder. Close only the exact preexisting client captured above.
     owner.socket = original;
+    if (!managed(owner.name)) throw cause;
     owner.suspended = true;
     owner.attempts = Math.min(16, owner.attempts + 1);
     owner.nextAt = Date.now() + Math.min(300000, 5000 * 2 ** (owner.attempts - 1));
@@ -96,7 +266,8 @@ async function recordSuspension(service, error, event) {
 
 function suspensionMetadata(row) {
   return row?.disconnectionObject === SUSPENSION_REASON && row.connectionStatus !== 'open'
-    ? { nexiGroupsAdmissionSuspended: true } : {};
+    ? { nexiGroupsAdmissionSuspended: Object.freeze(Object.defineProperty({}, 'token',
+      { value: row.nexiGroupsSocketOwner ?? null, enumerable: false })) } : {};
 }
 
 async function restoreSuspension(service, hint = false) {
@@ -108,7 +279,8 @@ async function restoreSuspension(service, hint = false) {
     if (row?.disconnectionObject !== SUSPENSION_REASON || row.connectionStatus === 'open') return false;
   }
   if (!admissionSockets.has(service)) admissionSockets.set(service, { token: Symbol(), socket: service.client,
-    databaseToken: hint ? undefined : row.nexiGroupsSocketOwner ?? null, instanceId: service.instanceId, name: service.instance.name,
+    databaseToken: hint ? (typeof hint === 'object' ? hint.token ?? null : null) : row.nexiGroupsSocketOwner ?? null,
+    instanceId: service.instanceId, name: service.instance.name,
     suspended: true, recovering: false, attempts: 0, nextAt: 0 });
   return true; // Includes the first correction's persisted close reason.
 }
@@ -140,11 +312,11 @@ async function probeStorage(service, owner, now) {
     const row = await service.prismaRepository.instance.findUnique({ where: { id: owner.instanceId } });
     if (!ownsSocket(service, owner) || !row) return false;
     const current = row.nexiGroupsSocketOwner ?? null;
-    if (owner.databaseToken === undefined && owner.socket === undefined || owner.pendingTokens?.has(current)) {
+    if (owner.pendingTokens?.has(current)) {
       owner.databaseToken = current; // Startup or our own uncertain registration outcome, never a foreign generation.
     }
     owner.pendingTokens?.clear();
-    if (owner.databaseToken !== current) { owner.nextAt = now + 300000; return false; }
+    if (owner.databaseToken !== current) { retirePending(service, owner); return false; }
     return true;
   } catch {
     if (ownsSocket(service, owner)) {
@@ -174,7 +346,7 @@ async function recoverAdmission(service, now = Date.now()) {
   try {
     if (!await probeStorage(service, owner, now) || !ownsSocket(service, owner)) return;
     owner.healthReady = true; // Consumed once by the exact owner's createClient gate.
-    await service.connectToWhatsapp(service.phoneNumber);
+    await lifecycleScope.run(lifecycleCapture(service), () => service.connectToWhatsapp(service.phoneNumber));
   } catch {
     if (ownsSocket(service, owner)) {
       owner.healthReady = false;
@@ -820,6 +992,8 @@ function installRoutes(router, monitor, guard, repository) {
 }
 
 module.exports = { managed, isGroup, groupLike, participant, participants, observeDecrypted, observeNotification, take, groupEventPayload,
+  lifecycleCapture, lifecycleCurrent, lifecycleCheck, lifecycleAwait, persistLifecycle, cancelLifecycle, scheduleLifecycle,
+  connectLifecycle, connectOwner, connectCheck, connectAwait, manualOwner, trackRecovery, startupFailure, manualLifecycle, cleanupLifecycle, staleLifecycle,
   installAdmissionSocket, recordSuspension, restoreSuspension, suspensionMetadata, beforeConnect, recoverAdmission, storageHealth,
   signalDiagnostic,
   bindSignalJob,

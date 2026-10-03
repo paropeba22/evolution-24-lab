@@ -33,6 +33,10 @@ for (const [name, fields] of Object.entries(required)) {
 for (const gate of ['interceptEvents(this,', 'installRoutes(', 'nexi_groups_outbound_disabled_wave1', 'nexi-groups.cjs']) {
   assert.ok(bundle.includes(gate), `compiled Groups gate missing: ${gate}`);
 }
+for (const gate of ['lifecycleCapture(', 'lifecycleCurrent(', 'lifecycleAwait(', 'persistLifecycle(',
+  'connectLifecycle(', 'trackRecovery(', 'cleanupLifecycle(', 'scheduleLifecycle(']) {
+  assert.ok(bundle.includes(gate), `compiled socket lifecycle fence missing: ${gate}`);
+}
 for (const file of ['session_record.js', 'session_cipher.js', 'session_builder.js', 'queue_job.js', 'curve.js']) {
   const source = fs.readFileSync(path.join(process.env.EVOLUTION_SIGNAL_DIR || '/evolution/node_modules/libsignal/src', file), 'utf8');
   assert.ok(source.includes("require('/evolution/nexi-groups.cjs').signalDiagnostic("), `Signal privacy routing missing: ${file}`);

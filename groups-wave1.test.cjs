@@ -17,6 +17,7 @@ const baileysFile = 'src/api/integrations/channel/whatsapp/whatsapp.baileys.serv
 const recvFile = 'node_modules/baileys/lib/Socket/messages-recv.js';
 const sendFile = 'node_modules/baileys/lib/Socket/messages-send.js';
 const sourceFiles = [baileysFile, 'src/api/integrations/event/event.manager.ts', 'src/api/routes/index.router.ts',
+  'src/api/controllers/instance.controller.ts',
   'src/api/services/monitor.service.ts',
   'src/api/abstract/abstract.router.ts', 'node_modules/baileys/lib/Socket/chats.js', 'node_modules/baileys/lib/Socket/socket.js',
   'src/api/integrations/chatbot/chatbot.controller.ts',
@@ -30,7 +31,7 @@ const sender = '5511999999999@s.whatsapp.net', lid = '100000000000001@lid';
 const creds = { me: { id: '5500000000000:1@s.whatsapp.net', lid: '200000000000001@lid' },
   registrationId: 1, signedIdentityKey: { public: Buffer.alloc(32, 7) } };
 const session = identity.sessionFingerprint(creds);
-let scratch, sources, ts, acceptedSources, acceptedGroups, deltaSources, deltaGroups;
+let scratch, sources, ts, acceptedSources, acceptedGroups, deltaSources, deltaGroups, lifecycleSources, lifecycleGroups;
 
 before(() => {
   ts = require(require.resolve('typescript', { paths: [__dirname, upstream] }));
@@ -89,6 +90,22 @@ before(() => {
       { cwd: __dirname, encoding: 'utf8' }), prior.filename);
     deltaGroups = prior.exports;
   }
+  if (available) {
+    const lifecycleRoot = path.join(scratch, 'lifecycle-reviewed');
+    for (const file of sourceFiles) {
+      const target = path.join(lifecycleRoot, file); fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.copyFileSync(path.join(scratch, file), target);
+    }
+    const script = path.join(scratch, 'lifecycle-reviewed-patch.mjs');
+    fs.writeFileSync(script, execFileSync('git', ['show', 'a9fb4cbf9e3d0c84ef77b7e8ea728efdc37d1b3a:patch-groups-source.mjs'], { cwd: __dirname }));
+    execFileSync(process.execPath, [script, lifecycleRoot]);
+    lifecycleSources = Object.fromEntries(sourceFiles.map(file => [file, fs.readFileSync(path.join(lifecycleRoot, file), 'utf8')]));
+    const Module = require('node:module'), reviewed = new Module(path.join(__dirname, 'reviewed-lifecycle.cjs'), module);
+    reviewed.filename = path.join(__dirname, 'reviewed-lifecycle.cjs'); reviewed.paths = module.paths;
+    reviewed._compile(execFileSync('git', ['show', 'a9fb4cbf9e3d0c84ef77b7e8ea728efdc37d1b3a:nexi-groups.cjs'],
+      { cwd: __dirname, encoding: 'utf8' }), reviewed.filename);
+    lifecycleGroups = reviewed.exports;
+  }
   execFileSync(process.execPath, [path.join(__dirname, 'patch-groups-source.mjs'), scratch, '--snapshot']);
   sources = Object.fromEntries(sourceFiles.map(file => [file, fs.readFileSync(path.join(scratch, file), 'utf8')]));
 });
@@ -96,6 +113,442 @@ after(() => {
   assert.equal(path.dirname(scratch), os.tmpdir());
   assert.ok(path.basename(scratch).startsWith('nexi-groups-wave1-'));
   fs.rmSync(scratch, { recursive: true, force: true });
+});
+
+// Real transformed native methods retain their awaits; only I/O is synthetic.
+function lifecycleMethod(code, start, end) {
+  const a = code.indexOf(start), b = code.indexOf(end, a);
+  assert.ok(a >= 0 && b > a, start);
+  return code.slice(a, b);
+}
+function nativeLifecycle(helper, code, extra = {}) {
+  const provider = code[baileysFile], methods = [
+    lifecycleMethod(provider, '  private async connectionUpdate(', '  private async getMessage('),
+    lifecycleMethod(provider, '  public async connectToWhatsapp(', '  public async reloadConnection('),
+    lifecycleMethod(provider, '  public async reloadConnection(', '  private readonly chatHandle'),
+    lifecycleMethod(provider, '  public async logoutInstance()', '  public async getProfileName()')
+  ].join('\n');
+  const dependencies = { require: () => helper, Events: new Proxy({}, { get: (_t, key) => key }),
+    DisconnectReason: { loggedOut: 401, forbidden: 403, badSession: 500, connectionClosed: 428 },
+    BaileysStartupService: { STREAM_515_RECONNECT_GRACE_MS: 30000 },
+    InternalServerErrorException: class extends Error {}, delay: async () => {},
+    qrcode: { toDataURL: (_qr, _opts, callback) => callback(null, 'synthetic-base64') },
+    qrcodeTerminal: { generate() {} }, ...extra };
+  return new (new Function(...Object.keys(dependencies), ts.transpileModule(
+    'class Native { ' + methods + ' }; return Native;', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText)
+  (...Object.values(dependencies)))();
+}
+function nativeMonitor(helper, code, subject, extra = {}) {
+  const monitor = code['src/api/services/monitor.service.ts'];
+  const methods = [
+    lifecycleMethod(monitor, '  private async setInstance(', '  private async loadInstancesFromRedis'),
+    lifecycleMethod(monitor, '  public delInstanceTime(', '  public async instanceInfo('),
+    lifecycleMethod(monitor, '  public async instanceInfo(', '  public async instanceInfoById('),
+    monitor.slice(monitor.indexOf('  private removeInstance()'), monitor.lastIndexOf('\n}')),
+    lifecycleMethod(monitor, '  public async cleaningUp(', '  public async loadInstance()')
+  ].join('\n');
+  const dependencies = { require: () => helper, channelController: { init: () => subject },
+    Integration: { WHATSAPP_BAILEYS: 'baileys', EVOLUTION: 'evo', EVOHUB: 'hub' },
+    Events: new Proxy({}, { get: (_t, key) => key }), rmSync() {}, join: path.join,
+    INSTANCE_DIR: 'synthetic', STORE_DIR: 'synthetic', execFileSync() {}, ...extra };
+  const m = new (new Function(...Object.keys(dependencies), ts.transpileModule(
+    'class NativeMonitor { ' + methods + ' }; return NativeMonitor;', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText)
+  (...Object.values(dependencies)))();
+  Object.assign(m, { waInstances: {}, delInstanceTimeouts: {}, logger: subject.logger,
+    configService: subject.configService, prismaRepository: subject.prismaRepository, eventEmitter: subject.eventEmitter,
+    db: { SAVE_DATA: { INSTANCE: true } }, redis: { REDIS: { ENABLED: false } } });
+  return m;
+}
+async function lifecycleFixture(helper, code, { managed = true, extra = {} } = {}) {
+  const subject = nativeLifecycle(helper, code, extra);
+  Object.assign(subject, service());
+  subject.client = undefined;
+  if (!managed) subject.instance.name = 'ordinary-direct-instance';
+  const row = { id: subject.instanceId, name: subject.instance.name, nexiGroupsSocketOwner: null,
+    connectionStatus: 'open', disconnectionObject: null };
+  const effects = [], sockets = [], configs = [], gate = { write: null, registration: null };
+  const update = async args => {
+    if (args.data.connectionStatus && gate.write) await gate.write(args);
+    const registration = args.data.nexiGroupsSocketOwner && gate.registration;
+    if (registration === 'before') throw new Error('synthetic registration unavailable');
+    if (Object.entries(args.where).some(([key, value]) => row[key] !== (value?.equals ?? value))) return { count: 0 };
+    Object.assign(row, args.data);
+    if (registration === 'uncertain') { gate.registration = null; throw new Error('synthetic response lost'); }
+    return { count: 1 };
+  };
+  subject.prismaRepository.instance = {
+    findUnique: async () => structuredClone(row), findFirst: async () => structuredClone(row),
+    updateMany: update,
+    update: async args => { await update({ ...args, where: { id: row.id } }); return structuredClone(row); },
+    delete: async () => { effects.push('instance.delete'); return row; }
+  };
+  subject.prismaRepository.session = { findFirst: async () => null, deleteMany: async () => effects.push('session.delete') };
+  subject.instance.wuid = sender; subject.instance.qrcode = { count: 0 };
+  subject.stateConnection = { state: 'open' }; subject._lastStream515At = 0;
+  subject.logger = Object.fromEntries(['warn', 'error', 'info', 'debug', 'log'].map(level => [level, () => {}]));
+  subject.configService = { get: key => ({ CHATWOOT: { ENABLED: true }, QRCODE: { LIMIT: 3, COLOR: '#000000' },
+    DATABASE: { SAVE_DATA: { INSTANCE: false } }, CACHE: { REDIS: { ENABLED: false } }, PROVIDER: {} }[key]) };
+  subject.localChatwoot = { enabled: true };
+  subject.chatwootService = { eventWhatsapp: (...args) => effects.push(['chatwoot', ...args]) };
+  subject.syncChatwootLostMessages = () => effects.push('chatwoot.sync');
+  subject.profilePicture = async () => ({ profilePictureUrl: 'synthetic-profile' });
+  subject.getProfileName = async () => 'Synthetic';
+  subject.sendDataWebhook = (...args) => effects.push(['webhook', ...args]);
+  subject.eventEmitter = { emit: (...args) => effects.push(['event', ...args]), on() {} };
+  subject.setInstance = () => {};
+  subject.integration = 'baileys';
+  for (const name of ['loadChatwoot', 'loadSettings', 'loadWebhook', 'loadProxy']) subject[name] = () => {};
+  subject.messageProcessor = { mount() {}, onDestroy() {} };
+  subject.messageHandle = { 'messages.upsert'() {} };
+  const install = async label => {
+    const config = { auth: { creds }, logger: subject.logger }; configs.push(config);
+    const socket = await helper.installAdmissionSocket(subject, config, () => {
+      const next = { label, user: { id: sender, name: 'Synthetic' },
+        ws: { isOpen: true, close() { next.ws.isOpen = false; effects.push(label + '.ws'); } },
+        end() { next.ws.isOpen = false; effects.push(label + '.end'); },
+        logout: async () => {}, requestPairingCode: async () => 'synthetic-pair',
+        sendMessage: (destination, body) => { effects.push(['send', destination, body]); return 'sent'; } };
+      sockets.push(next); return next;
+    }, helper.connectOwner ? helper.connectOwner(subject) : undefined);
+    subject.client = socket; return socket;
+  };
+  subject.createClient = async () => {
+    if (!await helper.beforeConnect(subject)) return subject.client;
+    subject.endSession = false;
+    return install('S' + sockets.length);
+  };
+  return { subject, row, effects, sockets, configs, gate, install };
+}
+function pause() {
+  let release, entered;
+  const waiting = new Promise(resolve => { entered = resolve; });
+  const blocked = new Promise(resolve => { release = resolve; });
+  return { waiting, release, enter: async () => { entered(); await blocked; } };
+}
+
+test('D1 historical reproduction: native 408 callback across DB await closes replacement and persists close', async t => {
+  if (!lifecycleSources) return t.skip('reviewed Git history unavailable');
+  const f = await lifecycleFixture(lifecycleGroups, lifecycleSources);
+  await f.install('A'); const p = pause(); f.gate.write = p.enter;
+  const stale = f.subject.connectionUpdate({ connection: 'close', lastDisconnect: { error: { output: { statusCode: 408 } } } });
+  await p.waiting; await f.install('B'); f.row.connectionStatus = 'open'; f.subject.stateConnection = { state: 'open' };
+  p.release(); await stale;
+  assert.ok(f.effects.includes('B.ws')); assert.ok(f.effects.includes('B.end'));
+  assert.equal(f.row.connectionStatus, 'close');
+});
+
+test('D1 native 408 persistence CAS rejects stale A after B registration; B state/socket/timers stay untouched', async () => {
+  const f = await lifecycleFixture(groups, sources);
+  await f.install('A'); const p = pause(); f.gate.write = p.enter;
+  const stale = f.subject.connectionUpdate({ connection: 'close', lastDisconnect: { error: { output: { statusCode: 408 } } } });
+  await p.waiting; await f.install('B'); f.row.connectionStatus = 'open'; f.subject.stateConnection = { state: 'open', marker: 'B' };
+  const bToken = f.row.nexiGroupsSocketOwner, beforeEffects = f.effects.length;
+  p.release(); await stale;
+  assert.equal(f.subject.client.label, 'B'); assert.equal(f.subject.client.ws.isOpen, true);
+  assert.equal(f.row.connectionStatus, 'open'); assert.equal(f.row.nexiGroupsSocketOwner, bToken);
+  assert.deepEqual(f.subject.stateConnection, { state: 'open', marker: 'B' });
+  assert.equal(f.effects.length, beforeEffects);
+  assert.equal(groups.lifecycleCurrent(groups.lifecycleCapture(f.subject)), true);
+});
+
+test('D1 actual direct native 408, open, connecting, pairing and Chatwoot preserve accepted behavior', async () => {
+  for (const managed of [true, false]) {
+    const f = await lifecycleFixture(groups, sources, { managed }); await f.install('A');
+    await f.subject.connectionUpdate({ connection: 'connecting' });
+    assert.equal(f.subject.stateConnection.state, 'connecting');
+    await f.subject.connectionUpdate({ connection: 'open' });
+    assert.equal(f.row.connectionStatus, 'open'); assert.ok(f.effects.includes('chatwoot.sync'));
+    f.subject.phoneNumber = '5511999999999';
+    await f.subject.connectionUpdate({ qr: 'synthetic-qr' });
+    assert.equal(f.subject.instance.qrcode.pairingCode, 'synthetic-pair');
+    assert.equal(f.row.connectionStatus, 'connecting');
+    await f.subject.connectionUpdate({ connection: 'close', lastDisconnect: { error: { output: { statusCode: 408 } } } });
+    assert.equal(f.row.connectionStatus, 'close'); assert.equal(f.subject.client.ws.isOpen, false);
+    assert.deepEqual(f.effects.filter(value => value === 'A.ws' || value === 'A.end'), ['A.ws', 'A.end']);
+    await f.subject.connectToWhatsapp();
+    assert.equal(f.subject.client.ws.isOpen, true);
+    for (const destination of [sender, lid]) assert.equal(f.subject.client.sendMessage(destination,
+      { text: 'direct', key: { remoteJid: destination, id: '0123456789ABCDEF0123456789ABCDEF' } }), 'sent');
+  }
+});
+
+test('D1 profile/pairing awaits and QR callback cannot mutate replacement; owner context is opaque', async () => {
+  for (const operation of ['profile', 'pairing']) {
+    const f = await lifecycleFixture(groups, sources); await f.install('A');
+    const p = pause();
+    if (operation === 'profile') f.subject.profilePicture = async () => { await p.enter(); return { profilePictureUrl: 'OLD' }; };
+    else { f.subject.phoneNumber = sender; f.subject.client.requestPairingCode = async () => { await p.enter(); return 'OLD'; }; }
+    const stale = f.subject.connectionUpdate(operation === 'profile' ? { connection: 'open' } : { qr: 'old' });
+    await p.waiting; await f.install('B');
+    f.subject.instance.profilePictureUrl = 'B'; f.subject.instance.qrcode.pairingCode = 'B';
+    f.row.connectionStatus = 'open'; p.release(); await stale;
+    assert.equal(f.subject.instance.profilePictureUrl, 'B'); assert.equal(f.subject.instance.qrcode.pairingCode, 'B');
+    assert.equal(f.row.connectionStatus, 'open'); assert.equal(JSON.stringify(groups.lifecycleCapture(f.subject)), '{}');
+  }
+  let qrCallback;
+  const f = await lifecycleFixture(groups, sources, { extra: { qrcode: { toDataURL: (_qr, _opts, cb) => { qrCallback = cb; } } } });
+  await f.install('A'); await f.subject.connectionUpdate({ qr: 'old' }); await f.install('B');
+  f.subject.instance.qrcode.base64 = 'B'; qrCallback(null, 'OLD');
+  assert.equal(f.subject.instance.qrcode.base64, 'B');
+});
+
+test('D1 monitor delayed-close/logout recheck owner after native awaits; stale timer cannot remove B timer', async () => {
+  const f = await lifecycleFixture(groups, sources); await f.install('A');
+  const callbacks = [], handlers = {};
+  const monitor = nativeMonitor(groups, sources, f.subject, {
+    setTimeout: callback => { const handle = { callback }; callbacks.push(handle); return handle; }, clearTimeout() {}
+  });
+  monitor.waInstances[f.subject.instance.name] = f.subject; groups.trackRecovery(monitor, f.subject, f.subject.instance.name);
+  monitor.configService = { get: () => 1 };
+  f.subject.connectionStatus = { state: 'connecting' };
+  const p = pause(); f.subject.client.logout = p.enter;
+  monitor.delInstanceTime(f.subject.instance.name); const oldTimer = callbacks[0];
+  const stale = oldTimer.callback(); await p.waiting; await f.install('B');
+  monitor.delInstanceTime(f.subject.instance.name); const newTimer = callbacks[1];
+  p.release(); await stale;
+  assert.equal(monitor.delInstanceTimeouts[f.subject.instance.name], newTimer);
+  assert.equal(f.subject.client.ws.isOpen, true); assert.ok(!f.effects.includes('B.ws'));
+  monitor.eventEmitter = { on: (name, handler) => { handlers[name] = handler; } };
+  monitor.removeInstance(); monitor.noConnection();
+  const webhook = pause(); f.subject.sendDataWebhook = webhook.enter;
+  const ownerB = groups.lifecycleCapture(f.subject, f.subject.client, true);
+  const lateLogout = handlers['logout.instance'](f.subject.instance.name, 'inner', ownerB);
+  await webhook.waiting; await f.install('C'); webhook.release(); await lateLogout;
+  assert.equal(f.subject.client.ws.isOpen, true); assert.equal(f.row.connectionStatus, 'open');
+  assert.equal(monitor.delInstanceTimeouts[f.subject.instance.name], newTimer);
+  assert.ok(!f.effects.includes('session.delete'));
+});
+
+test('D1 owner-bound native reconnect timer, disconnect cleanup and concurrent connect create no duplicate socket', async () => {
+  const originalTimeout = global.setTimeout, originalClear = global.clearTimeout, timers = [];
+  global.setTimeout = callback => { const timer = { callback }; timers.push(timer); return timer; };
+  global.clearTimeout = timer => { timer.cancelled = true; };
+  try {
+    const f = await lifecycleFixture(groups, sources); await f.install('A');
+    await f.subject.connectionUpdate({ connection: 'close', lastDisconnect: { error: { output: { statusCode: 500 } } } });
+    assert.equal(timers.length, 1);
+    await f.install('B'); await timers[0].callback(); assert.equal(f.sockets.length, 2);
+    await f.subject.connectionUpdate({ connection: 'close', lastDisconnect: { error: { output: { statusCode: 500 } } } });
+    await timers[1].callback(); assert.equal(f.sockets.length, 3);
+    const current = f.subject.client, p = pause(); current.logout = p.enter;
+    const logout = f.subject.logoutInstance(); await p.waiting;
+    f.subject.isDeleting = false; f.subject.endSession = false;
+    await f.install('C'); f.row.connectionStatus = 'open';
+    p.release(); await logout;
+    assert.equal(f.subject.client.ws.isOpen, true); assert.equal(f.row.connectionStatus, 'open');
+    f.subject.isDeleting = false; f.subject.endSession = false;
+    await f.subject.logoutInstance(); assert.equal(f.row.connectionStatus, 'close');
+    assert.equal(f.subject.client.ws.isOpen, false); assert.equal(f.subject.isDeleting, true);
+    f.subject.isDeleting = false;
+    await Promise.all([f.subject.connectToWhatsapp(), f.subject.connectToWhatsapp()]);
+    assert.equal(f.sockets.length, 5, 'single-flight explicit restart');
+  } finally { global.setTimeout = originalTimeout; global.clearTimeout = originalClear; }
+});
+
+test('D2 historical reproduction: actual Monitor.setInstance loses recoverable startup after registration rejection', async t => {
+  if (!lifecycleSources) return t.skip('reviewed Git history unavailable');
+  const f = await lifecycleFixture(lifecycleGroups, lifecycleSources);
+  Object.assign(f.row, { connectionStatus: 'connecting', disconnectionObject: 'nexi_groups_admission_suspended' });
+  f.gate.registration = 'before';
+  const monitor = nativeMonitor(lifecycleGroups, lifecycleSources, f.subject);
+  await assert.rejects(monitor.setInstance({ instanceId: f.subject.instanceId, instanceName: f.subject.instance.name,
+    integration: 'baileys', connectionStatus: 'connecting', ...lifecycleGroups.suspensionMetadata(f.row) }));
+  assert.equal(monitor.waInstances[f.subject.instance.name], undefined);
+  assert.equal(f.row.disconnectionObject, 'nexi_groups_admission_suspended'); assert.equal(f.sockets.length, 0);
+});
+
+test('D1 actual controller logout/delete and restart callbacks retain captured socket across lifecycle boundaries', async () => {
+  const code = sources['src/api/controllers/instance.controller.ts'];
+  const methods = lifecycleMethod(code, '  public async restartInstance(', '  public async connectionState(') +
+    code.slice(code.indexOf('  public async logout('), code.lastIndexOf('\n}'));
+  const Controller = new Function('require', 'BadRequestException', 'InternalServerErrorException', ts.transpileModule(
+    'class Controller { ' + methods + ' }; return Controller;', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText)
+  (() => groups, class extends Error {}, class extends Error {});
+  for (const operation of ['logout', 'deleteInstance']) {
+    const f = await lifecycleFixture(groups, sources); await f.install('A');
+    const controller = new Controller(), p = pause();
+    Object.assign(controller, { waMonitor: { waInstances: { [f.subject.instance.name]: f.subject } },
+      logger: f.subject.logger, configService: f.subject.configService, eventEmitter: f.subject.eventEmitter,
+      connectionState: async () => { await p.enter(); return { instance: { state: 'open' } }; } });
+    const stale = controller[operation]({ instanceName: f.subject.instance.name });
+    const rejected = assert.rejects(stale, /stale/);
+    await p.waiting; await f.install('B'); p.release(); await rejected;
+    assert.equal(f.subject.client.ws.isOpen, true); assert.equal(f.row.connectionStatus, 'open');
+    assert.ok(!f.effects.some(value => Array.isArray(value) && value[0] === 'event'));
+  }
+  const f = await lifecycleFixture(groups, sources); await f.install('A');
+  f.subject.connectionStatus = { state: 'open' };
+  const c = new Controller();
+  Object.assign(c, { waMonitor: { waInstances: { [f.subject.instance.name]: f.subject } }, logger: f.subject.logger,
+    configService: { get: () => ({ ENABLED: false }) }, connectToWhatsapp: async () => 'native-restart' });
+  assert.equal(await c.restartInstance({ instanceName: f.subject.instance.name }), 'native-restart');
+  assert.ok(f.effects.includes('A.ws')); assert.ok(f.effects.includes('A.end'));
+});
+
+test('D1 live stream-515 grace keeps native reconnect while public instance info omits owner token', async () => {
+  const original = global.setTimeout, timerCallbacks = [];
+  global.setTimeout = callback => { timerCallbacks.push(callback); return {}; };
+  try {
+    const f = await lifecycleFixture(groups, sources); await f.install('A');
+    f.subject._lastStream515At = Date.now();
+    await f.subject.connectionUpdate({ connection: 'close', lastDisconnect: { error: { output: { statusCode: 401 } } } });
+    assert.equal(timerCallbacks.length, 1); await timerCallbacks[0](); assert.equal(f.sockets.length, 2);
+    const monitor = nativeMonitor(groups, sources, f.subject);
+    monitor.configService = { get: () => ({ CONNECTION: { CLIENT_NAME: 'synthetic' } }) };
+    monitor.prismaRepository.instance.findMany = async () => [structuredClone(f.row)];
+    const [info] = await monitor.instanceInfo();
+    assert.equal(info.id, f.row.id); assert.equal(info.nexiGroupsSocketOwner, undefined);
+    assert.ok(!JSON.stringify(info).includes(f.row.nexiGroupsSocketOwner));
+  } finally { global.setTimeout = original; }
+});
+
+test('D1 connect cancellation during registration resolves its proposal before manual cleanup; restart never resurrects', async () => {
+  const f = await lifecycleFixture(groups, sources); await f.install('A');
+  Object.assign(f.row, { connectionStatus: 'connecting', disconnectionObject: 'nexi_groups_admission_suspended' });
+  const tokenA = f.row.nexiGroupsSocketOwner, p = pause(), update = f.subject.prismaRepository.instance.updateMany;
+  let first = true;
+  f.subject.prismaRepository.instance.updateMany = async args => {
+    if (first && args.data.nexiGroupsSocketOwner && args.data.nexiGroupsSocketOwner !== tokenA) {
+      first = false; const result = await update(args); await p.enter(); return result;
+    }
+    return update(args);
+  };
+  const connect = f.subject.connectToWhatsapp();
+  const rejected = assert.rejects(connect, /stale/);
+  await p.waiting;
+  const logout = f.subject.logoutInstance();
+  await new Promise(resolve => setImmediate(resolve));
+  p.release(); await rejected; await logout;
+  assert.equal(f.sockets.length, 1); assert.equal(f.subject.client.ws.isOpen, false);
+  assert.equal(f.row.nexiGroupsSocketOwner, tokenA);
+  assert.equal(f.row.connectionStatus, 'close'); assert.equal(f.row.disconnectionObject, 'nexi_socket_manual_close');
+  const restarted = await lifecycleFixture(groups, sources); Object.assign(restarted.row, f.row);
+  const monitor = nativeMonitor(groups, sources, restarted.subject);
+  await monitor.setInstance({ instanceId: restarted.subject.instanceId, instanceName: restarted.subject.instance.name,
+    integration: 'baileys', connectionStatus: 'close', ...groups.suspensionMetadata(restarted.row) });
+  await groups.recoverAdmission(restarted.subject, Date.now() + 600000);
+  assert.equal(restarted.sockets.length, 0);
+});
+
+test('D1 unconnected manual logout retains credential/status semantics and invalidates delayed reconnect', async () => {
+  const f = await lifecycleFixture(groups, sources);
+  await f.subject.logoutInstance();
+  assert.equal(f.row.connectionStatus, 'close'); assert.equal(f.subject.isDeleting, true);
+  assert.equal(f.sockets.length, 0);
+  await groups.recoverAdmission(f.subject, Date.now() + 600000);
+  assert.equal(f.sockets.length, 0);
+});
+
+test('D1 actual monitor cleanup CAS/await cannot delete a replacement monitor entry after credential cleanup', async () => {
+  const f = await lifecycleFixture(groups, sources); await f.install('A');
+  const monitor = nativeMonitor(groups, sources, f.subject), handlers = {};
+  groups.trackRecovery(monitor, f.subject, f.subject.instance.name);
+  monitor.eventEmitter = { on: (name, handler) => { handlers[name] = handler; } }; monitor.removeInstance();
+  const p = pause(); f.subject.prismaRepository.session.deleteMany = p.enter;
+  const removing = handlers['remove.instance'](f.subject.instance.name);
+  await p.waiting; await f.install('B'); f.row.connectionStatus = 'open';
+  p.release(); await removing;
+  assert.equal(monitor.waInstances[f.subject.instance.name], f.subject);
+  assert.equal(f.subject.client.ws.isOpen, true); assert.equal(f.row.connectionStatus, 'open');
+  assert.ok(!f.effects.includes('instance.delete'));
+});
+
+test('D2 local failure after socket construction suspends only that socket; tracked retry creates one live replacement', async () => {
+  const f = await lifecycleFixture(groups, sources);
+  Object.assign(f.row, { connectionStatus: 'connecting', disconnectionObject: 'nexi_groups_admission_suspended' });
+  const create = f.subject.createClient;
+  f.subject.createClient = async () => { await create(); throw new Error('synthetic handler registration failed'); };
+  const monitor = nativeMonitor(groups, sources, f.subject);
+  await monitor.setInstance({ instanceId: f.subject.instanceId, instanceName: f.subject.instance.name, integration: 'baileys',
+    connectionStatus: 'connecting', ...groups.suspensionMetadata(f.row) });
+  assert.equal(monitor.waInstances[f.subject.instance.name], f.subject);
+  assert.equal(f.sockets.length, 1); assert.equal(f.sockets[0].ws.isOpen, false);
+  f.subject.createClient = create;
+  await groups.recoverAdmission(f.subject, Date.now() + 600000);
+  assert.equal(f.sockets.length, 2); assert.equal(f.sockets.filter(socket => socket.ws.isOpen).length, 1);
+});
+
+test('D2 newly recoverable startup is pretracked too; uncertain first registration never creates a duplicate owner/socket', async () => {
+  const f = await lifecycleFixture(groups, sources);
+  f.gate.registration = 'uncertain';
+  const monitor = nativeMonitor(groups, sources, f.subject);
+  await monitor.setInstance({ instanceId: f.subject.instanceId, instanceName: f.subject.instance.name,
+    integration: 'baileys', connectionStatus: 'open' });
+  assert.equal(monitor.waInstances[f.subject.instance.name], f.subject);
+  assert.ok(f.row.nexiGroupsSocketOwner); assert.equal(f.sockets.length, 0);
+  for (let tick = 0; tick < 100; tick++) await groups.recoverAdmission(f.subject);
+  assert.equal(f.sockets.length, 0);
+  await groups.recoverAdmission(f.subject, Date.now() + 600000);
+  assert.equal(f.sockets.length, 1); assert.equal(f.subject.client.ws.isOpen, true);
+});
+
+test('D2 actual Monitor/native connect retains failed/uncertain registration; bounded tick resolves ownership before one socket', async () => {
+  for (const failure of ['before', 'uncertain']) {
+    const f = await lifecycleFixture(groups, sources);
+    Object.assign(f.row, { connectionStatus: 'close', disconnectionObject: 'nexi_groups_admission_suspended' });
+    f.gate.registration = failure;
+    const monitor = nativeMonitor(groups, sources, f.subject);
+    const data = { instanceId: f.subject.instanceId, instanceName: f.subject.instance.name, integration: 'baileys',
+      connectionStatus: 'close', ...groups.suspensionMetadata(f.row) };
+    await monitor.setInstance(data);
+    assert.equal(monitor.waInstances[f.subject.instance.name], f.subject); assert.equal(f.sockets.length, 0);
+    assert.equal(!!f.row.nexiGroupsSocketOwner, failure === 'uncertain');
+    for (let tick = 0; tick < 100; tick++) await groups.recoverAdmission(monitor.waInstances[data.instanceName]);
+    assert.equal(f.sockets.length, 0);
+    f.gate.registration = null;
+    await groups.recoverAdmission(monitor.waInstances[data.instanceName], Date.now() + 600000);
+    assert.equal(f.sockets.length, 1); assert.equal(f.subject.client.ws.isOpen, true);
+    await monitor.setInstance(data); assert.equal(f.sockets.length, 1);
+    await f.subject.connectionUpdate({ connection: 'open' }); assert.equal(f.row.connectionStatus, 'open');
+    for (const destination of [sender, lid]) assert.equal(f.subject.client.sendMessage(destination, { text: 'direct' }), 'sent');
+    await groups.recoverAdmission(f.subject, Date.now() + 1200000); assert.equal(f.sockets.length, 1);
+  }
+});
+
+test('D2 pending retry retires on foreign DB owner and never evicts replacement monitor entry', async () => {
+  for (const replacementEntry of [false, true]) {
+    const f = await lifecycleFixture(groups, sources);
+    Object.assign(f.row, { connectionStatus: 'connecting', disconnectionObject: 'nexi_groups_admission_suspended' });
+    f.gate.registration = 'before';
+    const monitor = nativeMonitor(groups, sources, f.subject);
+    await monitor.setInstance({ instanceId: f.subject.instanceId, instanceName: f.subject.instance.name, integration: 'baileys',
+      connectionStatus: 'connecting', ...groups.suspensionMetadata(f.row) });
+    const otherService = { marker: 'B' };
+    if (replacementEntry) monitor.waInstances[f.subject.instance.name] = otherService;
+    f.row.nexiGroupsSocketOwner = 'foreign-authoritative-owner'; f.gate.registration = null;
+    await groups.recoverAdmission(f.subject, Date.now() + 600000);
+    assert.equal(f.sockets.length, 0);
+    assert.equal(monitor.waInstances[f.subject.instance.name], replacementEntry ? otherService : undefined);
+    assert.equal(f.row.nexiGroupsSocketOwner, 'foreign-authoritative-owner');
+  }
+});
+
+test('D2 persistent outage is bounded, manual close never resurrects, startup probe racing new owner retires', async () => {
+  const f = await lifecycleFixture(groups, sources);
+  Object.assign(f.row, { connectionStatus: 'connecting', disconnectionObject: 'nexi_groups_admission_suspended' });
+  f.subject.store.failCreate(true);
+  const monitor = nativeMonitor(groups, sources, f.subject);
+  await monitor.setInstance({ instanceId: f.subject.instanceId, instanceName: f.subject.instance.name, integration: 'baileys',
+    connectionStatus: 'connecting', ...groups.suspensionMetadata(f.row) });
+  let probes = 0; const transaction = f.subject.prismaRepository.$transaction;
+  f.subject.prismaRepository.$transaction = async work => { probes++; return transaction(work); };
+  const now = Date.now() + 600000;
+  for (let tick = 0; tick < 100; tick++) await groups.recoverAdmission(f.subject, now + tick);
+  assert.equal(probes, 1); assert.equal(f.sockets.length, 0);
+  f.subject.store.failCreate(false);
+  const p = pause(); f.subject.prismaRepository.$transaction = async work => { await p.enter(); return transaction(work); };
+  const pending = groups.recoverAdmission(f.subject, now + 600000); await p.waiting;
+  f.row.nexiGroupsSocketOwner = 'new-owner'; p.release(); await pending;
+  assert.equal(f.sockets.length, 0); assert.equal(monitor.waInstances[f.subject.instance.name], undefined);
+  for (const reason of ['manual', JSON.stringify({ output: { statusCode: 401 } })]) {
+    const closed = await lifecycleFixture(groups, sources);
+    Object.assign(closed.row, { connectionStatus: 'close', disconnectionObject: reason });
+    const m = nativeMonitor(groups, sources, closed.subject);
+    await m.setInstance({ instanceId: closed.subject.instanceId, instanceName: closed.subject.instance.name,
+      integration: 'baileys', connectionStatus: 'close', ...groups.suspensionMetadata(closed.row) });
+    await groups.recoverAdmission(closed.subject, Date.now() + 10000000);
+    assert.equal(closed.sockets.length, 0);
+  }
 });
 
 function fixture({ remote = jid, fromMe = false, attrs = {}, key = {}, message = { conversation: 'requestPlaceholder' } } = {}) {
