@@ -131,6 +131,46 @@ patch('src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts', sourc
     const last = block.lastIndexOf('\n  }');
     return block.slice(0, last) + '\n    });' + block.slice(last);
   });
+  source = section(source, '  public async reloadConnection(', '  private readonly chatHandle', block => {
+    block = once(block, '  public async reloadConnection(): Promise<WASocket> {',
+      `  public async reloadConnection(nexiOrigin?: any): Promise<WASocket> {
+    const nexiReloadOwner = nexiOrigin || ${helper}.lifecycleCapture(this);`);
+    block = once(block, '      return await this.createClient(this.phoneNumber);',
+      `      await ${helper}.operationCheck(nexiReloadOwner);
+      ${helper}.connectCheck(nexiReloadOwner);
+      if (nexiReloadOwner.socket?.ws?.isOpen) nexiReloadOwner.socket.end(new Error('nexi_socket_profile_reload'));
+      ${helper}.connectCheck(nexiReloadOwner);
+      const nexiReloadedSocket = await this.createClient(this.phoneNumber);
+      // Completion authority belongs to this exact returned socket. A different
+      // current socket cannot be adopted by a late operation's completion.
+      await ${helper}.operationCheck(${helper}.lifecycleCapture(this, nexiReloadedSocket));
+      return nexiReloadedSocket;`);
+    block = once(block, '    } catch (error) {', `    } catch (error) {
+      if (error?.code === 'NEXI_SOCKET_LIFECYCLE_STALE') throw error;`);
+    return once(block, '    });', '    }, nexiReloadOwner);');
+  });
+  for (const [start, end, mutations] of [
+    ['  public async updatePrivacySettings(', '  public async fetchBusinessProfile(',
+      ['updateReadReceiptsPrivacy(settings.readreceipts)', 'updateProfilePicturePrivacy(settings.profile)',
+        'updateStatusPrivacy(settings.status)', 'updateOnlinePrivacy(settings.online)',
+        'updateLastSeenPrivacy(settings.last)', 'updateGroupsAddPrivacy(settings.groupadd)']],
+    ['  public async updateProfilePicture(', '  public async removeProfilePicture(', ['updateProfilePicture(nexiProfileTarget, pic)']],
+    ['  public async removeProfilePicture(', '  public async blockUser(', ['removeProfilePicture(nexiProfileTarget)']]
+  ]) source = section(source, start, end, block => {
+    block = once(block, '    try {', `    const nexiOperation = ${helper}.lifecycleCapture(this);
+    const nexiProfileTarget = this.instance.wuid;
+    try {
+      await ${helper}.operationCheck(nexiOperation);`);
+    block = block.replaceAll('this.client', 'nexiOperation.socket').replaceAll('this.instance.wuid', 'nexiProfileTarget');
+    block = once(block, 'const nexiProfileTarget = nexiProfileTarget;', 'const nexiProfileTarget = this.instance.wuid;');
+    for (const mutation of mutations) block = once(block, `await nexiOperation.socket.${mutation}`,
+      `await ${helper}.operationAwait(nexiOperation, () => nexiOperation.socket.${mutation})`);
+    if (start.includes('updateProfilePicture(')) block = once(block, 'await axios.get(url, config)',
+      `await ${helper}.operationAwait(nexiOperation, () => axios.get(url, config))`);
+    block = once(block, '      this.reloadConnection();', '      await this.reloadConnection(nexiOperation);');
+    return once(block, '    } catch (error) {', `    } catch (error) {
+      if (error?.code === 'NEXI_SOCKET_LIFECYCLE_STALE') throw error;`);
+  });
   source = section(source, '  public async logoutInstance()', '  public async getProfileName()', block => {
     block = once(block, '  public async logoutInstance() {', `  public async logoutInstance() {
     const nexiLifecycle = await ${helper}.manualOwner(this);
@@ -281,10 +321,12 @@ patch('src/api/services/monitor.service.ts', source => {
       !${helper}.trackRecovery(this, instance, instanceData.instanceName)) return;
     if (
       nexiRecoverable ||`);
-  source = once(source, '      await instance.connectToWhatsapp();', `      try {
-        await instance.connectToWhatsapp();
+  source = once(source, '      await instance.connectToWhatsapp();', `      const nexiStartupOwner = ${helper}.lifecycleCapture(instance);
+      try {
+        if (instanceData.integration === Integration.WHATSAPP_BAILEYS) await ${helper}.controlConnect(nexiStartupOwner);
+        else await instance.connectToWhatsapp();
       } catch (error) {
-        const nexiPending = await ${helper}.startupFailure(instance);
+        const nexiPending = await ${helper}.startupFailure(instance, nexiStartupOwner);
         if (!nexiRecoverable && !nexiPending) throw error;
         this.logger.warn('nexi_groups_startup_recovery_pending');
       }`);
@@ -392,6 +434,27 @@ patch('src/api/services/channel.service.ts', source => section(source,
     return once(block, '      this.client.ws.connect();', '      nexiSettingsOwner.socket.ws.connect();');
   }));
 patch('src/api/controllers/instance.controller.ts', source => {
+  source = section(source, '  public async createInstance(', '  public async connectToWhatsapp(', block => {
+    block = once(block, '    try {\n      instanceData.instanceName', '    let nexiCreationOwner: any;\n    try {\n      instanceData.instanceName');
+    block = once(block, '      this.waMonitor.waInstances[instance.instanceName] = instance;',
+      `      if (instanceData.integration === Integration.WHATSAPP_BAILEYS) {
+        if (!${helper}.trackRecovery(this.waMonitor, instance, instance.instanceName)) throw ${helper}.staleLifecycle();
+        nexiCreationOwner = ${helper}.lifecycleCapture(instance);
+      } else this.waMonitor.waInstances[instance.instanceName] = instance;`);
+    for (const expression of ['eventManager.setInstance(instance.instanceName, instanceData)',
+      'this.settingsService.create(instanceDto, settings)']) block = once(block, `await ${expression}`,
+      `await (nexiCreationOwner ? ${helper}.connectAwait(nexiCreationOwner, () => ${expression}) : ${expression})`);
+    block = once(block, '        if (!testProxy) {', `        if (nexiCreationOwner) ${helper}.connectCheck(nexiCreationOwner);
+        if (!testProxy) {`);
+    block = once(block, '      const settings: wa.LocalSettings = {', `      if (nexiCreationOwner) ${helper}.connectCheck(nexiCreationOwner);
+      const settings: wa.LocalSettings = {`);
+    block = once(block, '          await instance.connectToWhatsapp(instanceData.number);',
+      `          await ${helper}.controlConnect(nexiCreationOwner, instanceData.number);`);
+    return once(block, '      this.waMonitor.deleteInstance(instanceData.instanceName);',
+      `      if (error?.code === 'NEXI_SOCKET_LIFECYCLE_STALE') throw error;
+      if (nexiCreationOwner) ${helper}.connectCheck(nexiCreationOwner);
+      this.waMonitor.deleteInstance(instanceData.instanceName);`);
+  });
   source = section(source, '  public async restartInstance(', '  public async connectionState(', block => {
     block = once(block, '      const state = instance?.connectionStatus?.state;',
       `      const nexiLifecycle = instance && ${helper}.lifecycleCapture(instance, instance.client, true);

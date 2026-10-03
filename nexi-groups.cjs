@@ -18,7 +18,8 @@ const lifecycleScope = new AsyncLocalStorage();
 function lifecycleCapture(service, socket = service.client, allowStopped = false) {
   const owner = admissionSockets.get(service);
   const values = { service, socket, owner, token: owner?.databaseToken, instanceId: service.instanceId,
-    name: service.instance.name, session: owner?.session, connectEpoch: owner?.connectEpoch || 0, allowStopped };
+    name: service.instance.name, session: owner?.session, connectEpoch: owner?.connectEpoch || 0, allowStopped,
+    operationId: Symbol('nexi.lifecycle.operation') };
   // Internal event arguments must never serialize sockets, credentials or tokens.
   return Object.freeze(Object.defineProperties({}, Object.fromEntries(Object.entries(values)
     .map(([key, value]) => [key, { value, enumerable: false }]))));
@@ -81,11 +82,14 @@ function scheduleLifecycle(context, work, milliseconds) {
   timers.add(timer);
   return timer;
 }
-function connectLifecycle(service, work) {
-  const expected = lifecycleScope.getStore();
-  if (expected && (expected.service !== service || !lifecycleCurrent(expected))) return Promise.reject(staleLifecycle());
+function connectLifecycle(service, work, origin) {
+  const expected = origin || lifecycleScope.getStore();
+  if (expected) {
+    try { if (expected.service !== service) throw staleLifecycle(); connectCheck(expected); }
+    catch (error) { return Promise.reject(error); }
+  }
   if (connecting.has(service)) return connecting.get(service);
-  const current = lifecycleCapture(service, service.client, true);
+  const current = expected || lifecycleCapture(service, service.client, true);
   const priorCleanup = current.owner?.cleanup;
   const task = Promise.resolve().then(async () => {
     if (service.isDeleting) throw staleLifecycle();
@@ -152,6 +156,18 @@ function controlConnect(context, number) {
   lifecycleCheck(context);
   return lifecycleScope.run(context, () => context.service.connectToWhatsapp(number));
 }
+async function operationCheck(context) {
+  connectCheck(context);
+  if (context.token === undefined || !context.socket || context.socket.ws?.isOpen === false) throw staleLifecycle();
+  const row = await connectAwait(context, () => context.service.prismaRepository.instance.findUnique({ where: { id: context.instanceId } }));
+  if (!row || row.nexiGroupsSocketOwner !== context.token ||
+      row.connectionStatus !== 'open' && row.disconnectionObject === 'nexi_socket_manual_close') throw staleLifecycle();
+}
+async function operationAwait(context, work) {
+  const result = await connectAwait(context, work);
+  await operationCheck(context);
+  return result;
+}
 async function cleanupLifecycle(context, work) {
   lifecycleCheck(context);
   return context.service.prismaRepository.$transaction(async tx => {
@@ -179,9 +195,15 @@ function retirePending(service, owner) {
   // Retire only our exact old physical socket, never a replacement or DB owner.
   if (socket?.ws?.isOpen) socket.end?.(staleLifecycle());
 }
-async function startupFailure(service) {
+async function startupFailure(service, origin) {
   const owner = admissionSockets.get(service);
   if (!managed(service.instance.name) || !owner || !ownsSocket(service, owner)) return false;
+  // Permit the original attempt's own publication, never a later current owner.
+  // A standalone symbol correlates that handoff without retaining old contexts,
+  // sockets or credential-bearing generations in the current owner's record.
+  if (!origin || origin.service !== service || origin.instanceId !== service.instanceId || origin.name !== service.instance.name ||
+      (origin.owner?.connectEpoch || 0) !== origin.connectEpoch ||
+      !(lifecycleCurrent(origin) || owner.creationOperation === origin.operationId && owner.creationEpoch === origin.connectEpoch)) return false;
   owner.suspended = true;
   owner.attempts = Math.min(16, owner.attempts + 1);
   owner.nextAt = Date.now() + Math.min(300000, 5000 * 2 ** owner.attempts);
@@ -205,7 +227,8 @@ async function installAdmissionSocket(service, config, factory, expected = lifec
   let rollbackOwner = lifecycleCapture(service, original, true);
   const owner = { token: randomUUID(), instanceId: service.instanceId, name: service.instance.name,
     attempts: previous?.attempts || 0, suspended: false, recovering: false, nextAt: 0, socket: undefined,
-    session: identity.sessionFingerprint(config.auth?.creds) };
+    session: identity.sessionFingerprint(config.auth?.creds),
+    creationOperation: expected.operationId, creationEpoch: expected.connectEpoch };
   owner.databaseToken = owner.token;
   {
     const row = await service.prismaRepository.instance.findUnique({ where: { id: owner.instanceId } });
@@ -215,7 +238,8 @@ async function installAdmissionSocket(service, config, factory, expected = lifec
         previous && previous.databaseToken !== registered && !previous.pendingTokens?.has(registered)) throw admissionError();
     if (!previous && managed(owner.name)) {
       previous = { token: Symbol(), instanceId: owner.instanceId, name: owner.name, socket: original,
-        databaseToken: registered, session: owner.session, attempts: 0, suspended: false, recovering: false, nextAt: 0 };
+        databaseToken: registered, session: owner.session, attempts: 0, suspended: false, recovering: false, nextAt: 0,
+        creationOperation: expected.operationId, creationEpoch: expected.connectEpoch };
       admissionSockets.set(service, previous);
       expected = rollbackOwner = lifecycleCapture(service, original, true);
     }
@@ -1033,7 +1057,7 @@ function installRoutes(router, monitor, guard, repository) {
 
 module.exports = { managed, isGroup, groupLike, participant, participants, observeDecrypted, observeNotification, take, groupEventPayload,
   lifecycleCapture, lifecycleCurrent, lifecycleCheck, lifecycleAwait, persistLifecycle, cancelLifecycle, scheduleLifecycle,
-  connectLifecycle, connectOwner, connectCheck, connectAwait, manualOwner, trackRecovery, startupFailure, manualLifecycle, cleanupLifecycle, staleLifecycle, controlConnect,
+  connectLifecycle, connectOwner, connectCheck, connectAwait, manualOwner, trackRecovery, startupFailure, manualLifecycle, cleanupLifecycle, staleLifecycle, controlConnect, operationCheck, operationAwait,
   installAdmissionSocket, recordSuspension, restoreSuspension, suspensionMetadata, beforeConnect, recoverAdmission, storageHealth,
   signalDiagnostic,
   bindSignalJob,

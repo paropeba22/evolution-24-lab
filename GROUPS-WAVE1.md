@@ -6,6 +6,8 @@ Final N1 lifecycle correction: all native status/cleanup/reconnect callbacks are
 
 Residual R1/R2 correction resolves committed-but-uncertain registration before manual cleanup and fences Chatwoot lifecycle commands across awaits. The final targeted audit also fences the settings websocket restart. See [reproductions, ownership outcomes, regression results and runtime gates](GROUPS-WAVE1-RESIDUAL-LIFECYCLE.md).
 
+R3 captures profile/privacy operation authority before awaits and passes it through awaited reload. The same-class audit also fences delayed instance creation and startup failure handling. See [R3 reproductions, regressions and runtime gates](GROUPS-WAVE1-R3-LIFECYCLE.md) and [the complete lifecycle call inventory](GROUPS-WAVE1-R3-LIFECYCLE-AUDIT.md). APP remains frozen.
+
 ## Routing invariant
 
 Managed `nexi-wa-` group traffic terminates before placeholder/history requests, transcription, customer persistence, Chatwoot, every chatbot dispatcher (including n8n), generic webhook/event transports or financial interpretation. Storage or proof failure never permits fallback. Ordinary direct paths and accepted Financial Delivery/identity patches remain present. Unmanaged group traffic retains its transport, with the rc13 participant adapter corrected to GroupParticipant objects.

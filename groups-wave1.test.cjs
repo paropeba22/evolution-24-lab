@@ -32,7 +32,7 @@ const sender = '5511999999999@s.whatsapp.net', lid = '100000000000001@lid';
 const creds = { me: { id: '5500000000000:1@s.whatsapp.net', lid: '200000000000001@lid' },
   registrationId: 1, signedIdentityKey: { public: Buffer.alloc(32, 7) } };
 const session = identity.sessionFingerprint(creds);
-let scratch, sources, ts, acceptedSources, acceptedGroups, deltaSources, deltaGroups, lifecycleSources, lifecycleGroups, residualSources, residualGroups;
+let scratch, sources, ts, acceptedSources, acceptedGroups, deltaSources, deltaGroups, lifecycleSources, lifecycleGroups, residualSources, residualGroups, profileSources, profileGroups;
 
 before(() => {
   ts = require(require.resolve('typescript', { paths: [__dirname, upstream] }));
@@ -123,6 +123,22 @@ before(() => {
       { cwd: __dirname, encoding: 'utf8' }), reviewed.filename);
     residualGroups = reviewed.exports;
   }
+  if (available) {
+    const profileRoot = path.join(scratch, 'profile-reviewed');
+    for (const file of sourceFiles) {
+      const target = path.join(profileRoot, file); fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.copyFileSync(path.join(scratch, file), target);
+    }
+    const script = path.join(scratch, 'profile-reviewed-patch.mjs');
+    fs.writeFileSync(script, execFileSync('git', ['show', '17896c187c891bb437df353840561f17010d7ce4:patch-groups-source.mjs'], { cwd: __dirname }));
+    execFileSync(process.execPath, [script, profileRoot]);
+    profileSources = Object.fromEntries(sourceFiles.map(file => [file, fs.readFileSync(path.join(profileRoot, file), 'utf8')]));
+    const Module = require('node:module'), reviewed = new Module(path.join(__dirname, 'reviewed-profile.cjs'), module);
+    reviewed.filename = path.join(__dirname, 'reviewed-profile.cjs'); reviewed.paths = module.paths;
+    reviewed._compile(execFileSync('git', ['show', '17896c187c891bb437df353840561f17010d7ce4:nexi-groups.cjs'],
+      { cwd: __dirname, encoding: 'utf8' }), reviewed.filename);
+    profileGroups = reviewed.exports;
+  }
   execFileSync(process.execPath, [path.join(__dirname, 'patch-groups-source.mjs'), scratch, '--snapshot']);
   sources = Object.fromEntries(sourceFiles.map(file => [file, fs.readFileSync(path.join(scratch, file), 'utf8')]));
 });
@@ -143,12 +159,16 @@ function nativeLifecycle(helper, code, extra = {}) {
     lifecycleMethod(provider, '  private async connectionUpdate(', '  private async getMessage('),
     lifecycleMethod(provider, '  public async connectToWhatsapp(', '  public async reloadConnection('),
     lifecycleMethod(provider, '  public async reloadConnection(', '  private readonly chatHandle'),
-    lifecycleMethod(provider, '  public async logoutInstance()', '  public async getProfileName()')
+    lifecycleMethod(provider, '  public async logoutInstance()', '  public async getProfileName()'),
+    lifecycleMethod(provider, '  public async updatePrivacySettings(', '  public async fetchBusinessProfile('),
+    lifecycleMethod(provider, '  public async updateProfilePicture(', '  public async blockUser(')
   ].join('\n');
   const dependencies = { require: () => helper, Events: new Proxy({}, { get: (_t, key) => key }),
     DisconnectReason: { loggedOut: 401, forbidden: 403, badSession: 500, connectionClosed: 428 },
     BaileysStartupService: { STREAM_515_RECONNECT_GRACE_MS: 30000 },
-    InternalServerErrorException: class extends Error {}, delay: async () => {},
+    InternalServerErrorException: class extends Error {}, BadRequestException: class extends Error {}, delay: async () => {},
+    isURL: value => String(value).startsWith('https://'), isBase64: () => true,
+    axios: { get: async () => ({ data: Buffer.from('synthetic-picture') }) },
     qrcode: { toDataURL: (_qr, _opts, callback) => callback(null, 'synthetic-base64') },
     qrcodeTerminal: { generate() {} }, ...extra };
   return new (new Function(...Object.keys(dependencies), ts.transpileModule(
@@ -242,6 +262,336 @@ function pause() {
   const blocked = new Promise(resolve => { release = resolve; });
   return { waiting, release, enter: async () => { entered(); await blocked; } };
 }
+
+const privacyMethods = ['updateReadReceiptsPrivacy', 'updateProfilePicturePrivacy', 'updateStatusPrivacy',
+  'updateOnlinePrivacy', 'updateLastSeenPrivacy', 'updateGroupsAddPrivacy'];
+const profileOperations = ['updatePrivacySettings', 'updateProfilePicture', 'removeProfilePicture'];
+async function profileFixture(helper, code, options = {}) {
+  const f = await lifecycleFixture(helper, code, options), reloads = [], mutations = [];
+  const install = f.install;
+  f.install = async label => {
+    const socket = await install(label);
+    for (const method of [...privacyMethods, 'updateProfilePicture', 'removeProfilePicture']) {
+      socket[method] = async (...args) => { mutations.push({ label, method, args }); };
+    }
+    return socket;
+  };
+  f.subject.createClient = async () => {
+    if (!await helper.beforeConnect(f.subject)) return f.subject.client;
+    f.subject.endSession = false;
+    return f.install('S' + f.sockets.length);
+  };
+  const reload = f.subject.reloadConnection.bind(f.subject);
+  f.subject.reloadConnection = (...args) => {
+    const task = reload(...args); reloads.push({ args, task }); task.catch(() => {}); return task;
+  };
+  await f.install('A');
+  const invoke = operation => f.subject[operation](operation === 'updatePrivacySettings'
+    ? { readreceipts: 'all', profile: 'all', status: 'all', online: 'all', last: 'all', groupadd: 'all' }
+    : operation === 'updateProfilePicture' ? 'c3ludGhldGljLXBpY3R1cmU=' : undefined);
+  return { ...f, reloads, mutations, invoke };
+}
+
+test('R3 historical reproduction: all three actual profile/privacy methods adopt B after an A await and build C', async t => {
+  if (!profileSources) return t.skip('reviewed Git history unavailable');
+  for (const operation of profileOperations) {
+    const f = await profileFixture(profileGroups, profileSources), p = pause();
+    const method = operation === 'updatePrivacySettings' ? privacyMethods[0] : operation;
+    f.subject.client[method] = p.enter;
+    const pending = f.invoke(operation);
+    await p.waiting; await f.install('B'); const tokenB = f.row.nexiGroupsSocketOwner;
+    p.release(); assert.equal((await pending).update, 'success');
+    await Promise.all(f.reloads.map(value => value.task));
+    assert.equal(f.reloads.length, 1); assert.equal(f.sockets.length, 3);
+    assert.notEqual(f.row.nexiGroupsSocketOwner, tokenB); assert.notEqual(f.subject.client.label, 'B');
+    if (operation === 'updatePrivacySettings') assert.ok(f.mutations.some(value => value.label === 'B'));
+  }
+});
+
+test('R3 historical strongest reproduction: profile await survives actual Chatwoot manual disconnect and resurrects on restart', async t => {
+  if (!profileSources) return t.skip('reviewed Git history unavailable');
+  const f = await profileFixture(profileGroups, profileSources), p = pause(); f.subject.client.removeProfilePicture = p.enter;
+  f.row.disconnectionObject = 'nexi_groups_admission_suspended';
+  const pending = f.invoke('removeProfilePicture'); await p.waiting;
+  const cw = chatwootCommandFixture(profileGroups, profileSources, f);
+  await cw.subject.receiveWebhook(cw.instance, cw.body);
+  assert.equal(f.row.disconnectionObject, 'nexi_socket_manual_close'); assert.equal(f.subject.client.ws.isOpen, false);
+  p.release(); await pending; await Promise.all(f.reloads.map(value => value.task));
+  assert.equal(f.sockets.length - 1, 1);
+  await f.subject.connectionUpdate({ connection: 'open' }); assert.equal(f.row.connectionStatus, 'open');
+  const restarted = await lifecycleFixture(profileGroups, profileSources); Object.assign(restarted.row, f.row);
+  const monitor = nativeMonitor(profileGroups, profileSources, restarted.subject);
+  await monitor.setInstance({ instanceId: restarted.subject.instanceId, instanceName: restarted.subject.instance.name,
+    integration: 'baileys', connectionStatus: f.row.connectionStatus, ...profileGroups.suspensionMetadata(f.row) });
+  assert.equal(restarted.sockets.length, 1);
+});
+
+for (const operation of profileOperations) {
+  test(`R3 ${operation}: actual mutation await cannot adopt or replace B; original context and timers stay intact`, async () => {
+    const f = await profileFixture(groups, sources), p = pause();
+    const method = operation === 'updatePrivacySettings' ? privacyMethods[0] : operation;
+    f.subject.client[method] = p.enter;
+    const pending = f.invoke(operation), rejected = assert.rejects(pending, error => error.code === 'NEXI_SOCKET_LIFECYCLE_STALE');
+    await p.waiting; await f.install('B');
+    const ownerB = groups.lifecycleCapture(f.subject), saved = structuredClone(f.row);
+    const timer = groups.scheduleLifecycle(ownerB, async () => {}, 100000);
+    try {
+      p.release(); await rejected;
+      assert.equal(f.subject.client.label, 'B'); assert.equal(f.subject.client.ws.isOpen, true);
+      assert.equal(f.sockets.length, 2); assert.deepEqual(f.row, saved); assert.equal(f.reloads.length, 0);
+      assert.ok(ownerB.owner.timers.has(timer)); assert.ok(!f.mutations.some(value => value.label === 'B'));
+      assert.ok(!f.effects.includes('B.ws')); assert.ok(!f.effects.includes('B.end'));
+    } finally { groups.cancelLifecycle(ownerB); }
+  });
+
+  test(`R3 ${operation}: manual Chatwoot disconnect wins over pending mutation; restart has zero sockets`, async () => {
+    const f = await profileFixture(groups, sources), p = pause();
+    f.row.disconnectionObject = 'nexi_groups_admission_suspended';
+    const method = operation === 'updatePrivacySettings' ? privacyMethods[0] : operation;
+    f.subject.client[method] = p.enter;
+    const pending = f.invoke(operation), rejected = assert.rejects(pending, error => error.code === 'NEXI_SOCKET_LIFECYCLE_STALE');
+    await p.waiting;
+    const cw = chatwootCommandFixture(groups, sources, f); await cw.subject.receiveWebhook(cw.instance, cw.body);
+    assert.equal(f.row.disconnectionObject, 'nexi_socket_manual_close'); assert.equal(f.row.connectionStatus, 'close');
+    const manual = structuredClone(f.row);
+    p.release(); await rejected;
+    assert.equal(f.reloads.length, 0); assert.equal(f.sockets.length - 1, 0); assert.deepEqual(f.row, manual);
+    await f.subject.connectionUpdate({ connection: 'open' });
+    await groups.recoverAdmission(f.subject, Date.now() + 600000); assert.deepEqual(f.row, manual);
+    const restarted = await lifecycleFixture(groups, sources); Object.assign(restarted.row, f.row);
+    const monitor = nativeMonitor(groups, sources, restarted.subject);
+    await monitor.setInstance({ instanceId: restarted.subject.instanceId, instanceName: restarted.subject.instance.name,
+      integration: 'baileys', connectionStatus: f.row.connectionStatus, ...groups.suspensionMetadata(f.row) });
+    await groups.recoverAdmission(restarted.subject, Date.now() + 600000); assert.equal(restarted.sockets.length, 0);
+  });
+
+  test(`R3 ${operation}: current-owner mutation awaits reload and yields one live owned socket`, async () => {
+    const f = await profileFixture(groups, sources), captured = groups.lifecycleCapture(f.subject);
+    const result = await f.invoke(operation);
+    assert.equal(result.update, 'success'); assert.equal(f.reloads.length, 1);
+    assert.equal(f.reloads[0].args[0].socket, captured.socket); assert.equal(f.reloads[0].args[0].token, captured.token);
+    assert.equal(f.reloads[0].args[0].connectEpoch, captured.connectEpoch);
+    assert.equal(f.sockets.length, 2); assert.equal(f.sockets.filter(value => value.ws.isOpen).length, 1);
+    assert.equal(f.subject.client.label, 'S1'); assert.ok(f.mutations.length > 0);
+    assert.ok(f.mutations.every(value => value.label === 'A'));
+    await f.subject.connectionUpdate({ connection: 'open' }); assert.equal(f.row.connectionStatus, 'open');
+  });
+
+  test(`R3 ${operation}: deleted row, foreign DB owner, epoch-only cancellation and monitor removal cannot grant reload authority`, async () => {
+    for (const outcome of ['deleted', 'foreign', 'epoch', 'removed']) {
+      const f = await profileFixture(groups, sources), p = pause();
+      const method = operation === 'updatePrivacySettings' ? privacyMethods[0] : operation;
+      f.subject.client[method] = p.enter;
+      const monitor = nativeMonitor(groups, sources, f.subject); groups.trackRecovery(monitor, f.subject, f.subject.instance.name);
+      const pending = f.invoke(operation), rejected = assert.rejects(pending, error => error.code === 'NEXI_SOCKET_LIFECYCLE_STALE');
+      await p.waiting;
+      if (outcome === 'deleted') f.subject.prismaRepository.instance.findUnique = async () => null;
+      if (outcome === 'foreign') Object.assign(f.row, { nexiGroupsSocketOwner: 'foreign-newer-owner', connectionStatus: 'open', disconnectionObject: 'foreign-state' });
+      if (outcome === 'epoch') groups.lifecycleCapture(f.subject).owner.connectEpoch = 1;
+      if (outcome === 'removed') {
+        const handlers = {}; monitor.eventEmitter = { on: (event, handler) => { handlers[event] = handler; } }; monitor.removeInstance();
+        monitor.configService = { get: () => ({ ENABLED: false }) };
+        for (const key of ['chat', 'contact', 'messageUpdate', 'message', 'webhook', 'chatwoot', 'proxy', 'rabbitmq', 'nats', 'sqs', 'integrationSession', 'typebot', 'websocket', 'setting', 'label']) {
+          f.subject.prismaRepository[key] ||= {}; f.subject.prismaRepository[key].deleteMany = async () => {};
+        }
+        await handlers['remove.instance'](f.subject.instance.name);
+        assert.ok(f.effects.includes('instance.delete')); assert.equal(monitor.waInstances[f.subject.instance.name], undefined);
+      }
+      const saved = structuredClone(f.row); p.release(); await rejected;
+      assert.equal(f.reloads.length, 0); assert.equal(f.sockets.length, 1); assert.deepEqual(f.row, saved);
+      if (outcome === 'foreign') { assert.equal(f.row.nexiGroupsSocketOwner, 'foreign-newer-owner'); assert.ok(!f.effects.includes('A.end')); }
+    }
+  });
+}
+
+test('R3 privacy revalidates all six actual remote awaits before any later mutation or reload', async () => {
+  for (const method of privacyMethods) {
+    const f = await profileFixture(groups, sources), p = pause(); f.subject.client[method] = p.enter;
+    const pending = f.invoke('updatePrivacySettings'), rejected = assert.rejects(pending, error => error.code === 'NEXI_SOCKET_LIFECYCLE_STALE');
+    await p.waiting; await f.install('B'); const mutations = f.mutations.length; p.release(); await rejected;
+    assert.equal(f.mutations.length, mutations); assert.equal(f.reloads.length, 0); assert.equal(f.sockets.length, 2);
+  }
+});
+
+test('R3 actual profile download await cannot mutate replacement; current download still mutates A and awaits reload', async () => {
+  for (const stale of [true, false]) {
+    const p = pause(), f = await profileFixture(groups, sources, { extra: { axios: { get: async () => { await p.enter(); return { data: Buffer.from('synthetic') }; } } } });
+    const pending = f.subject.updateProfilePicture('https://synthetic.example.test/picture');
+    const result = pending.then(value => ({ value }), error => ({ error }));
+    await p.waiting; if (stale) await f.install('B'); p.release(); const completed = await result;
+    if (stale) { assert.equal(completed.error.code, 'NEXI_SOCKET_LIFECYCLE_STALE'); assert.equal(f.mutations.length, 0); assert.equal(f.reloads.length, 0); assert.equal(f.subject.client.label, 'B'); }
+    else { assert.equal(completed.value.update, 'success'); assert.equal(f.mutations[0].label, 'A'); assert.equal(f.reloads.length, 1); }
+  }
+});
+
+test('R3 reload rejects stale original context before construction and profile callers await real reload rejection', async () => {
+  const f = await profileFixture(groups, sources), original = groups.lifecycleCapture(f.subject);
+  await f.install('B'); const saved = structuredClone(f.row);
+  await assert.rejects(f.subject.reloadConnection(original), error => error.code === 'NEXI_SOCKET_LIFECYCLE_STALE');
+  assert.equal(f.sockets.length, 2); assert.deepEqual(f.row, saved); assert.equal(f.subject.client.ws.isOpen, true);
+  for (const operation of profileOperations) {
+    const current = await profileFixture(groups, sources);
+    current.subject.createClient = async () => { throw new Error('synthetic actual reload construction failure'); };
+    await assert.rejects(current.invoke(operation), /Error (updating|removing)/);
+    await assert.rejects(current.reloads[0].task, /reload construction failure/);
+    assert.equal(current.reloads.length, 1); assert.equal(current.sockets.length, 1);
+  }
+});
+
+async function creationFixture(helper, code) {
+  const f = await lifecycleFixture(helper, code), p = pause();
+  const method = lifecycleMethod(code['src/api/controllers/instance.controller.ts'], '  public async createInstance(', '  public async connectToWhatsapp(');
+  const dependencies = { require: () => helper, channelController: { init: () => f.subject },
+    v4: () => f.subject.instanceId, eventManager: { setInstance: async () => {} },
+    Integration: { WHATSAPP_BAILEYS: 'baileys', WHATSAPP_BUSINESS: 'business', EVOLUTION: 'evo' },
+    BadRequestException: class extends Error {}, isArray: Array.isArray,
+    isURL: value => String(value).startsWith('https://'), delay: async () => {}, Events: { INSTANCE_CREATE: 'INSTANCE_CREATE' } };
+  const Controller = new Function(...Object.keys(dependencies), ts.transpileModule('class Controller { ' + method + ' }; return Controller;',
+    { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText)(...Object.values(dependencies));
+  const controller = new Controller(), monitor = { waInstances: {}, saveInstance: async () => {}, delInstanceTime() {},
+    deleteInstance: name => { delete monitor.waInstances[name]; f.effects.push('monitor.delete'); } };
+  Object.assign(controller, { waMonitor: monitor, settingsService: { create: p.enter }, configService: f.subject.configService,
+    prismaRepository: f.subject.prismaRepository, logger: f.subject.logger });
+  f.subject.instanceName = f.subject.instance.name; f.subject.connectionStatus = { state: 'close' }; f.subject.qrCode = {};
+  const invoke = () => controller.createInstance({ instanceName: f.subject.instance.name, integration: 'baileys', qrcode: true, token: 'synthetic' });
+  return { ...f, controller, monitor, p, invoke };
+}
+
+test('R3 same-class historical createInstance: settings await permits late connect to adopt A after manual disconnect', async t => {
+  if (!profileSources) return t.skip('reviewed Git history unavailable');
+  const f = await creationFixture(profileGroups, profileSources), pending = f.invoke();
+  await f.p.waiting; await f.subject.connectToWhatsapp();
+  f.row.disconnectionObject = 'nexi_groups_admission_suspended';
+  const cw = chatwootCommandFixture(profileGroups, profileSources, f);
+  await cw.subject.receiveWebhook(cw.instance, cw.body); assert.equal(f.row.connectionStatus, 'close');
+  f.p.release(); await pending;
+  assert.equal(f.sockets.length, 2); assert.equal(f.subject.client.ws.isOpen, true);
+});
+
+test('R3 same-class historical startup failure adopts B after its original connection await fails', async t => {
+  if (!profileSources) return t.skip('reviewed Git history unavailable');
+  const f = await lifecycleFixture(profileGroups, profileSources), p = pause(), create = f.subject.createClient;
+  Object.assign(f.row, { connectionStatus: 'connecting', disconnectionObject: 'nexi_groups_admission_suspended' });
+  f.subject.createClient = async () => { await create(); await p.enter(); throw new Error('synthetic late local initialization failure'); };
+  const monitor = nativeMonitor(profileGroups, profileSources, f.subject);
+  const pending = monitor.setInstance({ instanceId: f.subject.instanceId, instanceName: f.subject.instance.name,
+    integration: 'baileys', connectionStatus: 'connecting', ...profileGroups.suspensionMetadata(f.row) });
+  await p.waiting; await f.install('B'); f.row.connectionStatus = 'open'; p.release(); await pending;
+  assert.equal(f.subject.client.label, 'B'); assert.equal(f.subject.client.ws.isOpen, false); assert.ok(f.effects.includes('B.end'));
+  assert.equal(f.row.connectionStatus, 'connecting');
+});
+
+test('R3 same-class actual startup failure retains original attempt authority and cannot suspend replacement B', async () => {
+  const f = await lifecycleFixture(groups, sources), p = pause(), create = f.subject.createClient;
+  Object.assign(f.row, { connectionStatus: 'connecting', disconnectionObject: 'nexi_groups_admission_suspended' });
+  f.subject.createClient = async () => { await create(); await p.enter(); throw new Error('synthetic late local initialization failure'); };
+  const monitor = nativeMonitor(groups, sources, f.subject);
+  const pending = monitor.setInstance({ instanceId: f.subject.instanceId, instanceName: f.subject.instance.name,
+    integration: 'baileys', connectionStatus: 'connecting', ...groups.suspensionMetadata(f.row) });
+  await p.waiting; await f.install('B'); f.row.connectionStatus = 'open'; const saved = structuredClone(f.row);
+  p.release(); await pending;
+  assert.equal(f.subject.client.label, 'B'); assert.equal(f.subject.client.ws.isOpen, true); assert.ok(!f.effects.includes('B.end'));
+  assert.deepEqual(f.row, saved); assert.equal(monitor.waInstances[f.subject.instance.name], f.subject);
+});
+
+test('R3 same-class actual createInstance settings await retains original authority; replacement/manual close cannot be adopted or deleted', async () => {
+  for (const outcome of ['replacement', 'manual', 'foreign-service', 'current']) {
+    const f = await creationFixture(groups, sources), pending = f.invoke();
+    const result = pending.then(value => ({ value }), error => ({ error }));
+    await f.p.waiting;
+    if (outcome !== 'current') await f.subject.connectToWhatsapp();
+    if (outcome === 'manual') {
+      f.row.disconnectionObject = 'nexi_groups_admission_suspended';
+      const cw = chatwootCommandFixture(groups, sources, f); await cw.subject.receiveWebhook(cw.instance, cw.body);
+    }
+    const foreign = { marker: 'foreign-service' };
+    if (outcome === 'foreign-service') f.monitor.waInstances[f.subject.instance.name] = foreign;
+    const saved = structuredClone(f.row);
+    f.p.release(); const completed = await result;
+    if (outcome === 'current') { assert.equal(completed.value.instance.instanceName, f.subject.instance.name); assert.equal(f.sockets.length, 1); }
+    else {
+      assert.equal(completed.error.code, 'NEXI_SOCKET_LIFECYCLE_STALE'); assert.equal(f.sockets.length, 1); assert.deepEqual(f.row, saved);
+      assert.ok(!f.effects.includes('monitor.delete'));
+      assert.equal(f.monitor.waInstances[f.subject.instance.name], outcome === 'foreign-service' ? foreign : f.subject);
+      assert.equal(f.subject.client.ws.isOpen, outcome !== 'manual');
+    }
+  }
+});
+
+test('R3 actual reload initialization await cannot lose its original owner to replacement or manual intent', async () => {
+  for (const outcome of ['replacement', 'manual']) {
+    const f = await profileFixture(groups, sources), p = pause(), create = f.subject.createClient;
+    f.subject.createClient = async () => { await p.enter(); return create(); };
+    const pending = f.invoke('removeProfilePicture'), rejected = assert.rejects(pending, error => error.code === 'NEXI_SOCKET_LIFECYCLE_STALE');
+    await p.waiting;
+    if (outcome === 'replacement') await f.install('B');
+    else {
+      f.row.disconnectionObject = 'nexi_groups_admission_suspended';
+      // The native logout cancellation starts immediately and waits for the
+      // already-running reload registration task. Release that task afterward.
+      const logout = f.subject.logoutInstance();
+      await new Promise(resolve => setImmediate(resolve)); p.release(); await rejected; await logout;
+      assert.equal(f.row.disconnectionObject, 'nexi_socket_manual_close'); assert.equal(f.sockets.length, 1);
+      continue;
+    }
+    const saved = structuredClone(f.row); p.release(); await rejected;
+    assert.equal(f.sockets.length, 2); assert.equal(f.subject.client.ws.isOpen, true); assert.deepEqual(f.row, saved);
+  }
+});
+
+test('R3 legitimate explicit reconnect after manual close permits new current-owner profile operations', async () => {
+  const f = await profileFixture(groups, sources); f.row.disconnectionObject = 'nexi_groups_admission_suspended';
+  const cw = chatwootCommandFixture(groups, sources, f); await cw.subject.receiveWebhook(cw.instance, cw.body);
+  await f.subject.connectToWhatsapp(); await f.subject.connectionUpdate({ connection: 'open' });
+  assert.equal(f.row.connectionStatus, 'open');
+  assert.equal((await f.invoke('updatePrivacySettings')).update, 'success');
+});
+
+test('R3 same-class mechanical audit inventories transformed lifecycle calls and pins every residual reload to original authority', () => {
+  const methods = new Set(['reloadConnection', 'connectToWhatsapp', 'logout', 'end', 'close', 'connect', 'restart',
+    'lifecycleCapture', 'lifecycleCheck', 'lifecycleCurrent', 'lifecycleAwait', 'connectCheck', 'connectAwait',
+    'connectLifecycle', 'controlConnect', 'manualLifecycle', 'cleanupLifecycle', 'scheduleLifecycle',
+    'persistLifecycle', 'startupFailure', 'recoverAdmission', 'operationCheck', 'operationAwait']);
+  const inventory = [], runtime = { ...sources, 'nexi-groups.cjs': fs.readFileSync(path.join(__dirname, 'nexi-groups.cjs'), 'utf8') };
+  for (const [file, source] of Object.entries(runtime).filter(([file]) => file.endsWith('.ts') || file === 'nexi-groups.cjs')) {
+    const ast = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
+    const visit = node => {
+      const method = ts.isCallExpression(node) && (ts.isPropertyAccessExpression(node.expression)
+        ? node.expression.name.text : ts.isIdentifier(node.expression) ? node.expression.text : null);
+      if (methods.has(method)) {
+        let scope = node.parent;
+        while (scope && !((ts.isMethodDeclaration(scope) || ts.isFunctionDeclaration(scope)) && scope.name)) scope = scope.parent;
+        inventory.push({ file, method, scope: scope?.name?.getText(ast) || 'callback',
+          line: ast.getLineAndCharacterOfPosition(node.getStart(ast)).line + 1, call: node.getText(ast).replace(/\s+/g, ' ') });
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(ast);
+  }
+  const reloads = inventory.filter(value => value.method === 'reloadConnection');
+  assert.equal(reloads.length, 3); assert.ok(reloads.every(value => value.call === 'this.reloadConnection(nexiOperation)'));
+  for (const operation of profileOperations) {
+    const start = sources[baileysFile].indexOf(`  public async ${operation}(`);
+    const end = sources[baileysFile].indexOf('\n  public async ', start + 1);
+    const block = sources[baileysFile].slice(start, end);
+    assert.doesNotMatch(block, /this\.client/); assert.match(block, /await this\.reloadConnection\(nexiOperation\)/);
+    assert.ok(block.indexOf('lifecycleCapture(this)') < block.indexOf('await '));
+  }
+  const startup = lifecycleMethod(sources['src/api/services/monitor.service.ts'], '  private async setInstance(', '  private async loadInstancesFromRedis');
+  assert.match(startup, /startupFailure\(instance, nexiStartupOwner\)/); assert.match(startup, /controlConnect\(nexiStartupOwner\)/);
+  const creation = lifecycleMethod(sources['src/api/controllers/instance.controller.ts'], '  public async createInstance(', '  public async connectToWhatsapp(');
+  assert.match(creation, /controlConnect\(nexiCreationOwner, instanceData.number\)/);
+  assert.match(runtime['nexi-groups.cjs'], /const current = expected \|\| lifecycleCapture/);
+  assert.ok(inventory.some(value => value.method === 'logout')); assert.ok(inventory.some(value => value.method === 'end'));
+  const esbuild = require(require.resolve('esbuild', { paths: [__dirname, upstream] }));
+  const compiled = esbuild.transformSync('class Lifecycle { ' +
+    lifecycleMethod(sources[baileysFile], '  public async reloadConnection(', '  private readonly chatHandle') +
+    lifecycleMethod(sources[baileysFile], '  public async updatePrivacySettings(', '  public async fetchBusinessProfile(') +
+    lifecycleMethod(sources[baileysFile], '  public async updateProfilePicture(', '  public async blockUser(') + ' }',
+  { loader: 'ts', minify: true, target: 'node20' }).code;
+  for (const gate of ['operationCheck(', 'operationAwait(', 'nexi_socket_profile_reload']) assert.ok(compiled.includes(gate));
+  if (process.env.NEXI_GROUPS_AUDIT_OUTPUT) fs.writeFileSync(process.env.NEXI_GROUPS_AUDIT_OUTPUT, JSON.stringify(inventory, null, 2));
+});
 
 async function uncertainManualFixture(helper, code, { outcome = 'proposed', deletion = false, refundUncertain = false } = {}) {
   const f = await lifecycleFixture(helper, code); await f.install('A');
