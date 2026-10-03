@@ -32,7 +32,7 @@ const sender = '5511999999999@s.whatsapp.net', lid = '100000000000001@lid';
 const creds = { me: { id: '5500000000000:1@s.whatsapp.net', lid: '200000000000001@lid' },
   registrationId: 1, signedIdentityKey: { public: Buffer.alloc(32, 7) } };
 const session = identity.sessionFingerprint(creds);
-let scratch, sources, ts, acceptedSources, acceptedGroups, deltaSources, deltaGroups, lifecycleSources, lifecycleGroups, residualSources, residualGroups, profileSources, profileGroups, connectingSources, connectingGroups;
+let scratch, sources, ts, acceptedSources, acceptedGroups, deltaSources, deltaGroups, lifecycleSources, lifecycleGroups, residualSources, residualGroups, profileSources, profileGroups, connectingSources, connectingGroups, disconnectSources, disconnectGroups;
 
 before(() => {
   ts = require(require.resolve('typescript', { paths: [__dirname, upstream] }));
@@ -153,6 +153,21 @@ before(() => {
     reviewed.filename = path.join(__dirname, 'reviewed-connecting.cjs'); reviewed.paths = module.paths;
     reviewed._compile(execFileSync('git', ['show', `${reviewedRevision}:nexi-groups.cjs`], { cwd: __dirname, encoding: 'utf8' }), reviewed.filename);
     connectingGroups = reviewed.exports;
+  }
+  if (available) {
+    const root = path.join(scratch, 'disconnect-reviewed'), reviewedRevision = 'afa0bf2c995574f6f7d484fe9be92f900e2ac6cb';
+    for (const file of sourceFiles) {
+      const target = path.join(root, file); fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.copyFileSync(path.join(scratch, file), target);
+    }
+    const script = path.join(scratch, 'disconnect-reviewed-patch.mjs');
+    fs.writeFileSync(script, execFileSync('git', ['show', `${reviewedRevision}:patch-groups-source.mjs`], { cwd: __dirname }));
+    execFileSync(process.execPath, [script, root]);
+    disconnectSources = Object.fromEntries(sourceFiles.map(file => [file, fs.readFileSync(path.join(root, file), 'utf8')]));
+    const Module = require('node:module'), reviewed = new Module(path.join(__dirname, 'reviewed-disconnect.cjs'), module);
+    reviewed.filename = path.join(__dirname, 'reviewed-disconnect.cjs'); reviewed.paths = module.paths;
+    reviewed._compile(execFileSync('git', ['show', `${reviewedRevision}:nexi-groups.cjs`], { cwd: __dirname, encoding: 'utf8' }), reviewed.filename);
+    disconnectGroups = reviewed.exports;
   }
   execFileSync(process.execPath, [path.join(__dirname, 'patch-groups-source.mjs'), scratch, '--snapshot']);
   sources = Object.fromEntries(sourceFiles.map(file => [file, fs.readFileSync(path.join(scratch, file), 'utf8')]));
@@ -801,6 +816,168 @@ function chatwootCommandFixture(helper, code, f, content = '/disconnect') {
   return { subject, body, instance: { instanceName: f.subject.instance.name, instanceId: f.subject.instanceId } };
 }
 
+// Execute pinned logout -> sendNode -> sendRawMessage and end, including the
+// non-OPEN send veto before native end. Network encoding/send alone is synthetic.
+function pinnedLogout(socket, effects, { sendError } = {}) {
+  const root = path.dirname(require.resolve('baileys/package.json', { paths: [__dirname, upstream] }));
+  const source = fs.readFileSync(path.join(root, 'lib/Socket/socket.js'), 'utf8');
+  const send = source.slice(source.indexOf('    const sendRawMessage ='), source.indexOf('    /**\n     * Wait for a message'));
+  const end = source.slice(source.indexOf('    const end = async'), source.indexOf('    const waitForSocketOpen ='));
+  const logout = source.slice(source.indexOf('    const logout = async'), source.indexOf('    const requestPairingCode ='));
+  assert.match(send, /if \(!ws.isOpen\)/); assert.match(logout, /remove-companion-device/);
+  assert.ok(logout.indexOf('await sendNode') < logout.indexOf('void end'));
+  const ev = new (require('node:events').EventEmitter)(); ev.destroy = () => effects.push('native.ev.destroy');
+  const deps = { ws: socket.ws, authState: { creds }, S_WHATSAPP_NET: 's.whatsapp.net', generateMessageTag: () => 'synthetic-tag',
+    Boom: require(require.resolve('@hapi/boom', { paths: [__dirname, upstream] })).Boom,
+    DisconnectReason: { connectionClosed: 428, loggedOut: 401 },
+    encodeBinaryNode: node => { effects.push(['native.logout.attempt', socket.label, node.content[0].tag]); return Buffer.from('synthetic'); },
+    binaryNodeToString: () => 'synthetic', noise: { encodeFrame: data => data }, connectTimeoutMs: 100,
+    promiseTimeout: (_ms, work) => new Promise(work), sendPromise: async function () {
+      if (sendError) throw sendError; effects.push('native.logout.sent');
+    },
+    logger: Object.fromEntries(['trace', 'info', 'error'].map(level => [level, () => {}])),
+    keepAliveReq: undefined, qrTimer: undefined, signalRepository: { close: () => effects.push('native.signal.close') },
+    socketEndHandlers: [], ev };
+  const native = new Function(...Object.keys(deps), 'let closed = false;\n' + send + end + logout + '\nreturn { logout, end };')(...Object.values(deps));
+  socket.logout = native.logout; socket.end = native.end;
+  return native;
+}
+
+async function assertManualRestartClosed(helper, code, f) {
+  const saved = structuredClone(f.row);
+  assert.equal(saved.connectionStatus, 'close'); assert.equal(saved.disconnectionObject, 'nexi_socket_manual_close');
+  await f.subject.connectionUpdate({ connection: 'open' }); await helper.recoverAdmission(f.subject, Date.now() + 600000);
+  assert.deepEqual(f.row, saved);
+  const restarted = await lifecycleFixture(helper, code); Object.assign(restarted.row, saved);
+  const monitor = nativeMonitor(helper, code, restarted.subject);
+  await monitor.setInstance({ instanceId: restarted.subject.instanceId, instanceName: restarted.subject.instance.name,
+    integration: 'baileys', connectionStatus: saved.connectionStatus, ...helper.suspensionMetadata(saved) });
+  await helper.recoverAdmission(restarted.subject, Date.now() + 600000); assert.equal(restarted.sockets.length, 0);
+}
+
+test('R5 historical reproduction: pinned CONNECTING logout fails before end, ordinary DB remains open and restart resurrects', async t => {
+  if (!disconnectSources) return t.skip('reviewed Git history unavailable');
+  const f = await lifecycleFixture(disconnectGroups, disconnectSources, { socketStates: { A: 'CONNECTING' } }); await f.install('A');
+  pinnedLogout(f.subject.client, f.effects);
+  const cw = chatwootCommandFixture(disconnectGroups, disconnectSources, f);
+  assert.deepEqual(await cw.subject.receiveWebhook(cw.instance, cw.body), { message: 'bot' });
+  assert.equal(f.subject.client.ws.isConnecting, true); assert.equal(f.row.connectionStatus, 'open');
+  assert.equal(f.row.disconnectionObject, null); assert.ok(!f.effects.includes('native.signal.close'));
+  const restarted = await lifecycleFixture(disconnectGroups, disconnectSources); Object.assign(restarted.row, f.row);
+  const monitor = nativeMonitor(disconnectGroups, disconnectSources, restarted.subject);
+  await monitor.setInstance({ instanceId: restarted.subject.instanceId, instanceName: restarted.subject.instance.name,
+    integration: 'baileys', connectionStatus: f.row.connectionStatus });
+  assert.equal(restarted.sockets.length, 1);
+});
+
+test('R5 plain CONNECTING disconnect persists manual intent, ends exact socket and blocks late OPEN/restart without suspension', async () => {
+  const f = await lifecycleFixture(groups, sources, { socketStates: { A: 'CONNECTING' } }); await f.install('A');
+  pinnedLogout(f.subject.client, f.effects);
+  const owner = groups.lifecycleCapture(f.subject, f.subject.client, true);
+  groups.scheduleLifecycle(owner, async () => { throw new Error('manual timer must not run'); }, 100000);
+  const cw = chatwootCommandFixture(groups, sources, f);
+  const result = await cw.subject.receiveWebhook(cw.instance, cw.body);
+  assert.deepEqual(result, { message: 'bot', lifecycle: 'disconnected', remoteLogout: 'transport_unavailable' });
+  assert.equal(f.subject.client.ws.isClosed, true); assert.equal(owner.owner.timers.size, 0); assert.equal(owner.owner.suspended, false);
+  assert.ok(f.effects.includes('native.signal.close')); assert.equal(f.effects.filter(v => Array.isArray(v) && v[0] === 'native.logout.attempt').length, 1);
+  assert.ok(!f.effects.includes('native.logout.sent')); assert.equal(f.sockets.length, 1);
+  await assertManualRestartClosed(groups, sources, f);
+});
+
+for (const operation of profileOperations) test(`R5 ${operation}: actual CONNECTING reload plus pinned failing logout ends socket; late OPEN/restart cannot resurrect`, async () => {
+  const f = await profileFixture(groups, sources, { socketStates: { A: 'OPEN', default: 'CONNECTING' } });
+  const p = pause(), find = f.subject.prismaRepository.instance.findUnique; let held = false;
+  f.subject.prismaRepository.instance.findUnique = async args => {
+    if (!held && f.subject.client.label === 'S1') { held = true; await p.enter(); }
+    return find(args);
+  };
+  const pending = f.invoke(operation), rejected = assert.rejects(pending, error => error.code === 'NEXI_SOCKET_LIFECYCLE_STALE');
+  await p.waiting; assert.equal(f.row.disconnectionObject, null); assert.equal(f.subject.client.ws.isConnecting, true);
+  pinnedLogout(f.subject.client, f.effects); const cw = chatwootCommandFixture(groups, sources, f);
+  const manual = cw.subject.receiveWebhook(cw.instance, cw.body);
+  await new Promise(resolve => setImmediate(resolve)); p.release(); await rejected;
+  assert.equal((await manual).remoteLogout, 'transport_unavailable'); assert.equal(f.subject.client.ws.isClosed, true);
+  assert.equal(f.sockets.length, 2); assert.equal(f.reloads.length, 1); assert.ok(f.effects.includes('native.signal.close'));
+  await assertManualRestartClosed(groups, sources, f); assert.equal(f.sockets.length, 2);
+});
+
+test('R5 OPEN pinned protocol logout succeeds; CLOSING/CLOSED skip unsupported protocol work and remain manual', async () => {
+  for (const state of ['OPEN', 'CLOSING', 'CLOSED']) {
+    const f = await lifecycleFixture(groups, sources, { socketStates: { A: state } }); await f.install('A');
+    pinnedLogout(f.subject.client, f.effects); const cw = chatwootCommandFixture(groups, sources, f);
+    const result = await cw.subject.receiveWebhook(cw.instance, cw.body);
+    assert.equal(result.lifecycle, 'disconnected'); assert.equal(result.remoteLogout, state === 'OPEN' ? 'succeeded' : 'transport_unavailable');
+    assert.equal(f.effects.filter(v => Array.isArray(v) && v[0] === 'native.logout.attempt').length, state === 'OPEN' ? 1 : 0);
+    if (state === 'OPEN') assert.ok(f.effects.includes('native.logout.sent'));
+    assert.ok(f.effects.includes('native.signal.close'));
+    if (state === 'CLOSING') f.subject.client.ws.socket?.terminate();
+    assert.equal(f.subject.client.ws.isClosed, true); assert.equal(f.sockets.length, 1);
+    await assertManualRestartClosed(groups, sources, f);
+    assert.equal((await cw.subject.receiveWebhook(cw.instance, cw.body)).lifecycle, 'disconnected');
+    assert.equal(f.sockets.length, 1);
+  }
+});
+
+test('R5 failed native logout across replacement/foreign authority never tears down or persists over the newer owner', async () => {
+  for (const outcome of ['replacement', 'foreign', 'response_foreign']) {
+    const f = await lifecycleFixture(groups, sources, { socketStates: { A: 'CONNECTING', B: 'CONNECTING' } }); await f.install('A');
+    const native = pinnedLogout(f.subject.client, f.effects), p = pause();
+    f.subject.client.logout = async msg => { try { await native.logout(msg); } catch (error) { await p.enter(); throw error; } };
+    const cw = chatwootCommandFixture(groups, sources, f);
+    if (outcome === 'response_foreign') cw.subject.createBotMessage = p.enter;
+    const pending = cw.subject.receiveWebhook(cw.instance, cw.body);
+    await p.waiting;
+    let current, timer;
+    if (outcome === 'replacement') {
+      await f.install('B'); current = groups.lifecycleCapture(f.subject);
+      timer = groups.scheduleLifecycle(current, async () => {}, 100000);
+      Object.assign(f.row, { connectionStatus: 'open', disconnectionObject: null });
+    } else Object.assign(f.row, { nexiGroupsSocketOwner: 'foreign-newer-owner', connectionStatus: 'open', disconnectionObject: 'foreign-state' });
+    const saved = structuredClone(f.row), effects = f.effects.slice(); p.release();
+    assert.equal((await pending).lifecycle, 'superseded'); assert.deepEqual(f.row, saved); assert.deepEqual(f.effects, effects);
+    assert.equal(f.subject.client.ws.isConnecting, true); assert.equal(cw.subject.waMonitor.waInstances[f.subject.instance.name], f.subject);
+    if (current) { assert.ok(current.owner.timers.has(timer)); groups.cancelLifecycle(current); }
+  }
+});
+
+test('R5 manual persistence failure and lost CAS cannot report successful disconnect or protocol success', async () => {
+  for (const outcome of ['unavailable', 'foreign']) {
+    const f = await lifecycleFixture(groups, sources, { socketStates: { A: 'CONNECTING' } }); await f.install('A');
+    pinnedLogout(f.subject.client, f.effects);
+    if (outcome === 'unavailable') f.subject.prismaRepository.instance.updateMany = async () => { throw new Error('synthetic persistence unavailable'); };
+    else f.row.nexiGroupsSocketOwner = 'foreign-newer-owner';
+    const saved = structuredClone(f.row), cw = chatwootCommandFixture(groups, sources, f);
+    assert.equal((await cw.subject.receiveWebhook(cw.instance, cw.body)).lifecycle, outcome === 'unavailable' ? 'disconnect_failed' : 'superseded');
+    assert.deepEqual(f.row, saved); assert.equal(f.effects.filter(v => Array.isArray(v) && v[0] === 'native.logout.attempt').length, 0);
+    assert.ok(!f.effects.includes('native.signal.close'));
+  }
+});
+
+test('R5 other native send failure is reported separately from successful local shutdown without raw error logging', async () => {
+  const f = await lifecycleFixture(groups, sources, { socketStates: { A: 'OPEN' } }); await f.install('A');
+  const warnings = []; f.subject.logger.warn = code => warnings.push(code);
+  f.subject.logger.error = () => assert.fail('raw protocol error must not escape');
+  pinnedLogout(f.subject.client, f.effects, { sendError: new Error('synthetic private protocol failure') });
+  const cw = chatwootCommandFixture(groups, sources, f);
+  assert.deepEqual(await cw.subject.receiveWebhook(cw.instance, cw.body), { message: 'bot', lifecycle: 'disconnected', remoteLogout: 'failed' });
+  assert.deepEqual(warnings, ['nexi_socket_remote_logout_failed']); assert.equal(f.subject.client.ws.isClosed, true);
+  await assertManualRestartClosed(groups, sources, f);
+});
+
+test('R5 completion persistence failure after physical end remains an explicit failure, not successful disconnect', async () => {
+  const f = await lifecycleFixture(groups, sources, { socketStates: { A: 'CONNECTING' } }); await f.install('A');
+  pinnedLogout(f.subject.client, f.effects); const update = f.subject.prismaRepository.instance.updateMany; let writes = 0;
+  f.subject.prismaRepository.instance.updateMany = async args => {
+    if (args.data.connectionStatus === 'close' && !args.where.disconnectionObject && ++writes === 2)
+      throw new Error('synthetic completion persistence failure');
+    return update(args);
+  };
+  const cw = chatwootCommandFixture(groups, sources, f);
+  assert.equal((await cw.subject.receiveWebhook(cw.instance, cw.body)).lifecycle, 'disconnect_failed');
+  assert.equal(f.subject.client.ws.isClosed, true); assert.ok(f.effects.includes('native.signal.close'));
+  await assertManualRestartClosed(groups, sources, f);
+});
+
 test('R2 historical exact reproduction: actual Chatwoot disconnect await logs out and closes replacement B', async t => {
   if (!residualSources) return t.skip('reviewed Git history unavailable');
   const f = await lifecycleFixture(residualGroups, residualSources); await f.install('A');
@@ -905,7 +1082,7 @@ test('R2-B current-owner Chatwoot disconnect retains logout/close behavior and p
     const cw = chatwootCommandFixture(groups, sources, f, content), replies = [];
     cw.subject.createBotMessage = async (_instance, message) => replies.push(message);
     const result = await cw.subject.receiveWebhook(cw.instance, cw.body);
-    assert.equal(result.lifecycle, undefined);
+    assert.equal(result.lifecycle, 'disconnected'); assert.equal(result.remoteLogout, 'succeeded');
     assert.ok(f.effects.includes('A.logout')); assert.ok(f.effects.includes('A.ws'));
     assert.equal(f.subject.client.ws.isOpen, false); assert.equal(f.row.connectionStatus, 'close');
     assert.equal(f.row.disconnectionObject, 'nexi_socket_manual_close');

@@ -506,6 +506,7 @@ patch('src/api/integrations/chatbot/chatwoot/services/chatwoot.service.ts', sour
     const nexiControlOwner = nexiControlService && ${helper}.lifecycleCapture(nexiControlService, nexiControlService.client, true);
     const nexiBotCommand = body?.message_type === 'outgoing' &&
       body?.conversation?.meta?.sender?.identifier === '123456';
+    let nexiDisconnectStarted = false;
     const nexiCheckControl = () => { if (nexiBotCommand) ${helper}.lifecycleCheck(nexiControlOwner); };
     try {\n      await new Promise`);
     block = once(block, '      await new Promise((resolve) => setTimeout(resolve, 500));',
@@ -520,8 +521,13 @@ patch('src/api/integrations/chatbot/chatwoot/services/chatwoot.service.ts', sour
     block = once(block, '            await waInstance.connectToWhatsapp(number);',
       `            await ${helper}.controlConnect(nexiControlOwner, number);`);
     block = once(block, "          await this.createBotMessage(instance, msgLogout, 'incoming');\n\n          await waInstance?.client?.logout('Log out instance: ' + instance.instanceName);\n          await waInstance?.client?.ws?.close();",
-      `          await ${helper}.manualLifecycle(nexiControlOwner, async () => {
-            if (nexiControlOwner.owner) await ${helper}.cleanupLifecycle(nexiControlOwner, async () => {});
+      `          nexiDisconnectStarted = true;
+          const nexiDisconnectResult = await ${helper}.manualLifecycle(nexiControlOwner, async () => {
+            // Persist explicit manual intent even without a Groups suspension.
+            // Remote protocol logout is best-effort; local authority is not.
+            await ${helper}.cleanupLifecycle(nexiControlOwner, async repository =>
+              ${helper}.persistLifecycle(nexiControlOwner, { data: { connectionStatus: 'close',
+                disconnectionObject: 'nexi_socket_manual_close', disconnectionReasonCode: 401 } }, repository));
             // A pending response cannot claim successful disconnection before
             // the awaited control operation and ownership checks complete.
             try {
@@ -531,16 +537,48 @@ patch('src/api/integrations/chatbot/chatwoot/services/chatwoot.service.ts', sour
               ${helper}.lifecycleCheck(nexiControlOwner);
               this.logger.warn('nexi_socket_control_response_unavailable');
             }
-            await ${helper}.lifecycleAwait(nexiControlOwner, () => nexiControlOwner.socket?.logout('Log out instance: ' + instance.instanceName));
-            await ${helper}.lifecycleAwait(nexiControlOwner, () => nexiControlOwner.socket?.ws?.close());
-            if (nexiControlOwner.owner) await ${helper}.cleanupLifecycle(nexiControlOwner, async repository =>
-              ${helper}.persistLifecycle(nexiControlOwner, { data: { connectionStatus: 'close' } }, repository));
+            await ${helper}.cleanupLifecycle(nexiControlOwner, async () => {});
+            let nexiRemoteLogout = 'transport_unavailable';
+            if (nexiControlOwner.socket?.ws && nexiControlOwner.socket.ws.isClosed !== true && nexiControlOwner.socket.ws.isClosing !== true) {
+              try {
+                await ${helper}.lifecycleAwait(nexiControlOwner, () => nexiControlOwner.socket?.logout('Log out instance: ' + instance.instanceName));
+                nexiRemoteLogout = 'succeeded';
+              } catch (error) {
+                if (error?.code === 'NEXI_SOCKET_LIFECYCLE_STALE') throw error;
+                ${helper}.lifecycleCheck(nexiControlOwner);
+                nexiRemoteLogout = error?.output?.statusCode === 428 ? 'transport_unavailable' : 'failed';
+                this.logger.warn(nexiRemoteLogout === 'transport_unavailable'
+                  ? 'nexi_socket_remote_logout_transport_unavailable' : 'nexi_socket_remote_logout_failed');
+              }
+            }
+            // A failed logout must not skip local teardown. Re-prove DB owner
+            // after its await before touching only the captured physical socket.
+            await ${helper}.cleanupLifecycle(nexiControlOwner, async () => {});
+            // Native end is idempotent and also releases resources when the
+            // websocket is already closed; protocol success may have called it.
+            await ${helper}.lifecycleAwait(nexiControlOwner, () => nexiControlOwner.socket?.end(new Error('nexi_socket_manual_close')));
+            if (nexiControlOwner.socket?.ws?.isClosed !== true && nexiControlOwner.socket?.ws?.isClosing !== true)
+              await ${helper}.lifecycleAwait(nexiControlOwner, () => nexiControlOwner.socket?.ws?.close());
+            await ${helper}.cleanupLifecycle(nexiControlOwner, async repository =>
+              ${helper}.persistLifecycle(nexiControlOwner, { data: { connectionStatus: 'close',
+                disconnectionObject: 'nexi_socket_manual_close', disconnectionReasonCode: 401 } }, repository));
             ${helper}.lifecycleCheck(nexiControlOwner);
             nexiControlOwner.service.stateConnection.state = 'close';
-            await ${helper}.lifecycleAwait(nexiControlOwner, () => this.createBotMessage(instance, msgLogout, 'incoming'));
-          });`);
+            try {
+              await ${helper}.lifecycleAwait(nexiControlOwner, () => this.createBotMessage(instance, msgLogout, 'incoming'));
+            } catch {
+              ${helper}.lifecycleCheck(nexiControlOwner);
+              this.logger.warn('nexi_socket_control_response_unavailable');
+            }
+            return { message: 'bot', lifecycle: 'disconnected', remoteLogout: nexiRemoteLogout };
+          });
+          return nexiDisconnectResult || { message: 'bot', lifecycle: 'superseded' };`);
     block = once(block, '    } catch (error) {\n      this.logger.error(error);', `    } catch (error) {
       if (error?.code === 'NEXI_SOCKET_LIFECYCLE_STALE') return { message: 'bot', lifecycle: 'superseded' };
+      if (nexiDisconnectStarted) {
+        this.logger.warn('nexi_socket_manual_disconnect_unavailable');
+        return { message: 'bot', lifecycle: 'disconnect_failed' };
+      }
       this.logger.error(error);`);
     return block;
   });
