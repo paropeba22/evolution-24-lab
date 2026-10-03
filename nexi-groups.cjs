@@ -156,10 +156,18 @@ function controlConnect(context, number) {
   lifecycleCheck(context);
   return lifecycleScope.run(context, () => context.service.connectToWhatsapp(number));
 }
-async function operationCheck(context) {
-  connectCheck(context);
-  if (context.token === undefined || !context.socket || context.socket.ws?.isOpen === false) throw staleLifecycle();
+async function operationCheck(context, { requireOpen = true } = {}) {
+  const check = () => {
+    connectCheck(context);
+    const ws = context.socket?.ws;
+    // Mutations require OPEN. Reload construction may return CONNECTING;
+    // readiness alone never grants ownership, and dead transport is invalid.
+    if (context.token === undefined || !ws || ws.isClosed === true || ws.isClosing === true ||
+        (requireOpen ? ws.isOpen !== true : ws.isOpen !== true && ws.isConnecting !== true)) throw staleLifecycle();
+  };
+  check();
   const row = await connectAwait(context, () => context.service.prismaRepository.instance.findUnique({ where: { id: context.instanceId } }));
+  check();
   if (!row || row.nexiGroupsSocketOwner !== context.token ||
       row.connectionStatus !== 'open' && row.disconnectionObject === 'nexi_socket_manual_close') throw staleLifecycle();
 }

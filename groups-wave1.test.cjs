@@ -32,7 +32,7 @@ const sender = '5511999999999@s.whatsapp.net', lid = '100000000000001@lid';
 const creds = { me: { id: '5500000000000:1@s.whatsapp.net', lid: '200000000000001@lid' },
   registrationId: 1, signedIdentityKey: { public: Buffer.alloc(32, 7) } };
 const session = identity.sessionFingerprint(creds);
-let scratch, sources, ts, acceptedSources, acceptedGroups, deltaSources, deltaGroups, lifecycleSources, lifecycleGroups, residualSources, residualGroups, profileSources, profileGroups;
+let scratch, sources, ts, acceptedSources, acceptedGroups, deltaSources, deltaGroups, lifecycleSources, lifecycleGroups, residualSources, residualGroups, profileSources, profileGroups, connectingSources, connectingGroups;
 
 before(() => {
   ts = require(require.resolve('typescript', { paths: [__dirname, upstream] }));
@@ -139,6 +139,21 @@ before(() => {
       { cwd: __dirname, encoding: 'utf8' }), reviewed.filename);
     profileGroups = reviewed.exports;
   }
+  if (available) {
+    const root = path.join(scratch, 'connecting-reviewed'), reviewedRevision = 'ec15120a572e2ba21c6f756ec268d98e50b70a03';
+    for (const file of sourceFiles) {
+      const target = path.join(root, file); fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.copyFileSync(path.join(scratch, file), target);
+    }
+    const script = path.join(scratch, 'connecting-reviewed-patch.mjs');
+    fs.writeFileSync(script, execFileSync('git', ['show', `${reviewedRevision}:patch-groups-source.mjs`], { cwd: __dirname }));
+    execFileSync(process.execPath, [script, root]);
+    connectingSources = Object.fromEntries(sourceFiles.map(file => [file, fs.readFileSync(path.join(root, file), 'utf8')]));
+    const Module = require('node:module'), reviewed = new Module(path.join(__dirname, 'reviewed-connecting.cjs'), module);
+    reviewed.filename = path.join(__dirname, 'reviewed-connecting.cjs'); reviewed.paths = module.paths;
+    reviewed._compile(execFileSync('git', ['show', `${reviewedRevision}:nexi-groups.cjs`], { cwd: __dirname, encoding: 'utf8' }), reviewed.filename);
+    connectingGroups = reviewed.exports;
+  }
   execFileSync(process.execPath, [path.join(__dirname, 'patch-groups-source.mjs'), scratch, '--snapshot']);
   sources = Object.fromEntries(sourceFiles.map(file => [file, fs.readFileSync(path.join(scratch, file), 'utf8')]));
 });
@@ -196,7 +211,21 @@ function nativeMonitor(helper, code, subject, extra = {}) {
     db: { SAVE_DATA: { INSTANCE: true } }, redis: { REDIS: { ENABLED: false } } });
   return m;
 }
-async function lifecycleFixture(helper, code, { managed = true, extra = {} } = {}) {
+// Use Baileys' actual state getters without starting a network connection.
+// Each test chooses its transport state; legacy fixtures remain explicitly OPEN.
+function nativeWebsocket(state, effects, label) {
+  const root = path.dirname(require.resolve('baileys/package.json', { paths: [__dirname, upstream] }));
+  const { WebSocketClient } = require(path.join(root, 'lib/Socket/Client/websocket.js'));
+  const WebSocket = require(require.resolve('ws', { paths: [__dirname, upstream] }));
+  const ws = new WebSocketClient(new URL('wss://example.invalid'), {});
+  const raw = new (require('node:events').EventEmitter)();
+  raw.readyState = WebSocket[state]; assert.equal(typeof raw.readyState, 'number');
+  raw.terminate = () => { raw.readyState = WebSocket.CLOSED; raw.emit('close'); };
+  raw.close = () => { effects.push(label + '.ws'); raw.terminate(); };
+  ws.socket = raw;
+  return ws;
+}
+async function lifecycleFixture(helper, code, { managed = true, extra = {}, socketStates } = {}) {
   const subject = nativeLifecycle(helper, code, extra);
   Object.assign(subject, service());
   subject.client = undefined;
@@ -240,9 +269,11 @@ async function lifecycleFixture(helper, code, { managed = true, extra = {} } = {
   const install = async label => {
     const config = { auth: { creds }, logger: subject.logger }; configs.push(config);
     const socket = await helper.installAdmissionSocket(subject, config, () => {
+      const state = socketStates?.[label] || socketStates?.default;
       const next = { label, user: { id: sender, name: 'Synthetic' },
-        ws: { isOpen: true, close() { next.ws.isOpen = false; effects.push(label + '.ws'); } },
-        end() { next.ws.isOpen = false; effects.push(label + '.end'); },
+        ws: state ? nativeWebsocket(state, effects, label)
+          : { isOpen: true, close() { next.ws.isOpen = false; effects.push(label + '.ws'); } },
+        end() { if (state) next.ws.socket?.terminate(); else next.ws.isOpen = false; effects.push(label + '.end'); },
         logout: async () => {}, requestPairingCode: async () => 'synthetic-pair',
         sendMessage: (destination, body) => { effects.push(['send', destination, body]); return 'sent'; } };
       sockets.push(next); return next;
@@ -267,10 +298,11 @@ const privacyMethods = ['updateReadReceiptsPrivacy', 'updateProfilePicturePrivac
   'updateOnlinePrivacy', 'updateLastSeenPrivacy', 'updateGroupsAddPrivacy'];
 const profileOperations = ['updatePrivacySettings', 'updateProfilePicture', 'removeProfilePicture'];
 async function profileFixture(helper, code, options = {}) {
-  const f = await lifecycleFixture(helper, code, options), reloads = [], mutations = [];
+  const f = await lifecycleFixture(helper, code, options), reloads = [], mutations = [], installed = [];
   const install = f.install;
   f.install = async label => {
     const socket = await install(label);
+    installed.push(socket);
     for (const method of [...privacyMethods, 'updateProfilePicture', 'removeProfilePicture']) {
       socket[method] = async (...args) => { mutations.push({ label, method, args }); };
     }
@@ -289,8 +321,113 @@ async function profileFixture(helper, code, options = {}) {
   const invoke = operation => f.subject[operation](operation === 'updatePrivacySettings'
     ? { readreceipts: 'all', profile: 'all', status: 'all', online: 'all', last: 'all', groupadd: 'all' }
     : operation === 'updateProfilePicture' ? 'c3ludGhldGljLXBpY3R1cmU=' : undefined);
-  return { ...f, reloads, mutations, invoke };
+  return { ...f, reloads, mutations, installed, invoke };
 }
+
+test('R4 historical reproduction: reviewed production methods mistake legitimate authoritative CONNECTING reloads for stale', async t => {
+  if (!connectingSources) return t.skip('reviewed Git history unavailable');
+  for (const operation of profileOperations) {
+    const f = await profileFixture(connectingGroups, connectingSources, { socketStates: { A: 'OPEN', default: 'CONNECTING' } });
+    const original = connectingGroups.lifecycleCapture(f.subject);
+    await assert.rejects(f.invoke(operation), error => error.code === 'NEXI_SOCKET_LIFECYCLE_STALE');
+    assert.ok(f.mutations.length > 0); assert.ok(f.mutations.every(value => value.label === 'A'));
+    assert.equal(f.sockets.length, 2); assert.equal(f.reloads.length, 1); assert.equal(original.socket.ws.isClosed, true);
+    assert.equal(f.subject.client.ws.isOpen, false); assert.equal(f.subject.client.ws.isConnecting, true);
+    const result = connectingGroups.lifecycleCapture(f.subject);
+    assert.equal(connectingGroups.lifecycleCurrent(result), true); assert.equal(result.token, f.row.nexiGroupsSocketOwner);
+    assert.notEqual(result.token, original.token);
+  }
+});
+
+for (const operation of profileOperations) {
+  for (const state of ['CONNECTING', 'OPEN']) test(`R4 ${operation}: legitimate authoritative ${state} socket is not stale`, async () => {
+    const f = await profileFixture(groups, sources, { socketStates: { A: 'OPEN', default: state } });
+    const original = groups.lifecycleCapture(f.subject);
+    const result = await f.invoke(operation);
+    assert.equal(result.update, 'success'); assert.equal(f.reloads.length, 1); assert.equal(f.sockets.length, 2);
+    assert.equal(f.reloads[0].args[0].socket, original.socket); assert.equal(original.socket.ws.isClosed, true);
+    const current = groups.lifecycleCapture(f.subject);
+    assert.equal(groups.lifecycleCurrent(current), true); assert.equal(current.socket, f.installed[1]);
+    assert.equal(current.token, f.row.nexiGroupsSocketOwner); assert.notEqual(current.token, original.token);
+    assert.equal(current.socket.ws.isConnecting, state === 'CONNECTING'); assert.equal(current.socket.ws.isOpen, state === 'OPEN');
+    assert.equal(f.sockets.filter(socket => socket.ws.isOpen || socket.ws.isConnecting).length, 1);
+    assert.ok(f.mutations.every(value => value.label === 'A'));
+  });
+}
+
+test('R4 CLOSED, CLOSING and uninitialized reload transports cannot silently succeed', async () => {
+  for (const operation of profileOperations) for (const state of ['CLOSED', 'CLOSING', 'UNINITIALIZED']) {
+    const f = await profileFixture(groups, sources, { socketStates: { A: 'OPEN', default: state === 'UNINITIALIZED' ? 'CLOSED' : state } });
+    if (state === 'UNINITIALIZED') {
+      const create = f.subject.createClient;
+      f.subject.createClient = async () => { const socket = await create(); socket.ws.socket = null; return socket; };
+    }
+    await assert.rejects(f.invoke(operation), error => error.code === 'NEXI_SOCKET_LIFECYCLE_STALE');
+    assert.equal(f.reloads.length, 1); assert.equal(f.sockets.length, 2);
+    assert.equal(f.subject.client.ws.isConnecting, false); assert.equal(f.subject.client.ws.isOpen, false);
+  }
+});
+
+test('R4 profile mutations still require OPEN; CONNECTING authority does not grant transport readiness', async () => {
+  for (const operation of profileOperations) {
+    const f = await profileFixture(groups, sources, { socketStates: { A: 'CONNECTING', default: 'CONNECTING' } });
+    await assert.rejects(f.invoke(operation), error => error.code === 'NEXI_SOCKET_LIFECYCLE_STALE');
+    assert.equal(f.mutations.length, 0); assert.equal(f.reloads.length, 0); assert.equal(f.sockets.length, 1);
+  }
+});
+
+test('R4 completion DB await rejects replacement, foreign owner, deleted instance and terminated resulting socket', async () => {
+  for (const outcome of ['replacement', 'foreign', 'deleted', 'closed', 'closing', 'epoch']) {
+    const f = await profileFixture(groups, sources, { socketStates: { A: 'OPEN', default: 'CONNECTING' } });
+    const p = pause(), find = f.subject.prismaRepository.instance.findUnique; let held = false;
+    f.subject.prismaRepository.instance.findUnique = async args => {
+      if (!held && f.subject.client.label === 'S1') { held = true; await p.enter(); }
+      return outcome === 'deleted' && held ? null : find(args);
+    };
+    const pending = f.invoke('removeProfilePicture'), rejected = assert.rejects(pending, error => error.code === 'NEXI_SOCKET_LIFECYCLE_STALE');
+    await p.waiting;
+    if (outcome === 'replacement') await f.install('B');
+    if (outcome === 'foreign') Object.assign(f.row, { nexiGroupsSocketOwner: 'foreign-newer-owner', connectionStatus: 'open', disconnectionObject: 'foreign-state' });
+    if (outcome === 'closed') f.subject.client.ws.socket.terminate();
+    if (outcome === 'closing') f.subject.client.ws.socket.readyState = 2;
+    if (outcome === 'epoch') {
+      const owner = groups.lifecycleCapture(f.subject).owner; owner.connectEpoch = (owner.connectEpoch || 0) + 1;
+    }
+    const saved = structuredClone(f.row), effects = f.effects.slice();
+    p.release(); await rejected; assert.deepEqual(f.row, saved); assert.deepEqual(f.effects, effects);
+    assert.equal(f.reloads.length, 1); assert.equal(f.sockets.length, outcome === 'replacement' ? 3 : 2);
+    if (outcome === 'replacement') { assert.equal(f.subject.client.label, 'B'); assert.equal(f.subject.client.ws.isConnecting, true); }
+    if (outcome === 'foreign') assert.equal(f.row.nexiGroupsSocketOwner, 'foreign-newer-owner');
+  }
+});
+
+test('R4 manual Chatwoot disconnect during new CONNECTING completion wins and restart has zero sockets', async () => {
+  for (const operation of profileOperations) {
+    const f = await profileFixture(groups, sources, { socketStates: { A: 'OPEN', default: 'CONNECTING' } });
+    f.row.disconnectionObject = 'nexi_groups_admission_suspended';
+    const p = pause(), find = f.subject.prismaRepository.instance.findUnique; let held = false;
+    f.subject.prismaRepository.instance.findUnique = async args => {
+      if (!held && f.subject.client.label === 'S1') { held = true; await p.enter(); }
+      return find(args);
+    };
+    const pending = f.invoke(operation), rejected = assert.rejects(pending, error => error.code === 'NEXI_SOCKET_LIFECYCLE_STALE');
+    await p.waiting; assert.equal(f.subject.client.ws.isConnecting, true);
+    const current = groups.lifecycleCapture(f.subject), cw = chatwootCommandFixture(groups, sources, f);
+    const manual = cw.subject.receiveWebhook(cw.instance, cw.body);
+    await new Promise(resolve => setImmediate(resolve)); assert.equal(current.owner.manual, true);
+    p.release(); await rejected; await manual;
+    assert.equal(f.row.connectionStatus, 'close'); assert.equal(f.row.disconnectionObject, 'nexi_socket_manual_close');
+    assert.equal(f.subject.client.ws.isClosed, true); assert.equal(f.sockets.length, 2); assert.equal(f.reloads.length, 1);
+    const saved = structuredClone(f.row);
+    await f.subject.connectionUpdate({ connection: 'open' }); await groups.recoverAdmission(f.subject, Date.now() + 600000);
+    assert.deepEqual(f.row, saved); assert.equal(f.sockets.length, 2);
+    const restarted = await lifecycleFixture(groups, sources); Object.assign(restarted.row, saved);
+    const monitor = nativeMonitor(groups, sources, restarted.subject);
+    await monitor.setInstance({ instanceId: restarted.subject.instanceId, instanceName: restarted.subject.instance.name,
+      integration: 'baileys', connectionStatus: saved.connectionStatus, ...groups.suspensionMetadata(saved) });
+    await groups.recoverAdmission(restarted.subject, Date.now() + 600000); assert.equal(restarted.sockets.length, 0);
+  }
+});
 
 test('R3 historical reproduction: all three actual profile/privacy methods adopt B after an A await and build C', async t => {
   if (!profileSources) return t.skip('reviewed Git history unavailable');

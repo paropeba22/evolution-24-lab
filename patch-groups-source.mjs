@@ -143,7 +143,7 @@ patch('src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts', sourc
       const nexiReloadedSocket = await this.createClient(this.phoneNumber);
       // Completion authority belongs to this exact returned socket. A different
       // current socket cannot be adopted by a late operation's completion.
-      await ${helper}.operationCheck(${helper}.lifecycleCapture(this, nexiReloadedSocket));
+      await ${helper}.operationCheck(${helper}.lifecycleCapture(this, nexiReloadedSocket), { requireOpen: false });
       return nexiReloadedSocket;`);
     block = once(block, '    } catch (error) {', `    } catch (error) {
       if (error?.code === 'NEXI_SOCKET_LIFECYCLE_STALE') throw error;`);
