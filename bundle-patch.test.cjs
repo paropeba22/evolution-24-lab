@@ -327,6 +327,151 @@ test('remaining anchors bind renamed identifiers and fail closed', async (t) => 
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 });
 
+test('compiled QR callback preserves its lifecycle fence and fails closed', async (t) => {
+  // Byte-for-byte connectionUpdate method from the pinned MySQL tsup bundle,
+  // after all accepted source overlays and patch-instance-create, before P3.
+  // Keeping the owning method includes pairing, QR events and persistence;
+  // these bytes must remain unchanged outside the terminal diagnostic.
+  const compiled = "async connectionUpdate({qr:A,connection:e,lastDisconnect:s},n=require(\"/evolution/nexi-groups.cjs\").lifecycleCapture(this)){if(require(\"/evolution/nexi-groups.cjs\").lifecycleCurrent(n))try{let a=s?.error?.output?.statusCode;if(this.logger.info({message:\"Connection update received\",connection:e,hasQr:!!A,statusCode:a,instanceName:this.instance.name,isDeleting:this.isDeleting,endSession:this.endSession}),A){if(this.instance.qrcode.count===this.configService.get(\"QRCODE\").LIMIT)return this.sendDataWebhook(\"qrcode.updated\",{message:\"QR code limit reached, please login again\",statusCode:T.DisconnectReason.badSession}),this.configService.get(\"CHATWOOT\").ENABLED&&this.localChatwoot?.enabled&&this.chatwootService.eventWhatsapp(\"qrcode.updated\",{instanceName:this.instance.name,instanceId:this.instanceId},{message:\"QR code limit reached, please login again\",statusCode:T.DisconnectReason.badSession}),this.sendDataWebhook(\"connection.update\",{instance:this.instance.name,state:\"refused\",statusReason:T.DisconnectReason.connectionClosed,wuid:this.instance.wuid,profileName:await require(\"/evolution/nexi-groups.cjs\").lifecycleAwait(n,()=>this.getProfileName()),profilePictureUrl:this.instance.profilePictureUrl}),require(\"/evolution/nexi-groups.cjs\").cancelLifecycle(n),this.endSession=!0,this.eventEmitter.emit(\"no.connection\",this.instance.name,require(\"/evolution/nexi-groups.cjs\").lifecycleCapture(this,n.socket,!0));this.instance.qrcode.count++;let r={margin:3,scale:4,errorCorrectionLevel:\"H\",color:{light:\"#ffffff\",dark:this.configService.get(\"QRCODE\").COLOR}};this.phoneNumber?(await require(\"/evolution/nexi-groups.cjs\").lifecycleAwait(n,()=>(0,T.delay)(1e3)),this.instance.qrcode.pairingCode=await require(\"/evolution/nexi-groups.cjs\").lifecycleAwait(n,()=>n.socket.requestPairingCode(this.phoneNumber))):this.instance.qrcode.pairingCode=null,_o.default.toDataURL(A,r,(g,c)=>{if(require(\"/evolution/nexi-groups.cjs\").lifecycleCurrent(n)){if(g){this.logger.error(\"Qrcode generate failed:\"+g.toString());return}this.instance.qrcode.base64=c,this.instance.qrcode.code=A,this.sendDataWebhook(\"qrcode.updated\",{qrcode:{instance:this.instance.name,pairingCode:this.instance.qrcode.pairingCode,code:A,base64:c}}),this.configService.get(\"CHATWOOT\").ENABLED&&this.localChatwoot?.enabled&&this.chatwootService.eventWhatsapp(\"qrcode.updated\",{instanceName:this.instance.name,instanceId:this.instanceId},{qrcode:{instance:this.instance.name,pairingCode:this.instance.qrcode.pairingCode,code:A,base64:c}})}}),Lo.default.generate(A,{small:!0},g=>require(\"/evolution/nexi-groups.cjs\").lifecycleCurrent(n)&&this.logger.log(`\n{ instance: ${this.instance.name} pairingCode: ${this.instance.qrcode.pairingCode}, qrcodeCount: ${this.instance.qrcode.count} }\n`+g)),await require(\"/evolution/nexi-groups.cjs\").persistLifecycle(n,{where:{id:this.instanceId},data:{connectionStatus:\"connecting\"}})}if(e&&(this.stateConnection={state:e,statusReason:s?.error?.output?.statusCode??200}),e===\"close\"){if(await require(\"/evolution/nexi-groups.cjs\").lifecycleAwait(n,()=>require(\"/evolution/nexi-groups.cjs\").recordSuspension(this,s?.error,\"connection.update\")))return;if(this.isDeleting||this.endSession){this.logger.info(\"Instance is being deleted/ended, skipping reconnection attempt\");return}let i=s?.error?.output?.statusCode,r=[T.DisconnectReason.loggedOut,T.DisconnectReason.forbidden,402,406,408];if(!this.instance.wuid&&(this.instance.qrcode?.count??0)===0){this.logger.info(\"Initial connection closed, waiting for QR code generation...\");return}let c=Date.now()-this._lastStream515At<qe.STREAM_515_RECONNECT_GRACE_MS,l=!r.includes(i)||i===T.DisconnectReason.loggedOut&&c;if(this.logger.info({message:\"Connection closed, evaluating reconnection\",statusCode:i,shouldReconnect:l,instanceName:this.instance.name}),l)this.logger.info(\"Reconnecting in 3 seconds...\"),require(\"/evolution/nexi-groups.cjs\").scheduleLifecycle(n,async()=>{await this.connectToWhatsapp(this.phoneNumber)},3e3);else{if(this.logger.info(`Skipping reconnection for status code ${i} (code is in codesToNotReconnect list)`),this.sendDataWebhook(\"status.instance\",{instance:this.instance.name,status:\"closed\",disconnectionAt:new Date,disconnectionReasonCode:i,disconnectionObject:JSON.stringify(s)}),await require(\"/evolution/nexi-groups.cjs\").persistLifecycle(n,{where:{id:this.instanceId},data:{connectionStatus:\"close\",disconnectionAt:new Date,disconnectionReasonCode:i,disconnectionObject:JSON.stringify(s)}}),this.configService.get(\"CHATWOOT\").ENABLED&&this.localChatwoot?.enabled&&this.chatwootService.eventWhatsapp(\"status.instance\",{instanceName:this.instance.name,instanceId:this.instanceId},{instance:this.instance.name,status:\"closed\"}),require(\"/evolution/nexi-groups.cjs\").cancelLifecycle(n),n=require(\"/evolution/nexi-groups.cjs\").lifecycleCapture(this,n.socket,!0),this.eventEmitter.emit(\"logout.instance\",this.instance.name,\"inner\",n),!require(\"/evolution/nexi-groups.cjs\").lifecycleCurrent(n)||(n.socket?.ws?.close(),!require(\"/evolution/nexi-groups.cjs\").lifecycleCurrent(n)))return;n.socket.end(new Error(\"Close connection\")),this.sendDataWebhook(\"connection.update\",{instance:this.instance.name,...this.stateConnection})}}if(e===\"open\"){if(!n.socket?.user?.id){this.logger.warn(\"connectionUpdate: connection open but client.user is undefined, skipping\");return}this.instance.wuid=n.socket.user.id.replace(/:\\d+/,\"\");try{let g=await require(\"/evolution/nexi-groups.cjs\").lifecycleAwait(n,()=>this.profilePicture(this.instance.wuid));this.instance.profilePictureUrl=g.profilePictureUrl}catch{if(!require(\"/evolution/nexi-groups.cjs\").lifecycleCurrent(n))return;this.instance.profilePictureUrl=null}let i=this.instance.wuid.split(\"@\")[0].padEnd(30,\" \"),r=this.instance.name;this.logger.info(`\n        \\u250C\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2510\n        \\u2502    CONNECTED TO WHATSAPP     \\u2502\n        \\u2514\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2500\\u2518`.replace(/^ +/gm,\"  \")),this.logger.info(`\n        wuid: ${i}\n        name: ${r}\n      `),await require(\"/evolution/nexi-groups.cjs\").persistLifecycle(n,{where:{id:this.instanceId},data:{ownerJid:this.instance.wuid,profileName:await require(\"/evolution/nexi-groups.cjs\").lifecycleAwait(n,()=>this.getProfileName()),profilePicUrl:this.instance.profilePictureUrl,connectionStatus:\"open\"}}),this.configService.get(\"CHATWOOT\").ENABLED&&this.localChatwoot?.enabled&&(this.chatwootService.eventWhatsapp(\"connection.update\",{instanceName:this.instance.name,instanceId:this.instanceId},{instance:this.instance.name,status:\"open\"}),this.syncChatwootLostMessages()),this.sendDataWebhook(\"connection.update\",{instance:this.instance.name,wuid:this.instance.wuid,profileName:await require(\"/evolution/nexi-groups.cjs\").lifecycleAwait(n,()=>this.getProfileName()),profilePictureUrl:this.instance.profilePictureUrl,...this.stateConnection})}e===\"connecting\"&&this.sendDataWebhook(\"connection.update\",{instance:this.instance.name,...this.stateConnection})}catch(a){if(a?.code===\"NEXI_SOCKET_LIFECYCLE_STALE\")return;throw a}}";
+  const current = 'Lo.default.generate(A,{small:!0},g=>require("/evolution/nexi-groups.cjs").lifecycleCurrent(n)&&this.logger.log(`\n{ instance: ${this.instance.name} pairingCode: ${this.instance.qrcode.pairingCode}, qrcodeCount: ${this.instance.qrcode.count} }\n`+g))';
+  const guard = 'require("/evolution/nexi-groups.cjs").lifecycleCurrent(n)&&';
+  const historical = current.replace(guard, '');
+  const info = 'this.logger.info({message:"QR generated",instanceName:this.instance.name,qrcodeCount:this.instance.qrcode.count})';
+  // Frozen pre-correction anchor, with the same captures/backreferences.
+  const oldPattern = /(?<![\w$.])(?<module>[A-Za-z_$][\w$]*)\.default\.generate\((?<qr>[A-Za-z_$][\w$]*),\{small:!0\},(?<output>[A-Za-z_$][\w$]*)=>this\.logger\.log\(`\n\{ instance: \$\{this\.instance\.name\} pairingCode: \$\{this\.instance\.qrcode\.pairingCode\}, qrcodeCount: \$\{this\.instance\.qrcode\.count\} \}\n`\+\k<output>\)\)/g;
+  assert.equal(compiled.split(current).length, 2, 'fixture contains the actual unique terminal callback');
+  assert.equal([...compiled.matchAll(oldPattern)].length, 0, 'historical matcher reproduces EasyPanel zero matches');
+  assert.equal([...historical.matchAll(oldPattern)].length, 1, 'historical supported callback is unchanged');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'evolution-compiled-qr-'));
+  function run(source, provider = 'mysql') {
+    const target = path.join(directory, 'candidate.js'); fs.writeFileSync(target, source);
+    const result = spawnSync(process.execPath, [path.join(__dirname, 'patch-channel-transport.mjs'), '--anchor-only=QR terminal log'],
+      { env: { ...process.env, EVOLUTION_BUNDLE_PATH: target, EVOLUTION_PROVIDER: provider }, encoding: 'utf8' });
+    return { ...result, output: fs.readFileSync(target, 'utf8') };
+  }
+  try {
+    for (const provider of ['mysql', 'postgresql', 'psql_bouncer']) {
+      await t.test(`${provider}: exactly one current callback; only terminal diagnostic changes`, () => {
+        const result = run(compiled, provider);
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(result.output, compiled.replace(current, guard + info));
+        assert.equal(result.output.split(info).length, 2);
+      });
+    }
+    await t.test('historical callback remains supported', () => {
+      const source = compiled.replace(current, historical), result = run(source);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.output, source.replace(historical, info));
+    });
+    await t.test('renamed QR, renderer, output and lifecycle bindings', () => {
+      const source = current.replace('Lo.default', '$renderer.default').replace('(A,', '(_qr,')
+        .replace('g=>', '$output=>').replace('+g)', '+$output)').replace('lifecycleCurrent(n)', 'lifecycleCurrent($owner)');
+      const result = run(source);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.output, guard.replace('(n)', '($owner)') + info);
+    });
+    const unrelated = current.replace('pairingCode:', 'unrelatedCode:');
+    await t.test('superficially similar QR diagnostic is left byte-identical', () => {
+      const source = compiled + ';' + unrelated, result = run(source);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.output, compiled.replace(current, guard + info) + ';' + unrelated);
+    });
+    for (const [name, source, count] of [
+      ['target absent', compiled.replace(current, 'unrelated()'), 0],
+      ['two current targets', compiled + ';' + current, 2],
+      ['current and historical targets', compiled + ';' + historical, 2],
+      ['unrelated QR/log only', unrelated, 0],
+      ['wrong helper module', current.replace('nexi-groups.cjs', 'other.cjs'), 0],
+      ['wrong lifecycle predicate', current.replace('lifecycleCurrent', 'lifecycleCapture'), 0],
+      ['missing lifecycle argument', current.replace('lifecycleCurrent(n)', 'lifecycleCurrent()'), 0],
+      ['extra lifecycle argument', current.replace('lifecycleCurrent(n)', 'lifecycleCurrent(n,other)'), 0],
+      ['wrong short-circuit operator', current.replace('&&this.logger', '||this.logger'), 0],
+      ['wrong output binding', current.replace('+g)', '+wrong)'), 0],
+      ['wrong instance context', current.replace('this.instance.name', 'other.instance.name'), 0],
+      ['malformed callback boundary', current.slice(0, -1), 0],
+      ['already corrected', guard + info, 0],
+    ]) await t.test(name, () => {
+      const result = run(source);
+      assert.notEqual(result.status, 0);
+      assert.ok(result.stderr.includes(`QR terminal log: expected 1 structural targets, found ${count}`), result.stderr);
+      assert.equal(result.output, source, 'failure leaves the artifact byte-identical');
+    });
+    await t.test('current owner logs only safe metadata; stale owner emits nothing', () => {
+      const result = run(current);
+      assert.equal(result.status, 0, result.stderr);
+      const owner = {}, calls = [], subject = { instance: { name: 'synthetic', qrcode: { count: 3 } },
+        logger: { info: value => calls.push(value) } };
+      const evaluate = new Function('require', 'n', result.output);
+      for (const valid of [false, true]) {
+        evaluate.call(subject, module => {
+          assert.equal(module, '/evolution/nexi-groups.cjs');
+          return { lifecycleCurrent: value => { assert.equal(value, owner); return valid; } };
+        }, owner);
+        assert.equal(calls.length, valid ? 1 : 0);
+      }
+      assert.deepEqual(calls, [{ message: 'QR generated', instanceName: 'synthetic', qrcodeCount: 3 }]);
+    });
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('compiled Chatwoot control fences retain the existing failure contracts', async (t) => {
+  // Actual owning receiveWebhook method from the same pre-channel MySQL bundle.
+  const compiled = "async receiveWebhook(t,A){require(\"/evolution/nexi-groups.cjs\").validateTargets(require(\"/evolution/nexi-groups.cjs\").managed(t.instanceName),{jid:A?.conversation?.meta?.sender?.identifier,number:A?.conversation?.meta?.sender?.phone_number,target:A?.meta?.sender?.identifier,payload:A});let e=this.waMonitor?.waInstances?.[t.instanceName],s=e&&require(\"/evolution/nexi-groups.cjs\").lifecycleCapture(e,e.client,!0),n=A?.message_type===\"outgoing\"&&A?.conversation?.meta?.sender?.identifier===\"123456\",a=!1,i=()=>{n&&require(\"/evolution/nexi-groups.cjs\").lifecycleCheck(s)};try{await new Promise(m=>setTimeout(m,500)),i();let r=await this.clientCw(t);if(i(),!r)return this.logger.warn(\"client not found\"),null;if(this.provider.reopenConversation===!1&&A.event===\"conversation_status_changed\"&&A.status===\"resolved\"&&A.meta?.sender?.identifier){let m=`${t.instanceName}:createConversation-${A.meta.sender.identifier}`;this.cache.delete(m)}if(!A?.conversation||A.private||A.event===\"message_updated\"&&!A.content_attributes?.deleted)return{message:\"bot\"};let g=A.conversation.meta.sender?.identifier||A.conversation.meta.sender?.phone_number.replace(\"+\",\"\"),c=A.content?A.content.replaceAll(/(?<!\\*)\\*((?!\\s)([^\\n*]+?)(?<!\\s))\\*(?!\\*)/g,\"_$1_\").replaceAll(/\\*{2}((?!\\s)([^\\n*]+?)(?<!\\s))\\*{2}/g,\"*$1*\").replaceAll(/~{2}((?!\\s)([^\\n*]+?)(?<!\\s))~{2}/g,\"~$1~\").replaceAll(/(?<!`)`((?!\\s)([^`*]+?)(?<!\\s))`(?!`)/g,\"```$1```\"):A.content,l=A?.conversation?.messages[0]?.sender?.available_name||A?.sender?.name,C=this.waMonitor.waInstances[t.instanceName];if(t.instanceId=C.instanceId,A.event===\"message_updated\"&&A.content_attributes?.deleted){let m=await this.prismaRepository.message.findFirst({where:{chatwootMessageId:A.id,instanceId:t.instanceId}});if(m){let d=m.key;await C?.client.sendMessage(d.remoteJid,{delete:d}),await this.prismaRepository.message.deleteMany({where:{instanceId:t.instanceId,chatwootMessageId:A.id}})}return{message:\"bot\"}}let u=this.configService.get(\"CHATWOOT\").BOT_CONTACT;if(g===\"123456\"&&A.message_type===\"outgoing\"){i();let m=c.replace(\"/\",\"\");if(u&&(m.includes(\"init\")||m.includes(\"iniciar\")))if(C?.connectionStatus?.state!==\"open\"){let I=m.split(\":\")[1];await require(\"/evolution/nexi-groups.cjs\").controlConnect(s,I)}else await this.createBotMessage(t,H.t(\"cw.inbox.alreadyConnected\",{inboxName:A.inbox.name}),\"incoming\");if(m===\"clearcache\"&&(C.clearCacheChatwoot(),await this.createBotMessage(t,H.t(\"cw.inbox.clearCache\",{inboxName:A.inbox.name}),\"incoming\")),m===\"status\"){let d=C?.connectionStatus?.state;d||await this.createBotMessage(t,H.t(\"cw.inbox.notFound\",{inboxName:A.inbox.name}),\"incoming\"),d&&await this.createBotMessage(t,H.t(\"cw.inbox.status\",{inboxName:A.inbox.name,state:d}),\"incoming\")}if(u&&(m===\"disconnect\"||m===\"desconectar\")){let d=H.t(\"cw.inbox.disconnect\",{inboxName:A.inbox.name});return a=!0,await require(\"/evolution/nexi-groups.cjs\").manualLifecycle(s,async()=>{await require(\"/evolution/nexi-groups.cjs\").cleanupLifecycle(s,async h=>require(\"/evolution/nexi-groups.cjs\").persistLifecycle(s,{data:{connectionStatus:\"close\",disconnectionObject:\"nexi_socket_manual_close\",disconnectionReasonCode:401}},h));try{await require(\"/evolution/nexi-groups.cjs\").lifecycleAwait(s,()=>this.createBotMessage(t,H.t(\"cw.inbox.status\",{inboxName:A.inbox.name,state:\"pending\"}),\"incoming\"))}catch{require(\"/evolution/nexi-groups.cjs\").lifecycleCheck(s),this.logger.warn(\"nexi_socket_control_response_unavailable\")}await require(\"/evolution/nexi-groups.cjs\").cleanupLifecycle(s,async()=>{});let B=\"transport_unavailable\";if(s.socket?.ws&&s.socket.ws.isClosed!==!0&&s.socket.ws.isClosing!==!0)try{await require(\"/evolution/nexi-groups.cjs\").lifecycleAwait(s,()=>s.socket?.logout(\"Log out instance: \"+t.instanceName)),B=\"succeeded\"}catch(h){if(h?.code===\"NEXI_SOCKET_LIFECYCLE_STALE\")throw h;require(\"/evolution/nexi-groups.cjs\").lifecycleCheck(s),B=h?.output?.statusCode===428?\"transport_unavailable\":\"failed\",this.logger.warn(B===\"transport_unavailable\"?\"nexi_socket_remote_logout_transport_unavailable\":\"nexi_socket_remote_logout_failed\")}await require(\"/evolution/nexi-groups.cjs\").cleanupLifecycle(s,async()=>{}),await require(\"/evolution/nexi-groups.cjs\").lifecycleAwait(s,()=>s.socket?.end(new Error(\"nexi_socket_manual_close\"))),s.socket?.ws?.isClosed!==!0&&s.socket?.ws?.isClosing!==!0&&await require(\"/evolution/nexi-groups.cjs\").lifecycleAwait(s,()=>s.socket?.ws?.close()),await require(\"/evolution/nexi-groups.cjs\").cleanupLifecycle(s,async h=>require(\"/evolution/nexi-groups.cjs\").persistLifecycle(s,{data:{connectionStatus:\"close\",disconnectionObject:\"nexi_socket_manual_close\",disconnectionReasonCode:401}},h)),require(\"/evolution/nexi-groups.cjs\").lifecycleCheck(s),s.service.stateConnection.state=\"close\";try{await require(\"/evolution/nexi-groups.cjs\").lifecycleAwait(s,()=>this.createBotMessage(t,d,\"incoming\"))}catch{require(\"/evolution/nexi-groups.cjs\").lifecycleCheck(s),this.logger.warn(\"nexi_socket_control_response_unavailable\")}return{message:\"bot\",lifecycle:\"disconnected\",remoteLogout:B}})||{message:\"bot\",lifecycle:\"superseded\"}}}if(A.message_type===\"outgoing\"&&A?.conversation?.messages?.length&&g!==\"123456\"){if(A?.conversation?.messages[0]?.source_id?.substring(0,5)===\"WAID:\")return{message:\"bot\"};if(!C&&A.conversation?.id)return this.onSendMessageError(t,A.conversation?.id,\"Instance not found\"),{message:\"bot\"};let m;if(l==null)m=c;else{let I=this.provider.signDelimiter?this.provider.signDelimiter.replaceAll(\"\\\\n\",`\n`):`\n`,B=this.provider.signMsg?[`*${l}:*`]:[];B.push(c),m=B.join(I)}for(let I of A.conversation.messages)if(I.attachments&&I.attachments.length>0)for(let B of I.attachments){c||(m=null);let h={quoted:await this.getQuotedMessage(A,t)},y=await this.sendAttachment(C,g,B.data_url,m,h);!y&&A.conversation?.id&&this.onSendMessageError(t,A.conversation?.id),await this.updateChatwootMessageId({...y},{messageId:A.id,inboxId:A.inbox?.id,conversationId:A.conversation?.id,contactInboxSourceId:A.conversation?.contact_inbox?.source_id},t)}else{let B={number:g,text:m,delay:Math.floor(Math.random()*1501)+500,quoted:await this.getQuotedMessage(A,t)};Z(\"/message/sendText\");let h;try{if(h=await C?.textMessage(B,!0),!h)throw new Error(\"Message not sent\");ye.default.isLong(h?.messageTimestamp)&&(h.messageTimestamp=h.messageTimestamp?.toNumber()),await this.updateChatwootMessageId({...h},{messageId:A.id,inboxId:A.inbox?.id,conversationId:A.conversation?.id,contactInboxSourceId:A.conversation?.contact_inbox?.source_id},t)}catch(y){throw!h&&A.conversation?.id&&this.onSendMessageError(t,A.conversation?.id,y),y}}if(this.configService.get(\"CHATWOOT\").MESSAGE_READ){let I=await this.prismaRepository.message.findFirst({where:{key:{path:[\"fromMe\"],equals:!1},instanceId:t.instanceId}});if(I&&!I.chatwootIsRead){let B=I.key;C?.markMessageAsRead({readMessages:[{id:B.id,fromMe:B.fromMe,remoteJid:B.remoteJid}]});let h={chatwootMessageId:I.chatwootMessageId,chatwootConversationId:I.chatwootConversationId,chatwootInboxId:I.chatwootInboxId,chatwootContactInboxSourceId:I.chatwootContactInboxSourceId,chatwootIsRead:!0};await this.prismaRepository.message.updateMany({where:{instanceId:t.instanceId,key:{path:[\"id\"],equals:B.id}},data:h})}}}if(A.message_type===\"template\"&&A.event===\"message_created\"){let m={number:g,text:A.content.replace(/\\\\\\r\\n|\\\\\\n|\\n/g,`\n`),delay:Math.floor(Math.random()*1501)+500};Z(\"/message/sendText\"),await C?.textMessage(m)}return{message:\"bot\"}}catch(r){return r?.code===\"NEXI_SOCKET_LIFECYCLE_STALE\"?{message:\"bot\",lifecycle:\"superseded\"}:a?(this.logger.warn(\"nexi_socket_manual_disconnect_unavailable\"),{message:\"bot\",lifecycle:\"disconnect_failed\"}):(this.logger.error(r),{message:\"bot\"})}}";
+  const lookup = 'i=()=>{n&&require("/evolution/nexi-groups.cjs").lifecycleCheck(s)};try{await new Promise(m=>setTimeout(m,500)),i();let r=await this.clientCw(t);if(i(),!r)return this.logger.warn("client not found"),null;';
+  const caught = 'catch(r){return r?.code==="NEXI_SOCKET_LIFECYCLE_STALE"?{message:"bot",lifecycle:"superseded"}:a?(this.logger.warn("nexi_socket_manual_disconnect_unavailable"),{message:"bot",lifecycle:"disconnect_failed"}):(this.logger.error(r),{message:"bot"})}}async updateChatwootMessageId';
+  const lookupAfter = lookup.replace('return this.logger.warn("client not found"),null;', 'throw new Error("chatwoot_provider_unavailable");');
+  const caughtAfter = caught.replace('this.logger.error(r),{message:"bot"})', '()=>{this.logger.error("chatwoot_transport_failed");throw new Error("chatwoot_transport_failed")})()');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'evolution-compiled-chatwoot-'));
+  function run(source, label) {
+    const target = path.join(directory, 'candidate.js'); fs.writeFileSync(target, source);
+    const result = spawnSync(process.execPath, [path.join(__dirname, 'patch-channel-transport.mjs'), '--anchor-only=' + label],
+      { env: { ...process.env, EVOLUTION_BUNDLE_PATH: target }, encoding: 'utf8' });
+    return { ...result, output: fs.readFileSync(target, 'utf8') };
+  }
+  try {
+    for (const [label, before, after, source, malformed] of [
+      ['missing chatwoot client failure', lookup, lookupAfter, compiled, [
+        lookup.replace('if(i(),!r)', 'if(other(),!r)'), lookup.replace('setTimeout(m,500)', 'setTimeout(other,500)'),
+        lookup.replace('!r)', '!other)'), lookup.replace('lifecycleCheck(s)', 'otherCheck(s)'),
+        lookup.replace('try{', 'try('),
+      ]],
+      ['outbound failure response', caught, caughtAfter, compiled + 'async updateChatwootMessageId', [
+        caught.replace('r?.code', 'other?.code'), caught.replace('this.logger.error(r)', 'this.logger.error(other)'),
+        caught.replace('"superseded"', '"other"'), caught.replace('"disconnect_failed"', '"other"'),
+        caught.replace('})}}async', '}}}async'),
+      ]],
+    ]) {
+      await t.test(`${label}: exactly one owning target; accepted checks/responses unchanged`, () => {
+        assert.equal(source.split(before).length, 2);
+        const result = run(source, label);
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(result.output, source.replace(before, after));
+      });
+      for (const [index, candidate] of [source.replace(before, ''), source + ';' + before, after, ...malformed].entries()) {
+        await t.test(`${label}: absent/ambiguous/malformed/repeated ${index}`, () => {
+          const result = run(candidate, label);
+          assert.notEqual(result.status, 0);
+          assert.ok(result.stderr.includes(label));
+          assert.equal(result.output, candidate);
+        });
+      }
+    }
+    await t.test('control catch preserves stale/disconnect responses and throws generic transport failures', () => {
+      const result = run(caught, 'outbound failure response');
+      assert.equal(result.status, 0, result.stderr);
+      const body = result.output.slice(0, -'}async updateChatwootMessageId'.length);
+      const effects = [], subject = { logger: { warn: value => effects.push(value), error: value => effects.push(value) } };
+      const execute = new Function('failure', 'a', 'try{throw failure}' + body);
+      assert.deepEqual(execute.call(subject, { code: 'NEXI_SOCKET_LIFECYCLE_STALE' }, true), { message: 'bot', lifecycle: 'superseded' });
+      assert.deepEqual(effects, []);
+      assert.deepEqual(execute.call(subject, new Error('synthetic'), true), { message: 'bot', lifecycle: 'disconnect_failed' });
+      assert.deepEqual(effects, ['nexi_socket_manual_disconnect_unavailable']);
+      assert.throws(() => execute.call(subject, new Error('synthetic'), false), { message: 'chatwoot_transport_failed' });
+      assert.deepEqual(effects, ['nexi_socket_manual_disconnect_unavailable', 'chatwoot_transport_failed']);
+    });
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
 test('patched image bundle preserves the direct message path and fails closed', { skip: !process.env.EVOLUTION_BUNDLE_PATH }, () => {
   const bundle = fs.readFileSync(process.env.EVOLUTION_BUNDLE_PATH, 'utf8');
   const route = bundle.search(/processChatwootWebhook\([\w$]+,await [A-Za-z_$][\w$]*\.getProvider/);
@@ -343,7 +488,7 @@ test('patched image bundle preserves the direct message path and fails closed', 
     /substring\(0,5\)==="WAID:"/,
     /await [\w$]+\?\.textMessage\([\w$]+,!0\)/,
     /chatwoot_media_send_failed/, /chatwoot_template_send_failed/, /chatwoot_delete_failed/,
-    /catch\([\w$]+\)\{this\.logger\.error\("chatwoot_transport_failed"\);throw new Error\("chatwoot_transport_failed"\)/,
+    /catch\((?<error>[\w$]+)\)\{(?:return \k<error>\?\.code==="NEXI_SOCKET_LIFECYCLE_STALE"\?\{message:"bot",lifecycle:"superseded"\}:[\w$]+\?\(this\.logger\.warn\("nexi_socket_manual_disconnect_unavailable"\),\{message:"bot",lifecycle:"disconnect_failed"\}\):\(\(\)=>\{this\.logger\.error\("chatwoot_transport_failed"\);throw new Error\("chatwoot_transport_failed"\)\}\)\(\)|this\.logger\.error\("chatwoot_transport_failed"\);throw new Error\("chatwoot_transport_failed"\))\}\}async updateChatwootMessageId/,
     /prepareEvent\([\w$]+,[\w$]+,([\w$]+),this\.monitor\.waInstances\[\1\]\.instanceId\)/,
   ]) assert.ok(pattern.test(bundle), `missing bundle contract: ${pattern}`);
   assert.ok(!/catch\(([\w$]+)\)\{return this\.logger\.error\(\1\),\{message:"bot"\}\}\}async updateChatwootMessageId/.test(bundle));

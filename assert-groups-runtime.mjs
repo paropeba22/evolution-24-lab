@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
+import { createRequire } from 'node:module';
 
 const provider = process.env.EVOLUTION_SCHEMA_PROVIDER || process.env.EVOLUTION_PROVIDER || 'postgresql';
 const bundle = fs.readFileSync(process.env.EVOLUTION_BUNDLE_PATH || '/evolution/dist/main.js', 'utf8');
@@ -30,9 +31,18 @@ for (const [name, fields] of Object.entries(required)) {
   assert.ok(models[name], `compiled ${name} missing`);
   for (const field of fields) assert.ok(models[name].fields.some(f => f.name === field), `${name}.${field} missing`);
 }
-for (const gate of ['interceptEvents(this,', 'installRoutes(', 'nexi_groups_outbound_disabled_wave1', 'nexi-groups.cjs']) {
-  assert.ok(bundle.includes(gate), `compiled Groups gate missing: ${gate}`);
+for (const gate of ['interceptEvents(this,', 'installRoutes(', 'validateTargets(']) {
+  assert.ok(bundle.includes(`require("/evolution/nexi-groups.cjs").${gate}`), `compiled Groups gate missing: ${gate}`);
 }
+// tsup deliberately externalizes this helper. Validate the shipped executable
+// at that boundary, rather than looking for its private literals in main.js.
+const helperPath = process.env.EVOLUTION_GROUPS_HELPER_PATH || '/evolution/nexi-groups.cjs';
+assert.ok(fs.readFileSync(helperPath, 'utf8').includes('nexi_groups_outbound_disabled_wave1'), 'external Groups denial missing');
+const groups = createRequire(import.meta.url)(helperPath);
+const denied = { message: 'nexi_groups_outbound_disabled_wave1' };
+assert.throws(() => groups.validateTargets(true, { jid: '120363000000000001@g.us' }), denied);
+const socket = groups.guardSocket({ groupLeave() { assert.fail('Group outbound reached socket'); } }, true);
+assert.throws(() => socket.groupLeave('120363000000000001@g.us'), denied);
 for (const gate of ['lifecycleCapture(', 'lifecycleCurrent(', 'lifecycleAwait(', 'persistLifecycle(',
   'connectLifecycle(', 'trackRecovery(', 'cleanupLifecycle(', 'scheduleLifecycle(', 'controlConnect(', 'manualLifecycle(',
   'operationCheck(', 'operationAwait(', 'nexi_socket_profile_reload']) {

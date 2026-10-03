@@ -236,12 +236,16 @@ const anchorPatches = [
   },
   {
     label: 'QR terminal log',
-    pattern: String.raw`(?<![\w$.])${capture('module')}\.default\.generate\(${capture('qr')},\{small:!0\},${capture('output')}=>this\.logger\.log\(\`\n\{ instance: \$\{this\.instance\.name\} pairingCode: \$\{this\.instance\.qrcode\.pairingCode\}, qrcodeCount: \$\{this\.instance\.qrcode\.count\} \}\n\`\+${reference('output')}\)\)`,
-    transform: () => 'this.logger.info({message:"QR generated",instanceName:this.instance.name,qrcodeCount:this.instance.qrcode.count})',
+    // The accepted source overlay fences this synchronous terminal callback.
+    // Accept only the historical callback or that exact lifecycle predicate;
+    // retain the predicate when removing terminal QR/pairing-code disclosure.
+    pattern: String.raw`(?<![\w$.])${capture('module')}\.default\.generate\(${capture('qr')},\{small:!0\},${capture('output')}=>(?<guard>require\("/evolution/nexi-groups\.cjs"\)\.lifecycleCurrent\(${capture('lifecycle')}\)&&)?this\.logger\.log\(\`\n\{ instance: \$\{this\.instance\.name\} pairingCode: \$\{this\.instance\.qrcode\.pairingCode\}, qrcodeCount: \$\{this\.instance\.qrcode\.count\} \}\n\`\+${reference('output')}\)\)`,
+    transform: (_m, g) => (g.guard || '') + 'this.logger.info({message:"QR generated",instanceName:this.instance.name,qrcodeCount:this.instance.qrcode.count})',
   },
   {
     label: 'missing chatwoot client failure',
-    pattern: String.raw`if\(await new Promise\(${capture('resolve')}=>setTimeout\(${reference('resolve')},500\)\),!await this\.clientCw\(${capture('input')}\)\)return this\.logger\.warn\("client not found"\),null;`,
+    // The fenced lookup retains both calls to its captured lifecycle checker.
+    pattern: String.raw`(?:if\(await new Promise\(${capture('resolve')}=>setTimeout\(${reference('resolve')},500\)\),!await this\.clientCw\(${capture('input')}\)\)|(?<![\w$.])${capture('check')}=\(\)=>\{${capture('bot')}&&require\("/evolution/nexi-groups\.cjs"\)\.lifecycleCheck\(${capture('owner')}\)\};try\{await new Promise\(${capture('guardedResolve')}=>setTimeout\(${reference('guardedResolve')},500\)\),${reference('check')}\(\);let ${capture('client')}=await this\.clientCw\(${capture('guardedInput')}\);if\(${reference('check')}\(\),!${reference('client')}\))return this\.logger\.warn\("client not found"\),null;`,
     transform: (m) => m.replace('return this.logger.warn("client not found"),null;', 'throw new Error("chatwoot_provider_unavailable");'),
   },
   {
@@ -266,8 +270,18 @@ const anchorPatches = [
   },
   {
     label: 'outbound failure response',
-    pattern: String.raw`catch\(${capture('error')}\)\{return this\.logger\.error\(${reference('error')}\),\{message:"bot"\}\}\}async updateChatwootMessageId`,
-    transform: (_m, g) => `catch(${g.error}){this.logger.error("chatwoot_transport_failed");throw new Error("chatwoot_transport_failed")}}async updateChatwootMessageId`,
+    // Only the generic failure branch changes. Accepted stale/disconnect
+    // control responses remain byte-identical, including their short circuit.
+    pattern: String.raw`catch\(${capture('error')}\)\{return (?<control>${reference('error')}\?\.code==="NEXI_SOCKET_LIFECYCLE_STALE"\?\{message:"bot",lifecycle:"superseded"\}:${capture('disconnect')}\?\(this\.logger\.warn\("nexi_socket_manual_disconnect_unavailable"\),\{message:"bot",lifecycle:"disconnect_failed"\}\):\()?this\.logger\.error\(${reference('error')}\),(?<response>\{message:"bot"\}\)?)\}\}async updateChatwootMessageId`,
+    transform: (m, g) => {
+      const failure = 'this.logger.error("chatwoot_transport_failed");throw new Error("chatwoot_transport_failed")';
+      if (g.control) {
+        if (g.response !== '{message:"bot"})') throw new Error('outbound failure response: control branch boundary changed');
+        return m.replace(`this.logger.error(${g.error}),${g.response}`, `()=>{${failure}})()`);
+      }
+      if (g.response !== '{message:"bot"}') throw new Error('outbound failure response: generic branch boundary changed');
+      return `catch(${g.error}){${failure}}}async updateChatwootMessageId`;
+    },
   },
   {
     label: 'signed Evolution event',

@@ -31,6 +31,39 @@ test('runtime model assertion rejects a bundle missing Chatwoot.inboxId',
     }
   });
 
+test('Groups artifact assertion validates external executable denial and rejects broken boundaries',
+  { skip: !process.env.EVOLUTION_BUNDLE_PATH || !process.env.EVOLUTION_PRISMA_DIR }, async (t) => {
+    const source = fs.readFileSync(process.env.EVOLUTION_BUNDLE_PATH, 'utf8');
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'evolution-groups-artifact-'));
+    function run(bundle = source, helper) {
+      const bundlePath = path.join(directory, 'main.js'); fs.writeFileSync(bundlePath, bundle);
+      const env = { ...process.env, EVOLUTION_BUNDLE_PATH: bundlePath };
+      if (helper !== undefined) {
+        env.EVOLUTION_GROUPS_HELPER_PATH = path.join(directory, 'groups.cjs');
+        fs.writeFileSync(env.EVOLUTION_GROUPS_HELPER_PATH, helper);
+      }
+      return spawnSync(process.execPath, [path.join(__dirname, 'assert-groups-runtime.mjs')], { env, encoding: 'utf8' });
+    }
+    try {
+      await t.test('valid compiled bundle and shipped helper', () => {
+        const result = run(); assert.equal(result.status, 0, result.stderr);
+      });
+      for (const gate of ['interceptEvents(this,', 'installRoutes(', 'validateTargets(']) {
+        await t.test(`missing external binding: ${gate}`, () => {
+          const result = run(source.replaceAll(`require("/evolution/nexi-groups.cjs").${gate}`, `unrelated.${gate}`));
+          assert.notEqual(result.status, 0); assert.ok(result.stderr.includes('compiled Groups gate missing: ' + gate));
+        });
+      }
+      for (const [name, helper, error] of [
+        ['missing denial marker', 'module.exports={};', /external Groups denial missing/],
+        ['marker present but target denial disabled', 'module.exports={validateTargets(){},guardSocket(s){return s}};/* nexi_groups_outbound_disabled_wave1 */', /Missing expected exception/],
+        ['socket denial disabled', 'module.exports={validateTargets(){throw new Error("nexi_groups_outbound_disabled_wave1")},guardSocket(s){return s}};', /Group outbound reached socket/],
+      ]) await t.test(name, () => {
+        const result = run(source, helper); assert.notEqual(result.status, 0); assert.match(result.stderr, error);
+      });
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+  });
+
 test('startup selector chooses the configured provider and rejects unknown providers', () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'evolution-selector-test-'));
   try {
