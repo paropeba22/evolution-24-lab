@@ -251,8 +251,9 @@ async function verifyChatwootWebhook(request, provider, fetchImpl = fetch, ledge
 function financialHistoryDisposition(body, provider) {
   if (!['message_created', 'message_updated'].includes(body?.event)) return null;
   const attributes = body.content_attributes;
-  const isWaid = typeof body.source_id === 'string' && body.source_id.startsWith('WAID:');
-  if (!attributes?.nexi_managed_delivery && !isWaid) return null;
+  // WAID is ordinary transport correlation, not financial business provenance.
+  // Incoming secondary processing must never acquire outbound failure semantics.
+  if (body.message_type !== 'outgoing' || !attributes?.nexi_managed_delivery) return null;
   // Inspect the event's own identity. conversation.messages is an asynchronous
   // projection and may already describe a later, unrelated outgoing message.
   const context = attributes?.nexi_delivery_context;
@@ -315,7 +316,7 @@ function prepareEvent(headers, body, instanceName, instanceId) {
       ? { qrcode: { instance: instanceName } }
       : body.event === 'connection.update'
         ? { state: body.data?.state }
-        : require('./nexi-groups.cjs').groupEventPayload(body.event, body.data) || (['identity.observed', 'identity.correlated'].includes(body.event)
+        : require('./nexi-attendance.cjs').eventPayload(body.event, body.data) || require('./nexi-groups.cjs').groupEventPayload(body.event, body.data) || (['identity.observed', 'identity.correlated'].includes(body.event)
           ? identityPayload(body.data)
           : {}),
   };

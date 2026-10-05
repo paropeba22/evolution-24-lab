@@ -21,11 +21,14 @@ COPY patch-channel-transport.mjs /evolution/patch-channel-transport.mjs
 COPY assert-runtime-model.mjs /tmp/assert-runtime-model.mjs
 COPY assert-runtime-model.mjs /evolution/assert-runtime-model.mjs
 COPY assert-groups-runtime.mjs /evolution/assert-groups-runtime.mjs
+COPY assert-attendance-runtime.mjs /evolution/assert-attendance-runtime.mjs
+COPY patch-attendance-source.mjs attendance-models.prisma nexi-attendance.cjs attendance-wave1b.test.cjs attendance-source.test.cjs /evolution/
 COPY Dockerfile /evolution/Dockerfile
 COPY nexi-transport.cjs /evolution/nexi-transport.cjs
 COPY patch-trusted-baileys.mjs patch-managed-retry.mjs nexi-identity.cjs /evolution/
 COPY patch-groups-source.mjs nexi-groups.cjs groups-wave1.test.cjs /evolution/
 COPY groups-postgresql.integration.test.cjs /evolution/
+COPY attendance-database.integration.test.cjs /evolution/
 COPY identity-foundation-source.test.cjs recipient-contract-test-support.cjs /evolution/
 COPY bundle-patch.test.cjs nexi-transport.test.cjs redis-lua.integration.test.cjs runtime-model.test.cjs financial-delivery-source.test.cjs /evolution/
 COPY select-provider-bundle.cjs /evolution/select-provider-bundle.cjs
@@ -37,6 +40,8 @@ COPY prisma/postgresql-migrations/20261002000001_harden_groups_wave1 /evolution/
 COPY prisma/mysql-migrations/20261002000001_harden_groups_wave1 /evolution/prisma/mysql-migrations/20261002000001_harden_groups_wave1
 COPY prisma/postgresql-migrations/20261002000002_namespace_groups_source /evolution/prisma/postgresql-migrations/20261002000002_namespace_groups_source
 COPY prisma/mysql-migrations/20261002000002_namespace_groups_source /evolution/prisma/mysql-migrations/20261002000002_namespace_groups_source
+COPY prisma/postgresql-migrations/20261005000000_nexi_attendance_boundaries /evolution/prisma/postgresql-migrations/20261005000000_nexi_attendance_boundaries
+COPY prisma/mysql-migrations/20261005000000_nexi_attendance_boundaries /evolution/prisma/mysql-migrations/20261005000000_nexi_attendance_boundaries
 
 # The schema change must precede Prisma generation and tsup's bundled client.
 RUN node /tmp/patch-prisma-binding.mjs
@@ -44,6 +49,7 @@ RUN node /tmp/patch-financial-delivery-source.mjs /evolution --snapshot
 RUN node /evolution/patch-trusted-baileys.mjs /evolution --snapshot
 RUN node /evolution/patch-managed-retry.mjs /evolution --snapshot
 RUN node /evolution/patch-groups-source.mjs /evolution --snapshot
+RUN node /evolution/patch-attendance-source.mjs /evolution --snapshot
 
 # tsup bakes licensing definitions into each bundle. Empty args retain the
 # pinned upstream source's official-endpoint fallback; no runtime ENV is added.
@@ -66,6 +72,7 @@ RUN set -eu; mkdir -p /tmp/evolution-provider-bundles; \
       EVOLUTION_PROVIDER="$provider" node /tmp/patch-channel-transport.mjs; \
       EVOLUTION_PROVIDER="$provider" node /tmp/assert-runtime-model.mjs; \
       EVOLUTION_PROVIDER="$provider" node /evolution/assert-groups-runtime.mjs; \
+      EVOLUTION_PROVIDER="$provider" node /evolution/assert-attendance-runtime.mjs; \
       cp dist/main.js "/tmp/evolution-provider-bundles/$provider.js"; \
     done; \
     mkdir -p dist/providers; \
@@ -73,8 +80,10 @@ RUN set -eu; mkdir -p /tmp/evolution-provider-bundles; \
     cp dist/providers/postgresql.js dist/providers/psql_bouncer.js; \
     for provider in mysql postgresql; do \
       EVOLUTION_PROVIDER="$provider" EVOLUTION_SKIP_GENERATED=1 EVOLUTION_BUNDLE_PATH="/evolution/dist/providers/$provider.js" node /tmp/assert-runtime-model.mjs; \
+      EVOLUTION_PROVIDER="$provider" EVOLUTION_BUNDLE_PATH="/evolution/dist/providers/$provider.js" node /evolution/assert-attendance-runtime.mjs; \
     done; \
     EVOLUTION_PROVIDER=postgresql EVOLUTION_SCHEMA_PROVIDER=psql_bouncer EVOLUTION_SKIP_GENERATED=1 EVOLUTION_BUNDLE_PATH=/evolution/dist/providers/psql_bouncer.js node /tmp/assert-runtime-model.mjs; \
+    EVOLUTION_PROVIDER=postgresql EVOLUTION_SCHEMA_PROVIDER=psql_bouncer EVOLUTION_BUNDLE_PATH=/evolution/dist/providers/psql_bouncer.js node /evolution/assert-attendance-runtime.mjs; \
     EVOLUTION_PROVIDER=postgresql node /tmp/assert-runtime-model.mjs; \
     EVOLUTION_PROVIDER=postgresql EVOLUTION_PRISMA_DIR=/evolution/prisma EVOLUTION_BUNDLE_PATH=/evolution/dist/providers/postgresql.js node --test *.test.cjs; \
     EVOLUTION_PROVIDER=mysql EVOLUTION_SKIP_GENERATED=1 EVOLUTION_PRISMA_DIR=/evolution/prisma EVOLUTION_BUNDLE_PATH=/evolution/dist/providers/mysql.js node --test *.test.cjs
@@ -89,11 +98,13 @@ COPY --from=source-builder /evolution/nexi-transport.cjs /evolution/nexi-transpo
 COPY --from=source-builder /evolution/nexi-financial-transport.cjs /evolution/nexi-financial-transport.cjs
 COPY --from=source-builder /evolution/nexi-identity.cjs /evolution/nexi-identity.cjs
 COPY --from=source-builder /evolution/nexi-groups.cjs /evolution/nexi-groups.cjs
+COPY --from=source-builder /evolution/nexi-attendance.cjs /evolution/nexi-attendance.cjs
 COPY --from=source-builder /evolution/node_modules/baileys /evolution/node_modules/baileys
 COPY --from=source-builder /evolution/node_modules/libsignal /evolution/node_modules/libsignal
 COPY select-provider-bundle.cjs /evolution/select-provider-bundle.cjs
 COPY assert-runtime-model.mjs /tmp/assert-runtime-model.mjs
 COPY assert-groups-runtime.mjs /tmp/assert-groups-runtime.mjs
+COPY assert-attendance-runtime.mjs /tmp/assert-attendance-runtime.mjs
 
 RUN set -eu; \
     test -f /evolution/prisma.config.ts; \
@@ -106,8 +117,10 @@ RUN set -eu; \
     for provider in mysql postgresql; do \
       EVOLUTION_PROVIDER="$provider" EVOLUTION_SKIP_GENERATED=1 EVOLUTION_BUNDLE_PATH="/evolution/dist/providers/$provider.js" node /tmp/assert-runtime-model.mjs; \
       EVOLUTION_PROVIDER="$provider" EVOLUTION_BUNDLE_PATH="/evolution/dist/providers/$provider.js" node /tmp/assert-groups-runtime.mjs; \
+      EVOLUTION_PROVIDER="$provider" EVOLUTION_BUNDLE_PATH="/evolution/dist/providers/$provider.js" node /tmp/assert-attendance-runtime.mjs; \
     done; \
     EVOLUTION_PROVIDER=postgresql EVOLUTION_SCHEMA_PROVIDER=psql_bouncer EVOLUTION_SKIP_GENERATED=1 EVOLUTION_BUNDLE_PATH=/evolution/dist/providers/psql_bouncer.js node /tmp/assert-runtime-model.mjs; \
+    EVOLUTION_PROVIDER=postgresql EVOLUTION_SCHEMA_PROVIDER=psql_bouncer EVOLUTION_BUNDLE_PATH=/evolution/dist/providers/psql_bouncer.js node /tmp/assert-attendance-runtime.mjs; \
     EVOLUTION_PROVIDER=postgresql node /tmp/assert-runtime-model.mjs && \
     rm /tmp/assert-runtime-model.mjs
 ENTRYPOINT ["/bin/bash", "-c", "node /evolution/select-provider-bundle.cjs && . ./Docker/scripts/deploy_database.sh && npm run start:prod"]
