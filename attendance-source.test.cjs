@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { execFileSync, spawnSync } = require('node:child_process');
+const assertProtectedSendNode = require('./assert-protected-send-node.cjs');
 let scratch;
 const root = __dirname;
 const files = ['src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts',
@@ -103,13 +104,34 @@ test('API, WebSocket service and voice structured nodes cannot bypass raw proven
   const voice = fs.readFileSync(path.join(root, files[1]), 'utf8');
   assert.match(voice, /rawNodeForSocket\(baileys_sock, stanza\)/);
   const socket = fs.readFileSync(path.join(root, 'node_modules/baileys/lib/Socket/socket.js'), 'utf8');
-  const sendNode = socket.indexOf('    const sendNode = async (frame) => {');
-  const snapshot = socket.indexOf('const nexiFrame = nexiAttendance.snapshotFrame(config, frame);', sendNode);
-  const validation = socket.indexOf('await nexiAttendance.assertNode(config, nexiFrame)', sendNode);
-  assert.ok(snapshot > sendNode && snapshot < validation && validation < socket.indexOf('encodeBinaryNode(nexiFrame)', sendNode));
-  assert.ok(!socket.includes('encodeBinaryNode(frame)'));
+  assertProtectedSendNode(socket);
   assert.match(socket, /sendRawMessage: data => \{\s+nexiAttendance.externalRaw\(config\)/);
   assert.match(socket, /const sendRawMessage = async/);
+});
+test('protected sendNode artifact proof is scoped to its lexical region and preserves snapshot ordering', () => {
+  const valid = `    const sendNode = async (frame) => {
+        const nexiFrame = nexiAttendance.snapshotFrame(config, frame);
+        await nexiAttendance.assertNode(config, nexiFrame);
+        if (logger.level === 'trace') {
+            logger.trace({ xml: binaryNodeToString(nexiFrame), msg: 'xml send' });
+        }
+        const buff = encodeBinaryNode(nexiFrame);
+        return sendRawMessage(buff);
+    };
+    /**
+     * Wait for a message with a certain tag`;
+  assert.doesNotThrow(() => assertProtectedSendNode(valid));
+  assert.throws(() => assertProtectedSendNode(valid.replace(
+    'encodeBinaryNode(nexiFrame)', 'encodeBinaryNode(frame)')));
+  assert.throws(() => assertProtectedSendNode(valid.replace(
+    'binaryNodeToString(nexiFrame)', 'binaryNodeToString(frame)')));
+  assert.doesNotThrow(() => assertProtectedSendNode(valid + '\nencodeBinaryNode(frame);'));
+  const outOfOrder = valid.replace(
+    'await nexiAttendance.assertNode(config, nexiFrame);',
+    'const buff = encodeBinaryNode(nexiFrame);\n        await nexiAttendance.assertNode(config, nexiFrame);')
+    .replace('        const buff = encodeBinaryNode(nexiFrame);\n        return sendRawMessage(buff);',
+      '        return sendRawMessage(buff);');
+  assert.throws(() => assertProtectedSendNode(outOfOrder));
 });
 test('actual Chatwoot unsafe SQL/import and conversation READ have managed capability hooks', () => {
   const service = fs.readFileSync(path.join(root, files[2]), 'utf8'), helper = fs.readFileSync(path.join(root, files[3]), 'utf8');

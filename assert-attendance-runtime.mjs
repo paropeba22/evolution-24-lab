@@ -5,6 +5,7 @@ import vm from 'node:vm';
 import { createRequire } from 'node:module';
 
 const root = process.env.EVOLUTION_ATTENDANCE_ROOT || '/evolution';
+const assertProtectedSendNode = createRequire(import.meta.url)('./assert-protected-send-node.cjs');
 const provider = process.env.EVOLUTION_SCHEMA_PROVIDER || process.env.EVOLUTION_PROVIDER || 'postgresql';
 assert.ok(['postgresql', 'psql_bouncer', 'mysql'].includes(provider));
 const bundle = fs.readFileSync(process.env.EVOLUTION_BUNDLE_PATH || path.join(root, 'dist/main.js'), 'utf8');
@@ -70,12 +71,7 @@ for (const [file, markers] of Object.entries(runtimeFiles)) {
     assert.ok(text.includes('nexiFinancial.nativeFinancial(') && text.includes('nexiGroups.groupLike(key.remoteJid)'));
   }
   if (file.includes('socket.js')) {
-    const start = text.indexOf('    const sendNode = async (frame) => {');
-    const snapshot = text.indexOf('const nexiFrame = nexiAttendance.snapshotFrame(config, frame);', start);
-    const validate = text.indexOf('await nexiAttendance.assertNode(config, nexiFrame);', start);
-    const encode = text.indexOf('const buff = encodeBinaryNode(nexiFrame);', start);
-    assert.ok(start > 0 && snapshot > start && snapshot < validate && validate < encode);
-    assert.ok(!text.includes('encodeBinaryNode(frame)') && !text.includes('binaryNodeToString(frame)'));
+    assertProtectedSendNode(text);
   }
   if (file.includes('messages-send')) {
     const mark = text.indexOf('nexiAttendance.markInternalControl(config, protocolMessage, meJid);');

@@ -22,6 +22,7 @@ COPY assert-runtime-model.mjs /tmp/assert-runtime-model.mjs
 COPY assert-runtime-model.mjs /evolution/assert-runtime-model.mjs
 COPY assert-groups-runtime.mjs /evolution/assert-groups-runtime.mjs
 COPY assert-attendance-runtime.mjs /evolution/assert-attendance-runtime.mjs
+COPY assert-protected-send-node.cjs /evolution/assert-protected-send-node.cjs
 COPY patch-attendance-source.mjs attendance-models.prisma nexi-attendance.cjs attendance-wave1b.test.cjs attendance-source.test.cjs /evolution/
 COPY nexi-canonical-json.cjs attendance-canonical.test.cjs attendance-corrections.test.cjs /evolution/
 COPY nexi-attendance-snapshot.cjs attendance-snapshot.test.cjs /evolution/
@@ -113,6 +114,7 @@ COPY select-provider-bundle.cjs /evolution/select-provider-bundle.cjs
 COPY assert-runtime-model.mjs /tmp/assert-runtime-model.mjs
 COPY assert-groups-runtime.mjs /tmp/assert-groups-runtime.mjs
 COPY assert-attendance-runtime.mjs /tmp/assert-attendance-runtime.mjs
+COPY assert-protected-send-node.cjs /tmp/assert-protected-send-node.cjs
 
 RUN set -eu; \
     test -f /evolution/prisma.config.ts; \
