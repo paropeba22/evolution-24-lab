@@ -69,9 +69,9 @@ RUN set -eu; mkdir -p /tmp/evolution-provider-bundles; \
       if [ "$provider" = mysql ]; then build_uri="mysql://build:build@localhost:3306/build"; else build_uri="postgresql://build:build@localhost:5432/build"; fi; \
       DATABASE_PROVIDER="$provider" DATABASE_CONNECTION_URI="$build_uri" npm run db:generate; \
       if [ "$provider" != postgresql ]; then \
-        DATABASE_PROVIDER="$provider" LICENSE_ENDPOINT_ENCODED="$LICENSE_ENDPOINT_ENCODED" LICENSE_ENDPOINT_XOR_KEY="$LICENSE_ENDPOINT_XOR_KEY" NODE_OPTIONS="--max-old-space-size=2048" npx tsup; \
+        DATABASE_PROVIDER="$provider" LICENSE_ENDPOINT_ENCODED="$LICENSE_ENDPOINT_ENCODED" LICENSE_ENDPOINT_XOR_KEY="$LICENSE_ENDPOINT_XOR_KEY" NODE_OPTIONS="--max-old-space-size=4096" npx tsup; \
       else \
-        DATABASE_PROVIDER="$provider" LICENSE_ENDPOINT_ENCODED="$LICENSE_ENDPOINT_ENCODED" LICENSE_ENDPOINT_XOR_KEY="$LICENSE_ENDPOINT_XOR_KEY" NODE_OPTIONS="--max-old-space-size=2048" npm run build; \
+        DATABASE_PROVIDER="$provider" LICENSE_ENDPOINT_ENCODED="$LICENSE_ENDPOINT_ENCODED" LICENSE_ENDPOINT_XOR_KEY="$LICENSE_ENDPOINT_XOR_KEY" NODE_OPTIONS="--max-old-space-size=4096" npm run build; \
       fi; \
       node /tmp/patch-instance-create.mjs; \
       EVOLUTION_PROVIDER="$provider" node /tmp/patch-channel-transport.mjs; \
