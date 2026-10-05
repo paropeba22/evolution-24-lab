@@ -1,0 +1,99 @@
+model NexiManagedTransportContext {
+  id String @id @db.VarChar(36)
+  instanceId String @db.VarChar(100)
+  instanceName String @db.VarChar(100)
+  managedChannelId String @db.VarChar(32)
+  sessionIdentity String @db.VarChar(64)
+  fingerprint String @unique @db.VarChar(64)
+  payload Json JSON_TYPE
+  createdAt DateTime @default(now())
+  @@index([instanceId, createdAt])
+}
+
+model NexiAttendancePreparation {
+  id String @id @db.VarChar(36)
+  instanceId String @db.VarChar(100)
+  instanceName String @db.VarChar(100)
+  executionId String @db.VarChar(36)
+  attemptId String? @db.VarChar(36)
+  transportUnit Int
+  requestId String @db.VarChar(36)
+  inputDigest String @db.VarChar(64)
+  requests Json JSON_TYPE
+  authority Json JSON_TYPE
+  intent Json JSON_TYPE
+  authorityDigest String @db.VarChar(64)
+  payloadDigest String @db.VarChar(64)
+  recipient String @db.VarChar(128)
+  sessionIdentity String @db.VarChar(64)
+  externalId String @db.VarChar(512)
+  reservationId String? @db.VarChar(36)
+  preparationNonce String @db.VarChar(64)
+  preparationRevision Int
+  contentDigest String? @db.VarChar(64)
+  preparationDigest String? @db.VarChar(64)
+  admissionId String? @db.VarChar(36)
+  releaseId String? @db.VarChar(36)
+  releaseConsumedAt DateTime?
+  dispatchStartedAt DateTime?
+  transportReturn Json? JSON_TYPE
+  outcomeUnknown Boolean @default(false)
+  state String @db.VarChar(32)
+  revision Int @default(0)
+  reservedAt DateTime?
+  frozenAt DateTime?
+  closedAt DateTime?
+  closureReason String? @db.VarChar(64)
+  successorId String? @db.VarChar(36)
+  recoveryAttempts Int @default(0)
+  nextRecoveryAt DateTime @default(now())
+  lastRecoveryReason String? @db.VarChar(64)
+  createdAt DateTime @default(now())
+  @@unique([instanceId, requestId])
+  @@unique([instanceId, externalId])
+  @@index([instanceId, state])
+}
+
+model NexiReceiptJournal {
+  id String @id @db.VarChar(36)
+  instanceId String @db.VarChar(100)
+  sessionIdentity String @db.VarChar(64)
+  sourceKey String @db.VarChar(64)
+  fingerprint String @db.VarChar(64)
+  externalId String @db.VarChar(512)
+  normalizedStatus String @db.VarChar(16)
+  evidence Json JSON_TYPE
+  createdAt DateTime @default(now())
+  @@unique([instanceId, sourceKey])
+  @@index([instanceId, externalId])
+}
+
+model NexiAttendanceEventOutbox {
+  id String @id @db.VarChar(36)
+  instanceId String @db.VarChar(100)
+  instanceName String @db.VarChar(100)
+  sessionIdentity String @db.VarChar(64)
+  eventType String @db.VarChar(64)
+  version Int
+  sourceKey String @db.VarChar(64)
+  fingerprint String @db.VarChar(64)
+  body Json JSON_TYPE
+  state String @db.VarChar(32)
+  attempts Int @default(0)
+  nextAttemptAt DateTime
+  leaseToken String? @db.VarChar(36)
+  leaseUntil DateTime?
+  acknowledgedAt DateTime?
+  createdAt DateTime @default(now())
+  @@unique([instanceId, sourceKey])
+  @@index([state, nextAttemptAt])
+}
+
+model NexiAttendanceHealth {
+  instanceId String @id @db.VarChar(100)
+  unhealthy Boolean @default(true)
+  reason String @db.VarChar(64)
+  revision Int @default(0)
+  firstGapAt DateTime
+  lastGapAt DateTime
+}
