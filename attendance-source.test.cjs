@@ -64,6 +64,26 @@ test('each pinned anchor rejects zero/multiple matches before modifying any sour
   fs.writeFileSync(file, accepted);
   execFileSync(process.execPath, [path.join(root, 'patch-attendance-source.mjs'), scratch]);
 });
+
+test('semantic snapshot, encoder and final-frame anchors fail closed without partial patches', () => {
+  const anchors = [
+    ['node_modules/baileys/lib/Socket/messages-send.js', '    const relayMessage = async (jid, message, { messageId: msgId, participant, additionalAttributes, additionalNodes, useUserDevicesCache, useCachedGroupMetadata, statusJidList }) => {'],
+    ['node_modules/baileys/lib/Socket/messages-send.js', '                const bytes = encodeWAMessage(msgToEncrypt);'],
+    ['node_modules/baileys/lib/Socket/socket.js', '        const buff = encodeBinaryNode(frame);'],
+  ];
+  for (const [file, anchor] of anchors) {
+    for (const sourceFile of files) fs.copyFileSync(path.join(root, '.attendance-upstream', sourceFile), path.join(scratch, sourceFile));
+    const target = path.join(scratch, file), accepted = fs.readFileSync(target, 'utf8');
+    assert.equal(accepted.split(anchor).length - 1, 1);
+    for (const broken of [accepted.replace(anchor, '/* removed snapshot boundary */'), accepted + '\n' + anchor]) {
+      fs.writeFileSync(target, broken);
+      const before = files.map(f => fs.readFileSync(path.join(scratch, f), 'utf8'));
+      const result = spawnSync(process.execPath, [path.join(root, 'patch-attendance-source.mjs'), scratch], { encoding: 'utf8' });
+      assert.notEqual(result.status, 0); assert.match(result.stderr, /expected 1, found [02]/);
+      assert.deepEqual(files.map(f => fs.readFileSync(path.join(scratch, f), 'utf8')), before);
+    }
+  }
+});
 test('actual patched source captures raw semantics before buffer, final ID before sendNode, and native retry before resend', () => {
   const recv = fs.readFileSync(path.join(root, 'node_modules/baileys/lib/Socket/messages-recv.js'), 'utf8');
   const start = recv.indexOf('    const handleReceipt = async (node) => {');
@@ -84,7 +104,10 @@ test('API, WebSocket service and voice structured nodes cannot bypass raw proven
   assert.match(voice, /rawNodeForSocket\(baileys_sock, stanza\)/);
   const socket = fs.readFileSync(path.join(root, 'node_modules/baileys/lib/Socket/socket.js'), 'utf8');
   const sendNode = socket.indexOf('    const sendNode = async (frame) => {');
-  assert.ok(socket.indexOf('await nexiAttendance.assertNode(config, frame)', sendNode) < socket.indexOf('encodeBinaryNode(frame)', sendNode));
+  const snapshot = socket.indexOf('const nexiFrame = nexiAttendance.snapshotFrame(config, frame);', sendNode);
+  const validation = socket.indexOf('await nexiAttendance.assertNode(config, nexiFrame)', sendNode);
+  assert.ok(snapshot > sendNode && snapshot < validation && validation < socket.indexOf('encodeBinaryNode(nexiFrame)', sendNode));
+  assert.ok(!socket.includes('encodeBinaryNode(frame)'));
   assert.match(socket, /sendRawMessage: data => \{\s+nexiAttendance.externalRaw\(config\)/);
   assert.match(socket, /const sendRawMessage = async/);
 });

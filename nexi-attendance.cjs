@@ -4,6 +4,7 @@ const { createHash, createHmac, randomUUID, randomBytes, timingSafeEqual } = req
 const { AsyncLocalStorage } = require('node:async_hooks');
 const identity = require('./nexi-identity.cjs');
 const canonicalJson = require('./nexi-canonical-json.cjs');
+const snapshots = require('./nexi-attendance-snapshot.cjs');
 const CANONICAL_VERSION = canonicalJson.VERSION;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const HASH = /^[0-9a-f]{64}$/;
@@ -33,6 +34,7 @@ const configs = new WeakMap();
 const sockets = new WeakMap();
 const purposes = new WeakMap();
 const internalControls = new WeakMap();
+const encodings = new WeakMap();
 const scope = new AsyncLocalStorage();
 const workers = new Map();
 const healthWrites = new Map();
@@ -675,6 +677,7 @@ function markInternalControl(config, message, recipient) {
   // Called only by the exact pinned sendPeerDataOperationMessage constructor.
   // The allowlist is a request to recover an INCOMING placeholder from our own
   // phone, not a retry of our customer send. History/mutation PDOs are excluded.
+  message = transportSnapshot(config, message);
   const protocol = message?.protocolMessage, request = protocol?.peerDataOperationRequestMessage;
   const own = [jid(config.auth?.creds?.me?.id), jid(config.auth?.creds?.me?.lid)].filter(Boolean);
   if (Object.keys(message || {}).join(',') !== 'protocolMessage' || protocol?.type !== 16 ||
@@ -687,9 +690,67 @@ function markInternalControl(config, message, recipient) {
         Object.keys(item.messageKey).every(key => ['remoteJid', 'fromMe', 'id', 'participant'].includes(key)) &&
         (item.messageKey.participant == null || [PN, LID].some(pattern => pattern.test(jid(item.messageKey.participant) || ''))) &&
         [PN, LID].some(pattern => pattern.test(jid(item.messageKey.remoteJid) || '')) &&
-        typeof item.messageKey.id === 'string' && /^[A-Za-z0-9_-]{1,512}$/.test(item.messageKey.id))) return;
+        typeof item.messageKey.id === 'string' && /^[A-Za-z0-9_-]{1,512}$/.test(item.messageKey.id))) return message;
   internalControls.set(message, { config, recipient: jid(recipient), session: identity.sessionFingerprint(config.auth?.creds),
-    fingerprint: createHash('sha256').update(JSON.stringify(message)).digest('hex') });
+    fingerprint: snapshots.fingerprint(message) });
+  return message;
+}
+function transportSnapshot(config, value, allowed, immutable = true) {
+  try { return snapshots.copy(value, allowed, immutable); }
+  catch (error) {
+    const code = error && ['object', 'function'].includes(typeof error) ? Object.getOwnPropertyDescriptor(error, 'code')?.value : null;
+    const reason = ['depth', 'number', 'type', 'cycle', 'prototype', 'key', 'limit', 'accessor']
+      .map(value => 'nexi_attendance_snapshot_' + value).includes(code) ? code : 'snapshot_invalid';
+    log(configs.get(config)?.source || {}, 'attendance.snapshot.denied', { reason });
+    throw error; // No mutable or legacy fallback.
+  }
+}
+function beginRelay(config, recipient, message, options, proto, longPrototype) {
+  if (typeof recipient !== 'string') fail('nexi_attendance_snapshot_recipient');
+  const allowed = snapshots.registry(proto, longPrototype), control = internalControls.get(message);
+  const root = transportSnapshot(config, message, allowed), fixedOptions = transportSnapshot(config, options, allowed);
+  const record = { config, recipient: jid(recipient), session: identity.sessionFingerprint(config.auth?.creds), allowed,
+    root, fingerprint: snapshots.fingerprint(root), purpose: semanticPurpose(root), encoded: 0, internal: null };
+  if (control?.config === config && control.session === record.session && control.recipient === record.recipient &&
+      control.fingerprint === record.fingerprint) record.internal = control;
+  encodings.set(root, record);
+  return Object.freeze({ message: root, options: fixedOptions });
+}
+function encodingInput(root, value) {
+  const record = encodings.get(root); return transportSnapshot(record?.config, value, record?.allowed);
+}
+async function patchEncoding(config, root, message, recipients, patch) {
+  const record = encodings.get(root), allowed = record?.allowed;
+  // Existing list normalization may mutate its input. Give the callback a
+  // private writable working copy, then isolate its result before any encoder.
+  const working = transportSnapshot(config, message, allowed, false);
+  const result = await patch(working, recipients === undefined ? undefined : transportSnapshot(config, recipients, allowed, false));
+  return transportSnapshot(config, result, allowed);
+}
+function encodeMessage(config, root, material, encode) {
+  const record = encodings.get(root), fixed = transportSnapshot(config, material, record?.allowed);
+  if (record) {
+    if (record.config !== config || record.session !== identity.sessionFingerprint(config.auth?.creds))
+      fail('nexi_attendance_encoding_context_conflict');
+    let semantic = fixed;
+    if (fixed.deviceSentMessage && Object.keys(fixed).every(key => ['deviceSentMessage', 'messageContextInfo'].includes(key))) {
+      if (record.internal && jid(fixed.deviceSentMessage.destinationJid) !== record.recipient) record.internal = null;
+      semantic = fixed.deviceSentMessage.message;
+    }
+    const purpose = semanticPurpose(semantic);
+    if (purpose === 'customer_affecting' || record.purpose === 'customer_affecting') record.purpose = 'customer_affecting';
+    else if (purpose === 'unresolved' || record.purpose === 'unresolved') record.purpose = 'unresolved';
+    if (record.internal && snapshots.fingerprint(semantic) !== record.fingerprint) record.internal = null;
+    record.encoded++;
+  }
+  // Synchronous encoder consumes exactly the immutable semantic material just
+  // classified. Returned bytes are private to the cryptographic pipeline.
+  return Buffer.from(encode(fixed));
+}
+function snapshotFrame(config, frame) {
+  const fixed = transportSnapshot(config, frame), purpose = purposes.get(frame);
+  if (purpose?.config === config && purpose.fingerprint === snapshots.fingerprint(fixed)) purposes.set(fixed, purpose);
+  return fixed;
 }
 function bindStanza(config, stanza, message, messageId) {
   const capability = scope.getStore();
@@ -701,15 +762,15 @@ function bindStanza(config, stanza, message, messageId) {
   }
   // Peer/protocol exemptions come from pinned internal message construction,
   // never from a serializable category/managed attribute supplied by an API.
-  const control = internalControls.get(message);
+  const record = encodings.get(message), control = record?.internal;
   const own = [jid(config.auth?.creds?.me?.id), jid(config.auth?.creds?.me?.lid)].filter(Boolean);
-  const internal = control?.config === config && own.includes(jid(stanza?.attrs?.to)) &&
+  const internal = record?.encoded > 0 && control?.config === config && own.includes(jid(stanza?.attrs?.to)) &&
     control.recipient === jid(stanza?.attrs?.to) && control.session && control.session === identity.sessionFingerprint(config.auth?.creds) &&
-    control.fingerprint === createHash('sha256').update(JSON.stringify(message)).digest('hex') &&
+    control.fingerprint === snapshots.fingerprint(message) &&
     semanticPurpose(message) === 'unresolved';
-  purposes.set(stanza, internal ? Object.freeze({ kind: 'internal_control', config, session: control.session,
-    recipient: control.recipient, id: stanza.attrs.id,
-    fingerprint: createHash('sha256').update(JSON.stringify(stanza)).digest('hex') }) : semanticPurpose(message));
+  purposes.set(stanza, Object.freeze({ kind: internal ? 'internal_control' : record?.purpose || semanticPurpose(message),
+    config, session: record?.session || identity.sessionFingerprint(config.auth?.creds),
+    recipient: jid(stanza.attrs?.to), id: stanza.attrs?.id, fingerprint: snapshots.fingerprint(snapshots.copy(stanza)) }));
 }
 async function assertNode(config, stanza) {
   const registration = configs.get(config);
@@ -725,11 +786,12 @@ async function assertNode(config, stanza) {
   const row = await source.prismaRepository.nexiAttendancePreparation.findFirst({ where: {
     instanceId: source.instanceId, externalId: stanza.attrs?.id || '' } });
   if (row) fail('nexi_attendance_native_retry_denied');
-  const purpose = purposes.get(stanza) || 'unresolved';
-  if (purpose.kind === 'internal_control') {
-    if (purpose.config === config && purpose.session === identity.sessionFingerprint(config.auth?.creds) &&
-        purpose.recipient === jid(stanza.attrs?.to) && purpose.id === stanza.attrs?.id &&
-        purpose.fingerprint === createHash('sha256').update(JSON.stringify(stanza)).digest('hex')) return;
+  const proof = purposes.get(stanza);
+  const purpose = proof?.kind || 'unresolved';
+  if (purpose === 'internal_control') {
+    if (proof.config === config && proof.session === identity.sessionFingerprint(config.auth?.creds) &&
+        proof.recipient === jid(stanza.attrs?.to) && proof.id === stanza.attrs?.id &&
+        proof.fingerprint === snapshots.fingerprint(stanza)) return;
     log(source, 'attendance.unknown_protocol.denied'); fail('nexi_attendance_unknown_protocol_denied');
   }
   if (jid(stanza.attrs?.to)?.endsWith('@g.us')) return; // existing Groups guard remains authoritative
@@ -956,4 +1018,5 @@ module.exports = { canonical, digest, eventPayload, settings, publicAttestation,
   foundationCapability, bindStanza, assertNode, externalRaw, retryMessage, legacyAllowed, legacyForInstance, ReceiptWorker,
   drain, installRoutes, requestMaterial, common, prepareClaims, rawNodeForInstance, rawNodeForSocket, trackSocket,
   append, enqueue, inheritConfig, boundedMariaDb, recoverPreparation, semanticPurpose, markInternalControl,
-  normalizeBadAck, captureBadAck, canonicalBytes, CANONICAL_VERSION, ID_PREFIX };
+  normalizeBadAck, captureBadAck, canonicalBytes, CANONICAL_VERSION, ID_PREFIX,
+  beginRelay, encodingInput, patchEncoding, encodeMessage, snapshotFrame };

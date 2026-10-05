@@ -24,6 +24,7 @@ COPY assert-groups-runtime.mjs /evolution/assert-groups-runtime.mjs
 COPY assert-attendance-runtime.mjs /evolution/assert-attendance-runtime.mjs
 COPY patch-attendance-source.mjs attendance-models.prisma nexi-attendance.cjs attendance-wave1b.test.cjs attendance-source.test.cjs /evolution/
 COPY nexi-canonical-json.cjs attendance-canonical.test.cjs attendance-corrections.test.cjs /evolution/
+COPY nexi-attendance-snapshot.cjs attendance-snapshot.test.cjs /evolution/
 COPY fixtures/attendance-canonical-json-v1.json /evolution/fixtures/attendance-canonical-json-v1.json
 COPY Dockerfile /evolution/Dockerfile
 COPY nexi-transport.cjs /evolution/nexi-transport.cjs
@@ -104,6 +105,7 @@ COPY --from=source-builder /evolution/nexi-identity.cjs /evolution/nexi-identity
 COPY --from=source-builder /evolution/nexi-groups.cjs /evolution/nexi-groups.cjs
 COPY --from=source-builder /evolution/nexi-attendance.cjs /evolution/nexi-attendance.cjs
 COPY --from=source-builder /evolution/nexi-canonical-json.cjs /evolution/nexi-canonical-json.cjs
+COPY --from=source-builder /evolution/nexi-attendance-snapshot.cjs /evolution/nexi-attendance-snapshot.cjs
 COPY --from=source-builder /evolution/fixtures /evolution/fixtures
 COPY --from=source-builder /evolution/node_modules/baileys /evolution/node_modules/baileys
 COPY --from=source-builder /evolution/node_modules/libsignal /evolution/node_modules/libsignal

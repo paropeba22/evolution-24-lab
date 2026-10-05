@@ -134,8 +134,11 @@ test('legacy edits remain unchanged; unknown enum is denied on both managed clas
   }
 });
 test('only pinned trusted incoming-placeholder control to our own phone is exempt, never JSON flags or later mutation', async () => {
-  const f = await socket('ambiguous'), message = control(), node = stanza(own);
-  a.markInternalControl(f.config, message, own); a.bindStanza(f.config, node, message, node.attrs.id);
+  const f = await socket('ambiguous'), original = control(), node = stanza(own);
+  const marked = a.markInternalControl(f.config, original, own);
+  const message = a.beginRelay(f.config, own, marked, {}).message;
+  a.encodeMessage(f.config, message, message, value => Buffer.from(JSON.stringify(value)));
+  a.bindStanza(f.config, node, message, node.attrs.id);
   await a.assertNode(f.config, node);
   const changedWire = stanza(own); a.bindStanza(f.config, changedWire, message, changedWire.attrs.id);
   changedWire.attrs.to = recipient;
@@ -144,8 +147,8 @@ test('only pinned trusted incoming-placeholder control to our own phone is exemp
     const raw = stanza(own); a.bindStanza(f.config, raw, forged, raw.attrs.id);
     await assert.rejects(a.assertNode(f.config, raw), /unknown_protocol_denied/);
   }
-  message.protocolMessage.peerDataOperationRequestMessage.peerDataOperationRequestType = 3;
-  const mutated = stanza(own); a.bindStanza(f.config, mutated, message, mutated.attrs.id);
+  original.protocolMessage.peerDataOperationRequestMessage.peerDataOperationRequestType = 3;
+  const mutated = stanza(own); a.bindStanza(f.config, mutated, original, mutated.attrs.id);
   await assert.rejects(a.assertNode(f.config, mutated), /unknown_protocol_denied/);
   const outbound = control(); outbound.protocolMessage.peerDataOperationRequestMessage.placeholderMessageResendRequest[0].messageKey.fromMe = true;
   a.markInternalControl(f.config, outbound, own); const retry = stanza(own); a.bindStanza(f.config, retry, outbound, retry.attrs.id);

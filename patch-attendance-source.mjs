@@ -65,9 +65,55 @@ patch('node_modules/baileys/lib/Socket/messages-recv.js', source => {
     '            msg = await nexiAttendance.retryMessage(config, { ...key, id }, msg);\n            msgs.push(msg);');
 });
 patch('node_modules/baileys/lib/Socket/messages-send.js', source => {
-  source = "import nexiAttendance from '/evolution/nexi-attendance.cjs';\n" + source;
+  source = "import nexiAttendance from '/evolution/nexi-attendance.cjs';\nimport Long from 'long';\n" + source;
   source = once(source, '        const msgId = await relayMessage(meJid, protocolMessage, {',
-    '        nexiAttendance.markInternalControl(config, protocolMessage, meJid);\n        const msgId = await relayMessage(meJid, protocolMessage, {');
+    '        const nexiInternalMessage = nexiAttendance.markInternalControl(config, protocolMessage, meJid);\n        const msgId = await relayMessage(meJid, nexiInternalMessage, {');
+  source = once(source,
+    '    const relayMessage = async (jid, message, { messageId: msgId, participant, additionalAttributes, additionalNodes, useUserDevicesCache, useCachedGroupMetadata, statusJidList }) => {',
+    `    const relayMessage = async (jid, message, options) => {
+        const nexiEncoding = nexiAttendance.beginRelay(config, jid, message, options, proto, Long.prototype);
+        message = nexiEncoding.message;
+        let { messageId: msgId, participant, additionalAttributes, additionalNodes, useUserDevicesCache, useCachedGroupMetadata, statusJidList } = nexiEncoding.options;`);
+  source = once(source, '    const createParticipantNodes = async (recipientJids, message, extraAttrs, dsmMessage) => {',
+    `    const createParticipantNodes = async (recipientJids, message, extraAttrs, dsmMessage, nexiEncoding) => {
+        const nexiRoot = nexiEncoding?.message || nexiAttendance.beginRelay(config, '', message, {}, proto, Long.prototype).message;
+        message = nexiAttendance.encodingInput(nexiRoot, message);
+        recipientJids = nexiAttendance.encodingInput(nexiRoot, recipientJids);
+        extraAttrs = nexiAttendance.encodingInput(nexiRoot, extraAttrs);
+        dsmMessage = nexiAttendance.encodingInput(nexiRoot, dsmMessage);`);
+  source = once(source, '        const patched = await patchMessageBeforeSending(message, recipientJids);',
+    '        const patched = await nexiAttendance.patchEncoding(config, nexiRoot, message, recipientJids, patchMessageBeforeSending);');
+  source = once(source, '                const bytes = encodeWAMessage(msgToEncrypt);',
+    '                const bytes = nexiAttendance.encodeMessage(config, nexiRoot, msgToEncrypt, encodeWAMessage);');
+  source = once(source, '                const patched = patchMessageBeforeSending ? await patchMessageBeforeSending(message, []) : message;',
+    '                const patched = patchMessageBeforeSending ? await nexiAttendance.patchEncoding(config, message, message, [], patchMessageBeforeSending) : message;');
+  source = once(source, '                const bytes = encodeNewsletterMessage(patched);',
+    '                const bytes = nexiAttendance.encodeMessage(config, message, patched, encodeNewsletterMessage);');
+  source = once(source, '                const patched = await patchMessageBeforeSending(message);',
+    '                const patched = await nexiAttendance.patchEncoding(config, message, message, undefined, patchMessageBeforeSending);');
+  source = once(source, '                const bytes = encodeWAMessage(patched);',
+    '                const bytes = nexiAttendance.encodeMessage(config, message, patched, encodeWAMessage);');
+  source = once(source, '                    const result = await createParticipantNodes(senderKeyRecipients, senderKeyMsg, extraAttrs);',
+    '                    const result = await createParticipantNodes(senderKeyRecipients, senderKeyMsg, extraAttrs, undefined, nexiEncoding);');
+  source = once(source, '                    const patchedForReporting = await patchMessageBeforeSending(message, [jid]);',
+    '                    const patchedForReporting = await nexiAttendance.patchEncoding(config, message, message, [jid], patchMessageBeforeSending);');
+  source = once(source, '                    createParticipantNodes(meRecipients, meMsg || message, extraAttrs),',
+    '                    createParticipantNodes(meRecipients, meMsg || message, extraAttrs, undefined, nexiEncoding),');
+  source = once(source, '                    createParticipantNodes(otherRecipients, message, extraAttrs, meMsg)',
+    '                    createParticipantNodes(otherRecipients, message, extraAttrs, meMsg, nexiEncoding)');
+  source = once(source, `                const encodedMessageToSend = isMe
+                    ? encodeWAMessage({
+                        deviceSentMessage: {
+                            destinationJid,
+                            message: messageToSend
+                        }
+                    })
+                    : encodeWAMessage(messageToSend);`,
+    `                const encodedMessageToSend = nexiAttendance.encodeMessage(config, message, isMe
+                    ? { deviceSentMessage: { destinationJid, message: messageToSend } }
+                    : messageToSend, encodeWAMessage);`);
+  source = once(source, '                    const encoded = encodeWAMessage(reportingMessage);',
+    '                    const encoded = nexiAttendance.encodeMessage(config, message, reportingMessage, encodeWAMessage);');
   source = once(source, '                logger.debug({ msgId }, `sending newsletter message to ${jid}`);',
     '                nexiAttendance.bindStanza(config, stanza, message, msgId);\n                logger.debug({ msgId }, `sending newsletter message to ${jid}`);');
   return once(source, '            nexiFinancial.assertWireRecipient(destinationJid, stanza, authState.creds, message, config.nexiFinancialManaged);',
@@ -82,7 +128,11 @@ patch('node_modules/baileys/lib/Socket/socket.js', source => {
     "import { WA_ADV_ACCOUNT_SIG_PREFIX, WA_ADV_HOSTED_ACCOUNT_SIG_PREFIX } from '../Defaults/index.js';\n" + source;
   source = once(source, '    const sendNode = (frame) => {',
     `    const sendNode = async (frame) => {
-        await nexiAttendance.assertNode(config, frame);`);
+        const nexiFrame = nexiAttendance.snapshotFrame(config, frame);
+        await nexiAttendance.assertNode(config, nexiFrame);`);
+  source = once(source, "            logger.trace({ xml: binaryNodeToString(frame), msg: 'xml send' });",
+    "            logger.trace({ xml: binaryNodeToString(nexiFrame), msg: 'xml send' });");
+  source = once(source, '        const buff = encodeBinaryNode(frame);', '        const buff = encodeBinaryNode(nexiFrame);');
   // Exported raw bytes are a separate surface. Internal handshake/noise calls
   // retain their lexical sendRawMessage and cannot be forged through attributes.
   source = once(source, '        sendRawMessage,\n        sendNode,',

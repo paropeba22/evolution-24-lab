@@ -43,13 +43,17 @@ for (const method of ['configure', 'installRoutes', 'legacyForInstance', 'settin
 assert.ok(bundle.includes('attendanceReceiptRepository()'), 'compiled bounded driver factory');
 const runtimeFiles = {
   'Socket/index.js': [['nexiAttendance.inheritConfig(config, newConfig);', 1]],
-  'Socket/socket.js': [['await nexiAttendance.assertNode(config, frame);', 1], ['nexiAttendance.externalRaw(config);', 1],
+  'Socket/socket.js': [['const nexiFrame = nexiAttendance.snapshotFrame(config, frame);', 1],
+    ['await nexiAttendance.assertNode(config, nexiFrame);', 1], ['const buff = encodeBinaryNode(nexiFrame);', 1],
+    ['nexiAttendance.externalRaw(config);', 1],
     ['nexiAttendance.publicAttestation(', 2], ['nexiAttendance.sessionObserved(', 2]],
   'Socket/messages-recv.js': [['await nexiAttendance.capture(config, attrs, key, ids);', 1],
     ['await nexiAttendance.captureBadAck(config, attrs, key);', 1],
     ['await nexiAttendance.retryMessage(config, { ...key, id }, msg);', 1]],
   'Socket/messages-send.js': [['nexiAttendance.bindStanza(config, stanza, message, msgId);', 2],
     ['nexiAttendance.markInternalControl(config, protocolMessage, meJid);', 1],
+    ['nexiAttendance.beginRelay(config, jid, message, options, proto, Long.prototype);', 1],
+    ['nexiAttendance.encodeMessage(', 5], ['nexiAttendance.patchEncoding(', 4],
     ['nexiFinancial.assertWireRecipient(', 1], ['nexiGroups.denyOutbound(', 1]],
 };
 for (const [file, markers] of Object.entries(runtimeFiles)) {
@@ -67,11 +71,22 @@ for (const [file, markers] of Object.entries(runtimeFiles)) {
   }
   if (file.includes('socket.js')) {
     const start = text.indexOf('    const sendNode = async (frame) => {');
-    assert.ok(start > 0 && text.indexOf('await nexiAttendance.assertNode(config, frame);', start) < text.indexOf('encodeBinaryNode(frame)', start));
+    const snapshot = text.indexOf('const nexiFrame = nexiAttendance.snapshotFrame(config, frame);', start);
+    const validate = text.indexOf('await nexiAttendance.assertNode(config, nexiFrame);', start);
+    const encode = text.indexOf('const buff = encodeBinaryNode(nexiFrame);', start);
+    assert.ok(start > 0 && snapshot > start && snapshot < validate && validate < encode);
+    assert.ok(!text.includes('encodeBinaryNode(frame)') && !text.includes('binaryNodeToString(frame)'));
   }
   if (file.includes('messages-send')) {
     const mark = text.indexOf('nexiAttendance.markInternalControl(config, protocolMessage, meJid);');
-    assert.ok(mark > 0 && mark < text.indexOf('const msgId = await relayMessage(meJid, protocolMessage, {', mark));
+    assert.ok(mark > 0 && mark < text.indexOf('const msgId = await relayMessage(meJid, nexiInternalMessage, {', mark));
+    const relay = text.indexOf('const relayMessage = async (jid, message, options) => {');
+    const snapshot = text.indexOf('nexiAttendance.beginRelay(config, jid, message, options, proto, Long.prototype);', relay);
+    assert.ok(snapshot > relay && snapshot < text.indexOf('await authState.keys.transaction(', relay));
+    assert.ok(text.indexOf('message = nexiEncoding.message;', snapshot) < text.indexOf('await authState.keys.transaction(', relay));
+    for (const old of ['const bytes = encodeWAMessage(', 'const bytes = encodeNewsletterMessage(',
+      'const encoded = encodeWAMessage(', '? encodeWAMessage({', ': encodeWAMessage(messageToSend)'])
+      assert.ok(!text.includes(old), 'no unbound plaintext encoder: ' + old);
   }
 }
 assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'node_modules/baileys/package.json'))).version, '7.0.0-rc13');
@@ -84,6 +99,15 @@ for (const anchor of ['values[valuesById[14] = "MESSAGE_EDIT"] = 14;',
 // rather than inspecting the unrelated base image's node_modules copy.
 assert.ok(bundle.includes('@prisma/adapter-mariadb') && bundle.includes('underlyingDriver()'), 'shipped dedicated pool boundary');
 const attendance = createRequire(import.meta.url)(path.join(root, 'nexi-attendance.cjs'));
+const snapshotHelper = createRequire(import.meta.url)(path.join(root, 'nexi-attendance-snapshot.cjs'));
+assert.equal(snapshotHelper.LIMITS.depth, 64);
+const mutableFrame = { tag: 'iq', attrs: { id: 'BEFORE' }, content: [{ tag: 'data', attrs: {}, content: Buffer.from([1, 2]) }] };
+const fixedFrame = attendance.snapshotFrame({}, mutableFrame);
+mutableFrame.tag = 'message'; mutableFrame.attrs.id = 'AFTER'; mutableFrame.content[0].content.fill(9);
+assert.equal(fixedFrame.tag, 'iq'); assert.equal(fixedFrame.attrs.id, 'BEFORE');
+fixedFrame.content[0].content.fill(8);
+assert.deepEqual(fixedFrame.content[0].content, Buffer.from([1, 2]));
+assert.ok(Object.isFrozen(fixedFrame.content[0]) && Object.isFrozen(fixedFrame.attrs));
 assert.equal(attendance.CANONICAL_VERSION, 'canonical_json_v1');
 const corpus = JSON.parse(fs.readFileSync(path.join(root, 'fixtures/attendance-canonical-json-v1.json'), 'utf8'));
 for (const fixture of corpus.fixtures.filter(row => row.result === 'accept')) {
@@ -104,6 +128,11 @@ const editNode = { tag: 'message', attrs: { id: 'NEW-EDIT-ID', to: '551188888888
 attendance.bindStanza(config, editNode, { protocolMessage: { type: 14, key: { id: 'ORIGINAL' },
   editedMessage: { conversation: 'artifact-only' }, timestampMs: 1720000000000 } }, 'NEW-EDIT-ID');
 await assert.rejects(attendance.assertNode(config, editNode), /customer_protocol_denied/);
+const editRoot = attendance.beginRelay(config, editNode.attrs.to, { protocolMessage: { type: 14, key: { id: 'ORIGINAL' },
+  editedMessage: { conversation: 'artifact-only' }, timestampMs: 1720000000000 } }, {}).message;
+attendance.encodeMessage(config, editRoot, editRoot, value => Buffer.from(JSON.stringify(value)));
+attendance.bindStanza(config, editNode, editRoot, editNode.attrs.id);
+await assert.rejects(attendance.assertNode(config, attendance.snapshotFrame(config, editNode)), /customer_protocol_denied/);
 await assert.rejects(attendance.assertNode(config, { tag: 'message', attrs: { id: 'RAW-BYPASS' } }), /unknown_protocol_denied/);
 await assert.rejects(attendance.foundationCapability({ reservationId: 'foundation', preparationDigest: 'foundation' },
   () => attendance.assertNode({}, { tag: 'message', attrs: { id: 'foundation' } })), /dispatch_disabled_wave1b/);

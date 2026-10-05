@@ -343,8 +343,10 @@ test('socket native retry/raw/API forgery cannot reach Attendance wire; protocol
   const protocol = { tag: 'message', attrs: { id: 'peer-existing', to: '5511999999999@s.whatsapp.net' } };
   const internal = { protocolMessage: { type: 16, peerDataOperationRequestMessage: { peerDataOperationRequestType: 4,
     placeholderMessageResendRequest: [{ messageKey: { remoteJid: row.recipient, fromMe: false, id: 'incoming-original' } }] } } };
-  a.markInternalControl(completed, internal, protocol.attrs.to);
-  a.bindStanza(completed, protocol, internal, 'peer-existing');
+  const marked = a.markInternalControl(completed, internal, protocol.attrs.to);
+  const encoding = a.beginRelay(completed, protocol.attrs.to, marked, {});
+  a.encodeMessage(completed, encoding.message, encoding.message, value => Buffer.from(JSON.stringify(value)));
+  a.bindStanza(completed, protocol, encoding.message, 'peer-existing');
   await a.assertNode(completed, protocol);
   const legacy = fixture(); legacy.repo.webhook.rows.length = 0; const legacyConfig = { auth: { creds: credentials() } };
   await a.configure(legacy.source, legacyConfig); assert.equal(await a.classification(legacy.source), 'legacy');
