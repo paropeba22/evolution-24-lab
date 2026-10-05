@@ -1,10 +1,12 @@
 'use strict';
 // Build-only assertions. Never run on Serra; EasyPanel owns validation.
-const { test, before, after } = require('node:test');
+const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
+const vm = require('node:vm');
+const { pathToFileURL } = require('node:url');
 const { execFileSync, spawnSync } = require('node:child_process');
 const assertProtectedSendNode = require('./assert-protected-send-node.cjs');
 let scratch;
@@ -16,6 +18,89 @@ const files = ['src/api/integrations/channel/whatsapp/whatsapp.baileys.service.t
   'src/api/repository/repository.service.ts', 'tsup.config.ts',
   ...['index', 'socket', 'messages-send', 'messages-recv'].map(name => `node_modules/baileys/lib/Socket/${name}.js`),
   ...['mysql', 'postgresql', 'psql_bouncer'].map(provider => `prisma/${provider}-schema.prisma`)];
+
+test('MariaDB scoped metadata loader executes check-node while preserving unrelated JSON/YML assets', async () => {
+  const esbuild = require('esbuild');
+  const { patchAttendanceTsupConfig } = await import(pathToFileURL(path.join(root, 'patch-attendance-source.mjs')));
+  const { assertMariaDbMetadata } = await import(pathToFileURL(path.join(root, 'assert-attendance-runtime.mjs')));
+  // Standalone fixture contains the pinned tsup anchors; image builds use the actual snapshot.
+  const upstream = fs.existsSync(path.join(root, '.attendance-upstream/tsup.config.ts'))
+    ? fs.readFileSync(path.join(root, '.attendance-upstream/tsup.config.ts'), 'utf8')
+    : `import { cpSync } from 'node:fs';
+import { defineConfig } from 'tsup';
+export default defineConfig({
+  external: ['/evolution/nexi-groups.cjs', 'baileys',],
+  noExternal: [/^@prisma\\/client$/],
+  loader: { '.json': 'file', '.yml': 'file' },
+});`;
+  const source = patchAttendanceTsupConfig(upstream), configModule = { exports: {} };
+  // esbuild validates RegExp with instanceof, so load the config in this realm.
+  vm.runInThisContext(`(function(require,module,exports,process,__dirname) {
+    ${esbuild.transformSync(source, { loader: 'ts', format: 'cjs' }).code}
+  })`)(require, configModule, configModule.exports, process, root);
+  const config = configModule.exports.default;
+  assert.equal(config.loader['.json'], 'file'); assert.equal(config.loader['.yml'], 'file');
+  for (const name of ['@prisma/client', '@prisma/adapter-mariadb', 'mariadb'])
+    assert.ok(config.noExternal.some(pattern => pattern.test(name)), `${name} stays bundled`);
+  const plugin = config.esbuildPlugins.find(item => item.name === 'nexi-mariadb-runtime-metadata');
+  let registration;
+  plugin.setup({ onLoad: (options, load) => { registration = { ...options, load }; } });
+  assert.equal(registration.namespace, 'file');
+  for (const name of ['/evolution/node_modules/mariadb/package.json',
+    'C:\\evolution\\node_modules\\mariadb\\package.json', '/evolution/node_modules/x/node_modules/mariadb/package.json'])
+    assert.ok(registration.filter.test(name), name);
+  for (const name of ['/evolution/assets/package.json', '/evolution/node_modules/other/package.json',
+    '/evolution/node_modules/mariadb/lib/package.json', '/evolution/node_modules/mariadb/package.json.backup'])
+    assert.ok(!registration.filter.test(name), name);
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'nexi-mariadb-loader-'));
+  try {
+    const driver = path.join(fixture, 'node_modules/mariadb'); fs.mkdirSync(driver, { recursive: true });
+    const metadata = { name: 'mariadb', engines: { node: '>= 14' }, description: 'boundary }) inside JSON' };
+    fs.writeFileSync(path.join(driver, 'package.json'), JSON.stringify(metadata));
+    // Exact module-scope access and subsequent initialization from pinned check-node.js.
+    fs.writeFileSync(path.join(driver, 'check-node.js'), `const requirement = require('./package.json').engines.node;
+const connectorRequirement = requirement.replace('>=', '').trim();
+module.exports = { connectorRequirement };`);
+    fs.writeFileSync(path.join(fixture, 'asset.json'), '{"asset":true}');
+    fs.writeFileSync(path.join(fixture, 'asset.yml'), 'asset: true');
+    fs.mkdirSync(path.join(fixture, 'node_modules/other'), { recursive: true });
+    fs.writeFileSync(path.join(fixture, 'node_modules/other/package.json'), '{"name":"other"}');
+    const entry = `module.exports = { check: require('./node_modules/mariadb/check-node.js'),
+      asset: require('./asset.json'), yaml: require('./asset.yml'), other: require('./node_modules/other/package.json') };`;
+    for (const minify of [false, true]) {
+      const options = { stdin: { contents: entry, resolveDir: fixture }, bundle: true, platform: 'node',
+        format: 'cjs', minify, loader: config.loader, write: false, outfile: path.join(fixture, 'dist/main.js') };
+      const broken = await esbuild.build(options);
+      const brokenCode = broken.outputFiles.find(file => file.path.endsWith('.js')).text;
+      const execute = code => {
+        const module = { exports: {} };
+        vm.runInNewContext(code, { module, exports: module.exports }, { timeout: 1000 });
+        return module.exports;
+      };
+      assert.throws(() => execute(brokenCode), /Cannot read properties of undefined.*node/);
+      if (minify) assert.throws(() => assertMariaDbMetadata(brokenCode), /Cannot read properties of undefined.*node/);
+      const fixed = await esbuild.build({ ...options, plugins: config.esbuildPlugins });
+      const fixedCode = fixed.outputFiles.find(file => file.path.endsWith('.js')).text, result = execute(fixedCode);
+      assert.equal(result.check.connectorRequirement, '14');
+      for (const key of ['asset', 'yaml', 'other']) assert.equal(typeof result[key], 'string', `${key} remains a file path`);
+      assert.equal(fixed.outputFiles.filter(file => file.path.endsWith('.json')).length, 2, 'only unrelated JSON assets emitted');
+      if (minify) {
+        assert.equal(assertMariaDbMetadata(fixedCode), metadata.engines.node);
+        // A server/external side effect must never run during the artifact probe.
+        assert.equal(assertMariaDbMetadata(fixedCode + '\nthrow new Error("server must not run");'), metadata.engines.node);
+        assert.throws(() => assertMariaDbMetadata(fixedCode.replace('name:"mariadb"', 'name:"other"')), /shipped MariaDB package/);
+      }
+    }
+  } finally { fs.rmSync(fixture, { recursive: true, force: true }); }
+});
+
+test('MariaDB tsup loader anchors reject drift rather than widening JSON semantics', async () => {
+  const { patchAttendanceTsupConfig } = await import(pathToFileURL(path.join(root, 'patch-attendance-source.mjs')));
+  assert.throws(() => patchAttendanceTsupConfig("import { cpSync, readFileSync } from 'node:fs';"), /expected 1, found 0/);
+  assert.throws(() => patchAttendanceTsupConfig("import { cpSync } from 'node:fs';\nimport { cpSync } from 'node:fs';"), /expected 1, found 2/);
+});
+
+describe('installed Attendance source and artifacts', () => {
 before(() => {
   scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'nexi-attendance-source-'));
   for (const file of files) {
@@ -166,4 +251,5 @@ test('actual installed compiled bundles are asserted per provider and final runt
   assert.ok(docker.indexOf('patch-attendance-source.mjs /evolution --snapshot') < docker.indexOf('npm run db:generate'));
   assert.match(docker, /COPY --from=source-builder \/evolution\/nexi-attendance.cjs/);
   assert.ok(docker.split('node /tmp/assert-attendance-runtime.mjs').length >= 3);
+});
 });

@@ -3,7 +3,45 @@ import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 
+export function assertMariaDbMetadata(bundle) {
+  // Probe only the lazy JSON module used by check-node.js. Never evaluate the
+  // application, driver/pool, external requires, or server entrypoint.
+  const reads = [...bundle.matchAll(/([\w$]+)\(\)\.engines\.node\b/g)];
+  assert.equal(reads.length, 1, 'one bundled MariaDB Node requirement read');
+  const moduleName = reads[0][1], escaped = moduleName.replace(/\$/g, '\\$');
+  const definitions = [...bundle.matchAll(new RegExp(
+    `(?:^|[;,\\s])${escaped}\\s*=\\s*([\\w$]+)\\(\\(([\\w$]+),([\\w$]+)\\)=>\\{\\3\\.exports=`, 'g'))];
+  assert.equal(definitions.length, 1, 'MariaDB metadata must be a bundled CJS data module');
+  const definition = definitions[0], start = definition.index + definition[0].indexOf('=') + 1;
+  let script;
+  // esbuild minifies JSON modules to commonJS((exports,module)=>{module.exports=...}).
+  // Compile candidate boundaries so braces/quotes inside metadata strings are safe.
+  for (let end = bundle.indexOf('})', start); end >= 0 && end - start < 65536; end = bundle.indexOf('})', end + 2)) {
+    try {
+      script = new vm.Script(`const ${moduleName}=${bundle.slice(start, end + 2)};
+        ({ metadata: ${moduleName}(), requirement: ${reads[0][0]} });`);
+      break;
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+    }
+  }
+  assert.ok(script, 'parse shipped MariaDB metadata initializer');
+  const context = Object.create(null);
+  context[definition[1]] = factory => () => {
+    const module = { exports: {} };
+    factory(module.exports, module);
+    return module.exports;
+  };
+  const { metadata, requirement } = script.runInNewContext(context, { timeout: 1000 });
+  assert.equal(metadata.name, 'mariadb', 'Node requirement belongs to the shipped MariaDB package');
+  assert.equal(typeof requirement, 'string', 'MariaDB engines.node is JSON data');
+  assert.match(requirement, /^>=\s*\d/);
+  return requirement;
+}
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
 const root = process.env.EVOLUTION_ATTENDANCE_ROOT || '/evolution';
 const assertProtectedSendNode = createRequire(import.meta.url)('./assert-protected-send-node.cjs');
 const provider = process.env.EVOLUTION_SCHEMA_PROVIDER || process.env.EVOLUTION_PROVIDER || 'postgresql';
@@ -94,6 +132,7 @@ for (const anchor of ['values[valuesById[14] = "MESSAGE_EDIT"] = 14;',
 // Prisma adapters are bundled by tsup. Verify the shipped implementation,
 // rather than inspecting the unrelated base image's node_modules copy.
 assert.ok(bundle.includes('@prisma/adapter-mariadb') && bundle.includes('underlyingDriver()'), 'shipped dedicated pool boundary');
+assertMariaDbMetadata(bundle);
 const attendance = createRequire(import.meta.url)(path.join(root, 'nexi-attendance.cjs'));
 const snapshotHelper = createRequire(import.meta.url)(path.join(root, 'nexi-attendance-snapshot.cjs'));
 assert.equal(snapshotHelper.LIMITS.depth, 64);
@@ -135,3 +174,4 @@ await assert.rejects(attendance.foundationCapability({ reservationId: 'foundatio
 await assert.rejects(attendance.assertNode({}, { tag: 'message', attrs: { id: attendance.ID_PREFIX + 'RECOVERED' } }), /dispatch_disabled_wave1b/);
 assert.equal(attendance.normalization('unrecognized'), 'UNKNOWN');
 console.log(`Attendance ${provider}: shipped models, receipt-before-buffer, all wire hooks and physical denial verified`);
+}

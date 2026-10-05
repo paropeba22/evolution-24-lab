@@ -1,14 +1,34 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const root = process.argv[2] || '/evolution';
-const changes = [];
-const helper = "require('/evolution/nexi-attendance.cjs')";
 export function once(source, anchor, replacement) {
   const count = source.split(anchor).length - 1;
   if (count !== 1) throw new Error(`Attendance pinned anchor: expected 1, found ${count}: ${anchor.slice(0, 96)}`);
   return source.replace(anchor, () => replacement);
 }
+export function patchAttendanceTsupConfig(source) {
+  source = once(source, "import { cpSync } from 'node:fs';", "import { cpSync, readFileSync } from 'node:fs';");
+  source = once(source, "external: ['/evolution/nexi-groups.cjs', 'baileys',",
+    "external: ['/evolution/nexi-attendance.cjs', '/evolution/nexi-groups.cjs', 'baileys',");
+  return once(source, '  noExternal: [/^@prisma\\/client$/],',
+    `  noExternal: [/^@prisma\\/client$/, /^@prisma\\/adapter-mariadb$/, /^mariadb$/],
+  // check-node.js reads engines.node at module scope, even for PostgreSQL.
+  // Keep upstream's JSON asset loader everywhere except this runtime metadata.
+  esbuildPlugins: [{
+    name: 'nexi-mariadb-runtime-metadata',
+    setup(build) {
+      build.onLoad({ filter: /[\\\\/]node_modules[\\\\/]mariadb[\\\\/]package\\.json$/, namespace: 'file' }, args => ({
+        contents: readFileSync(args.path, 'utf8'),
+        loader: 'json',
+      }));
+    },
+  }],`);
+}
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+const root = process.argv[2] || '/evolution';
+const changes = [];
+const helper = "require('/evolution/nexi-attendance.cjs')";
 function patch(file, transform) {
   const target = path.join(root, file), before = fs.readFileSync(target, 'utf8').replaceAll('\r\n', '\n');
   const after = transform(before);
@@ -216,10 +236,7 @@ patch('src/api/repository/repository.service.ts', source => once(once(source, ' 
     return this.nexiAttendanceReceiptClient;
   }
   private readonly logger = new Logger('PrismaRepository');`));
-patch('tsup.config.ts', source => once(once(source, "external: ['/evolution/nexi-groups.cjs', 'baileys',",
-  "external: ['/evolution/nexi-attendance.cjs', '/evolution/nexi-groups.cjs', 'baileys',"),
-  '  noExternal: [/^@prisma\\/client$/],',
-  '  noExternal: [/^@prisma\\/client$/, /^@prisma\\/adapter-mariadb$/, /^mariadb$/],'));
+patch('tsup.config.ts', patchAttendanceTsupConfig);
 const models = fs.readFileSync(path.join(root, 'attendance-models.prisma'), 'utf8');
 for (const provider of ['postgresql', 'psql_bouncer', 'mysql']) patch(`prisma/${provider}-schema.prisma`, source => {
   if (source.split('model Instance {').length !== 2 || source.split('model NexiGroupControl {').length !== 2 ||
@@ -233,4 +250,5 @@ if (!process.argv.includes('--verify')) for (const change of changes) {
     fs.mkdirSync(path.dirname(snapshot), { recursive: true }); fs.writeFileSync(snapshot, change.before);
   }
   fs.writeFileSync(change.target, change.after);
+}
 }
