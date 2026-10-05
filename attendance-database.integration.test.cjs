@@ -74,8 +74,34 @@ for (const provider of ['postgresql', 'mysql']) {
           sessionIdentity: receipt.sessionIdentity, eventType: 'attendance.receipt.observed', version: 1,
           sourceKey: '5'.repeat(64), fingerprint: '6'.repeat(64), body: '{"stable":true}', state: 'pending', nextAttemptAt: new Date() };
         await insert(a, 'NexiAttendanceEventOutbox', event);
+        // Apply only the NEW additive migration to existing feature records:
+        // preserve old bytes/digests and label them explicitly, never upgrade.
+        await a.query(fs.readFileSync(path.join(__dirname, 'prisma', provider + '-migrations',
+          '20261005000001_attendance_canonical_version/migration.sql'), 'utf8'));
+        for (const name of ['NexiReceiptJournal', 'NexiAttendancePreparation', 'NexiAttendanceEventOutbox']) {
+          const old = (await b.query(`SELECT * FROM ${table(name)}`))[0];
+          assert.equal(old.canonicalVersion, 'legacy_unversioned');
+        }
+        await assert.rejects(update(b, 'NexiAttendancePreparation', prep.id, { canonicalVersion: 'canonical_json_v1', revision: 3 }));
+        await assert.rejects(update(b, 'NexiAttendanceEventOutbox', event.id, { canonicalVersion: 'canonical_json_v1' }));
+        const error = { ...receipt, id: randomUUID(), sourceKey: '7'.repeat(64), fingerprint: '8'.repeat(64),
+          canonicalVersion: 'canonical_json_v1', normalizedStatus: 'ERROR', evidence: '{"normalized_status":"ERROR"}' };
+        await a.query('BEGIN');
+        await insert(a, 'NexiReceiptJournal', error);
+        await insert(a, 'NexiAttendanceEventOutbox', { ...event, id: randomUUID(), sourceKey: '9'.repeat(64),
+          canonicalVersion: 'canonical_json_v1', body: '{"normalized_status":"ERROR"}' });
+        await a.query('ROLLBACK');
+        assert.equal((await b.query(`SELECT * FROM ${table('NexiReceiptJournal')} WHERE ${quote('sourceKey')}=?`, [error.sourceKey])).length, 0);
+        await a.query('BEGIN');
+        await insert(a, 'NexiReceiptJournal', error);
+        await insert(a, 'NexiAttendanceEventOutbox', { ...event, id: randomUUID(), sourceKey: '9'.repeat(64),
+          canonicalVersion: 'canonical_json_v1', body: '{"normalized_status":"ERROR"}' });
+        await a.query('COMMIT');
+        assert.equal((await b.query(`SELECT * FROM ${table('NexiReceiptJournal')} WHERE ${quote('sourceKey')}=?`, [error.sourceKey]))[0].normalizedStatus, 'ERROR');
+        await assert.rejects(insert(b, 'NexiReceiptJournal', { ...error, id: randomUUID() }));
+        assert.equal((await b.query(`SELECT * FROM ${table('NexiAttendanceEventOutbox')} WHERE ${quote('sourceKey')}=?`, ['9'.repeat(64)])).length, 1);
         await update(b, 'NexiAttendanceEventOutbox', event.id, { attempts: 1, nextAttemptAt: new Date() });
-        const retry = (await a.query(`SELECT * FROM ${table('NexiAttendanceEventOutbox')}`))[0];
+        const retry = (await a.query(`SELECT * FROM ${table('NexiAttendanceEventOutbox')} WHERE ${quote('id')}=?`, [event.id]))[0];
         assert.equal(retry.id, event.id);
         assert.deepEqual(typeof retry.body === 'string' ? JSON.parse(retry.body) : retry.body, { stable: true });
         await assert.rejects(update(a, 'NexiAttendanceEventOutbox', event.id, { body: '{"stable":false}' }));

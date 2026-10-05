@@ -1,4 +1,5 @@
 model NexiManagedTransportContext {
+  canonicalVersion String @default("legacy_unversioned") @db.VarChar(32)
   id String @id @db.VarChar(36)
   instanceId String @db.VarChar(100)
   instanceName String @db.VarChar(100)
@@ -11,6 +12,7 @@ model NexiManagedTransportContext {
 }
 
 model NexiAttendancePreparation {
+  canonicalVersion String @default("legacy_unversioned") @db.VarChar(32)
   id String @id @db.VarChar(36)
   instanceId String @db.VarChar(100)
   instanceName String @db.VarChar(100)
@@ -55,6 +57,7 @@ model NexiAttendancePreparation {
 }
 
 model NexiReceiptJournal {
+  canonicalVersion String @default("legacy_unversioned") @db.VarChar(32)
   id String @id @db.VarChar(36)
   instanceId String @db.VarChar(100)
   sessionIdentity String @db.VarChar(64)
@@ -69,6 +72,7 @@ model NexiReceiptJournal {
 }
 
 model NexiAttendanceEventOutbox {
+  canonicalVersion String @default("legacy_unversioned") @db.VarChar(32)
   id String @id @db.VarChar(36)
   instanceId String @db.VarChar(100)
   instanceName String @db.VarChar(100)

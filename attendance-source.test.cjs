@@ -22,10 +22,32 @@ before(() => {
     fs.copyFileSync(path.join(root, '.attendance-upstream', file), target);
   }
   for (const file of ['package-lock.json', 'node_modules/baileys/package.json', 'attendance-models.prisma',
+    'node_modules/baileys/WAProto/index.js',
     'node_modules/@prisma/adapter-mariadb/package.json', 'node_modules/@prisma/adapter-mariadb/dist/index.js']) {
     fs.mkdirSync(path.dirname(path.join(scratch, file)), { recursive: true });
     fs.copyFileSync(path.join(root, file), path.join(scratch, file));
   }
+});
+test('bad ACK anchor rejects zero/multiple matches without partial writes and precedes all secondary/error emission', () => {
+  // Restore pristine snapshots independently of test case order.
+  for (const sourceFile of files) fs.copyFileSync(path.join(root, '.attendance-upstream', sourceFile), path.join(scratch, sourceFile));
+  const recv = path.join(scratch, 'node_modules/baileys/lib/Socket/messages-recv.js'), accepted = fs.readFileSync(recv, 'utf8');
+  const anchor = '        if (attrs.error) {\n            const isReachoutTimelocked = attrs.error === String(NACK_REASONS.SenderReachoutTimelocked);';
+  assert.equal(accepted.split(anchor).length - 1, 1);
+  for (const broken of [accepted.replace(anchor, '/* removed bad ACK */'), accepted + '\n' + anchor]) {
+    fs.writeFileSync(recv, broken);
+    const before = files.map(f => fs.readFileSync(path.join(scratch, f), 'utf8'));
+    const result = spawnSync(process.execPath, [path.join(root, 'patch-attendance-source.mjs'), scratch], { encoding: 'utf8' });
+    assert.notEqual(result.status, 0); assert.match(result.stderr, /expected 1, found [02]/);
+    assert.deepEqual(files.map(f => fs.readFileSync(path.join(scratch, f), 'utf8')), before);
+  }
+  fs.writeFileSync(recv, accepted);
+  const shipped = fs.readFileSync(path.join(root, 'node_modules/baileys/lib/Socket/messages-recv.js'), 'utf8');
+  const start = shipped.indexOf('    const handleBadAck = async ({ attrs }) => {');
+  const capture = shipped.indexOf('await nexiAttendance.captureBadAck(config, attrs, key);', start);
+  assert.ok(capture > start && capture < shipped.indexOf('const isReachoutTimelocked', start));
+  assert.ok(capture < shipped.indexOf("ev.emit('messages.update'", start));
+  assert.ok(shipped.includes("ws.on('CB:ack,class:message'"));
 });
 after(() => fs.rmSync(scratch, { recursive: true, force: true }));
 test('each pinned anchor rejects zero/multiple matches before modifying any source', () => {

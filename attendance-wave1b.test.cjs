@@ -2,7 +2,7 @@
 // Run only in the designated EasyPanel build/runtime environment.
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { randomUUID, createHmac } = require('node:crypto');
+const { randomUUID, createHmac, createHash } = require('node:crypto');
 const a = require('./nexi-attendance.cjs');
 const identity = require('./nexi-identity.cjs');
 const financial = require('./nexi-financial-transport.cjs');
@@ -13,7 +13,7 @@ const credentials = () => ({ me: { id: '5511999999999:1@s.whatsapp.net', lid: '1
   account: { accountSignatureKey: Buffer.alloc(32, 3), accountSignature: Buffer.alloc(64, 4), details: Buffer.from([1, 2]) },
   noiseKey: { private: Buffer.from('DO_NOT_EXPOSE') } });
 function context(instanceId, session = identity.sessionFingerprint(credentials())) {
-  return { version: 1, protocol_version: 1, audience: 'nexi-attendance-evolution', provider: 'evolution-baileys',
+  return { version: 1, protocol_version: 1, canonical_version: a.CANONICAL_VERSION, audience: 'nexi-attendance-evolution', provider: 'evolution-baileys',
     account_id: 1, inbox_id: 2, managed_channel_id: 3, instance_id: instanceId, instance: 'nexi-wa-' + instanceId,
     instance_lineage_id: randomUUID(), sender_account_lineage_id: randomUUID(), sender_attestation_id: randomUUID(),
     session_identity: session, original_session_identity: null, binding_generation: 1, writer_epoch: 1,
@@ -22,7 +22,7 @@ function context(instanceId, session = identity.sessionFingerprint(credentials()
 }
 function intent() {
   const payload = { kind: 'text', body: 'synthetic exact body', reply_to: null };
-  return { execution_id: randomUUID(), transport_unit: 0, authority_digest: 'a'.repeat(64),
+  return { canonical_version: a.CANONICAL_VERSION, execution_id: randomUUID(), transport_unit: 0, authority_digest: 'a'.repeat(64),
     payload_digest: a.digest(payload), identity_version_id: 1, recipient: '5511888888888@s.whatsapp.net', payload };
 }
 function matches(row, where) {
@@ -246,6 +246,8 @@ test('outbox retry uses stable UUID/body and fresh signatures; HTTP success alon
   const fetchImpl = async (_url, opts) => { sent.push(opts); return { ok: true, status: 200, json: async () => ({ ok: true }) }; };
   await a.drain(f.source, fetchImpl); event.nextAttemptAt = new Date(0); await a.drain(f.source, fetchImpl);
   assert.equal(sent.length, 2); assert.equal(sent[0].body, sent[1].body);
+  assert.equal(sent[0].body, a.canonicalBytes(event.body));
+  assert.equal(createHash('sha256').update(sent[0].body, 'utf8').digest('hex'), event.fingerprint);
   assert.equal(sent[0].headers['X-Nexi-Event-Id'], event.id); assert.equal(sent[1].headers['X-Nexi-Event-Id'], event.id);
   assert.equal(event.state, 'pending'); assert.equal(event.attempts, 2);
   event.nextAttemptAt = new Date(0);
@@ -258,6 +260,18 @@ test('unsupported version is retained without HTTP and conflicting outbox identi
   await assert.rejects(a.enqueue(f.repo, f.source, f.c, 'attendance.session.proved', { ...attestation, public_material_digest: 'b'.repeat(64) }, key), /identity_conflict/);
   row.version = 2; await a.drain(f.source, () => assert.fail('unsupported must not send'));
   assert.equal(row.state, 'unsupported'); assert.equal(JSON.stringify(row.body), original); assert.equal(f.repo.nexiAttendanceEventOutbox.rows.length, 1);
+});
+
+test('legacy canonical records are retained and cannot be silently promoted or prepared', async () => {
+  const f = fixture(), row = await a.draft(f.source, f.c, intent(), randomUUID());
+  row.canonicalVersion = 'legacy_unversioned';
+  await assert.rejects(a.prepare(f.source, row), /canonical_version_unsupported/);
+  const attestation = a.publicAttestation(credentials(), () => true, () => Buffer.from([6, 0]));
+  const event = await a.enqueue(f.repo, f.source, f.c, 'attendance.session.proved', attestation, a.digest('legacy-canonical'));
+  const original = structuredClone(event.body);
+  event.canonicalVersion = 'legacy_unversioned';
+  await a.drain(f.source, () => assert.fail('legacy canonical body must not send'));
+  assert.equal(event.state, 'unsupported'); assert.deepEqual(event.body, original);
 });
 test('outbox survives crash after claim; retry ceiling and missing binding retain immutable evidence', async () => {
   const f = fixture(), attestation = a.publicAttestation(credentials(), () => true, () => Buffer.from([6, 0]));
@@ -284,7 +298,7 @@ test('restart restores exact historical receipt provenance during APP outage wit
   const f = fixture(), config = { auth: { creds: credentials() } }, previousFetch = global.fetch;
   const historical = { ...f.c, channel_state: 'disabled', barrier_state: 'retired', current_session: false };
   f.repo.nexiManagedTransportContext.rows.push({ instanceId: f.source.instanceId, instanceName: f.c.instance,
-    sessionIdentity: historical.session_identity, fingerprint: a.digest(historical), payload: historical });
+    sessionIdentity: historical.session_identity, fingerprint: a.digest(historical), payload: historical, canonicalVersion: a.CANONICAL_VERSION });
   f.repo.webhook.rows[0].enabled = false;
   const env = { QUEUE_ITEMS: '2', QUEUE_BYTES: '32768', APPEND_CONCURRENCY: '1', DB_ACQUISITION_TIMEOUT_MS: '5',
     DB_STATEMENT_TIMEOUT_MS: '10', DB_LOCK_TIMEOUT_MS: '5', APPEND_DEADLINE_MS: '100', RECOVERY_ITEMS: '1', RECOVERY_BYTES: '32768' };
@@ -310,7 +324,7 @@ test('socket native retry/raw/API forgery cannot reach Attendance wire; protocol
   process.env.NEXI_CHANNELS_EVENT_MASTER_SECRET = master;
   f.repo.nexiManagedTransportContext.rows.push({ instanceId: f.source.instanceId, instanceName: f.c.instance, payload: f.c });
   global.fetch = async (_url, options) => {
-    const data = JSON.parse(options.body).data, claims = Buffer.from(JSON.stringify({ ...f.c, nonce: data.nonce })).toString('base64url');
+    const data = JSON.parse(options.body).data, claims = Buffer.from(a.canonicalBytes({ ...f.c, nonce: data.nonce })).toString('base64url');
     const secret = createHmac('sha256', master).update(`event:${f.c.instance}`).digest();
     return { ok: true, json: async () => ({ claims, signature: createHmac('sha256', secret).update(`attendance-context:v1:${claims}`).digest('hex') }) };
   };
@@ -326,8 +340,12 @@ test('socket native retry/raw/API forgery cannot reach Attendance wire; protocol
   await assert.rejects(a.rawNodeForInstance(f.repo, { instanceName: f.c.instance }, { tag: 'message', attrs: { capability: 'release' } }), /raw_send_denied/);
   await a.assertNode(config, { tag: 'iq', attrs: {} }); await a.assertNode(config, { tag: 'ack', attrs: {} });
   await a.assertNode(config, { tag: 'message', attrs: { id: 'group-existing', to: '120363000000000000@g.us' } });
-  const protocol = { tag: 'message', attrs: { id: 'peer-existing' } }; a.bindStanza(config, protocol, { protocolMessage: {} }, 'peer-existing');
-  await a.assertNode(config, protocol);
+  const protocol = { tag: 'message', attrs: { id: 'peer-existing', to: '5511999999999@s.whatsapp.net' } };
+  const internal = { protocolMessage: { type: 16, peerDataOperationRequestMessage: { peerDataOperationRequestType: 4,
+    placeholderMessageResendRequest: [{ messageKey: { remoteJid: row.recipient, fromMe: false, id: 'incoming-original' } }] } } };
+  a.markInternalControl(completed, internal, protocol.attrs.to);
+  a.bindStanza(completed, protocol, internal, 'peer-existing');
+  await a.assertNode(completed, protocol);
   const legacy = fixture(); legacy.repo.webhook.rows.length = 0; const legacyConfig = { auth: { creds: credentials() } };
   await a.configure(legacy.source, legacyConfig); assert.equal(await a.classification(legacy.source), 'legacy');
   a.externalRaw(legacyConfig); assert.equal(await a.retryMessage(legacyConfig, { id: 'ordinary' }, 'native'), 'native');
@@ -353,11 +371,11 @@ test('APP preparation authorization signature, immutable session, audience and e
   const f = fixture(), now = 20000, service = { instanceId: f.source.instanceId, instance: f.source.instance,
     client: { authState: { creds: credentials() } } };
   process.env.NEXI_CHANNELS_EVENT_MASTER_SECRET = master;
-  const claims = { version: 1, audience: 'nexi-attendance-evolution', provider: 'evolution-baileys', instance: f.c.instance,
+  const claims = { version: 1, canonical_version: a.CANONICAL_VERSION, audience: 'nexi-attendance-evolution', provider: 'evolution-baileys', instance: f.c.instance,
     instance_id: f.source.instanceId, managed_channel_id: 3, session_identity: f.c.session_identity, writer_epoch: 1,
     request_id: randomUUID(), expires_at: now + 60000, physical_dispatch: false, intent: intent() };
   const signed = material => {
-    const encoded = Buffer.from(JSON.stringify(material)).toString('base64url');
+    const encoded = Buffer.from(a.canonicalBytes(material)).toString('base64url');
     const secret = createHmac('sha256', master).update(`event:${f.c.instance}`).digest();
     return { claims: encoded, signature: createHmac('sha256', secret).update(`attendance-prepare:v1:${encoded}`).digest('hex') };
   };

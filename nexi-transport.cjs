@@ -302,6 +302,9 @@ async function processChatwootWebhook(request, provider, execute, fetchImpl = fe
   return { status: 200, body: result };
 }
 
+function eventBytes(body) {
+  return body.event?.startsWith('attendance.') ? require('./nexi-attendance.cjs').canonicalBytes(body) : JSON.stringify(body);
+}
 function prepareEvent(headers, body, instanceName, instanceId) {
   if (!headers['X-Nexi-Chatwoot-Account-Id'] || !headers['X-Nexi-Chatwoot-Inbox-Id']) {
     return { headers, body };
@@ -322,9 +325,10 @@ function prepareEvent(headers, body, instanceName, instanceId) {
   };
   const timestamp = String(Date.now());
   const eventId = randomUUID();
+  if (body.event?.startsWith('attendance.') && payload.date_time === undefined) delete payload.date_time;
   const secret = createHmac('sha256', master).update(`event:${instanceName}`).digest();
   const signature = createHmac('sha256', secret)
-    .update(`${timestamp}.${eventId}.${instanceName}.${instanceId}.${JSON.stringify(payload)}`).digest('hex');
+    .update(`${timestamp}.${eventId}.${instanceName}.${instanceId}.${eventBytes(payload)}`).digest('hex');
   return {
     headers: { ...headers, 'Content-Type': 'application/json', 'X-Instance-ID': instanceId, 'X-Instance-Name': instanceName,
       'X-Nexi-Event-Timestamp': timestamp,
@@ -352,15 +356,16 @@ function freshEventHeaders(headers, body, now = Date.now()) {
   const timestamp = String(now);
   const secret = createHmac('sha256', master).update(`event:${instance}`).digest();
   const signature = createHmac('sha256', secret)
-    .update(`${timestamp}.${headers['X-Nexi-Event-Id']}.${instance}.${id}.${JSON.stringify(body)}`).digest('hex');
+    .update(`${timestamp}.${headers['X-Nexi-Event-Id']}.${instance}.${id}.${eventBytes(body)}`).digest('hex');
   return { ...headers, 'X-Nexi-Event-Timestamp': timestamp, 'X-Nexi-Event-Signature': `sha256=${signature}` };
 }
 
 function signedEventClient(client, prepared) {
   if (!prepared.headers['X-Nexi-Event-Id']) return client;
-  const raw = JSON.stringify(prepared.body);
+  const raw = eventBytes(prepared.body);
   client.interceptors.request.use(config => {
-    if (JSON.stringify(config.data) !== raw) throw new Error('nexi_event_payload_conflict');
+    if ((typeof config.data === 'string' ? config.data : eventBytes(config.data)) !== raw) throw new Error('nexi_event_payload_conflict');
+    if (prepared.body.event?.startsWith('attendance.')) config.data = raw;
     config.headers = freshEventHeaders(prepared.headers, prepared.body);
     return config;
   });

@@ -1,0 +1,254 @@
+{
+  "canonical_version": "canonical_json_v1",
+  "fixtures": [
+    {
+      "name": "simple",
+      "input_json": "{\"b\":2,\"a\":1}",
+      "canonical_utf8": "{\"a\":1,\"b\":2}",
+      "sha256": "43258cff783fe7036d8a43033f830adfc60ec037382473548ac742b888292777",
+      "result": "accept"
+    },
+    {
+      "name": "numeric_keys",
+      "input_json": "{\"10\":\"a\",\"2\":\"b\"}",
+      "canonical_utf8": "{\"10\":\"a\",\"2\":\"b\"}",
+      "sha256": "a76f9931f09e47db676e50eebb06409ca3288449353bcd0eed02e168f7c6caf2",
+      "result": "accept"
+    },
+    {
+      "name": "numeric_keys_reversed",
+      "input_json": "{\"2\":\"b\",\"10\":\"a\"}",
+      "canonical_utf8": "{\"10\":\"a\",\"2\":\"b\"}",
+      "sha256": "a76f9931f09e47db676e50eebb06409ca3288449353bcd0eed02e168f7c6caf2",
+      "result": "accept"
+    },
+    {
+      "name": "nested_numeric",
+      "input_json": "{\"outer\":{\"2\":\"b\",\"10\":\"a\"},\"list\":[{\"z\":null,\"a\":true},[],{}]}",
+      "canonical_utf8": "{\"list\":[{\"a\":true,\"z\":null},[],{}],\"outer\":{\"10\":\"a\",\"2\":\"b\"}}",
+      "sha256": "b152afe46775e5770fdcc95893619627b4456a73208c3f4a3a5bc0c069f77bc5",
+      "result": "accept"
+    },
+    {
+      "name": "array",
+      "input_json": "[3,2,1,\"x\",null,false]",
+      "canonical_utf8": "[3,2,1,\"x\",null,false]",
+      "sha256": "61c9849e81669a642a968e78731f3311043803721d8bb3bbf3de0fc1739bb89f",
+      "result": "accept"
+    },
+    {
+      "name": "empty_object",
+      "input_json": "{}",
+      "canonical_utf8": "{}",
+      "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "result": "accept"
+    },
+    {
+      "name": "empty_array",
+      "input_json": "[]",
+      "canonical_utf8": "[]",
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "result": "accept"
+    },
+    {
+      "name": "null_bool",
+      "input_json": "{\"yes\":true,\"no\":false,\"nil\":null}",
+      "canonical_utf8": "{\"nil\":null,\"no\":false,\"yes\":true}",
+      "sha256": "d8c15e4d798327a8070ab0d09f694b8f01d0216bffb6cb8edcc87432a8e9db91",
+      "result": "accept"
+    },
+    {
+      "name": "escapes",
+      "input_json": "{\"text\":\"\\\"\\\\\\b\\f\\n\\r\\t\\u0000\\u001f/\"}",
+      "canonical_utf8": "{\"text\":\"\\\"\\\\\\b\\f\\n\\r\\t\\u0000\\u001f/\"}",
+      "sha256": "5c5da1213f03a65f3fb447000d319b5c3da2f4b8c25058136ee093fc06c0fa88",
+      "result": "accept"
+    },
+    {
+      "name": "unicode_bmp",
+      "input_json": "{\"é\":\"ação\",\"中\":\"汉字\"}",
+      "canonical_utf8": "{\"é\":\"ação\",\"中\":\"汉字\"}",
+      "sha256": "a2fe6f1c686c4496948dcc2d0ce2471328e6efdd7eac3e5473394bf0c68fdbe0",
+      "result": "accept"
+    },
+    {
+      "name": "unicode_supplementary",
+      "input_json": "{\"𐀀\":\"😀\",\"\":\"bmp\"}",
+      "canonical_utf8": "{\"\":\"bmp\",\"𐀀\":\"😀\"}",
+      "sha256": "aa5a40b8ed3b63544190fd256ccba65529fb5a3187e025801892c92f0b9b10eb",
+      "result": "accept"
+    },
+    {
+      "name": "unicode_insertion_reversed",
+      "input_json": "{\"\":\"bmp\",\"𐀀\":\"😀\"}",
+      "canonical_utf8": "{\"\":\"bmp\",\"𐀀\":\"😀\"}",
+      "sha256": "aa5a40b8ed3b63544190fd256ccba65529fb5a3187e025801892c92f0b9b10eb",
+      "result": "accept"
+    },
+    {
+      "name": "key_order_no_normalization",
+      "input_json": "{\"é\":6,\"é\":5,\"a\":4,\"_\":3,\"A\":2,\"!\":1}",
+      "canonical_utf8": "{\"!\":1,\"A\":2,\"_\":3,\"a\":4,\"é\":5,\"é\":6}",
+      "sha256": "593708e78bad51b2f8032b2090e879a605b330eb40fa3f684c9f44282ebf388a",
+      "result": "accept"
+    },
+    {
+      "name": "line_separators",
+      "input_json": "{\"text\":\"\u2028\u2029\"}",
+      "canonical_utf8": "{\"text\":\"\u2028\u2029\"}",
+      "sha256": "63266a265d8889d30aaf8d10a5ed9d266786a0086c1f21d55f5a89cb7da985b9",
+      "result": "accept"
+    },
+    {
+      "name": "integer_bounds",
+      "input_json": "{\"positive\":9007199254740991,\"negative\":-9007199254740991,\"zero\":0}",
+      "canonical_utf8": "{\"negative\":-9007199254740991,\"positive\":9007199254740991,\"zero\":0}",
+      "sha256": "daea65565d62b273cce04194f80d71721de0ab1b06cae1cd3e343290e0c6a502",
+      "result": "accept"
+    },
+    {
+      "name": "fraction",
+      "input_json": "{\"n\":1.5}",
+      "input_kind": null,
+      "canonical_utf8": null,
+      "sha256": null,
+      "result": "reject"
+    },
+    {
+      "name": "unsafe_integer",
+      "input_json": "{\"n\":9007199254740992}",
+      "input_kind": null,
+      "canonical_utf8": null,
+      "sha256": null,
+      "result": "reject"
+    },
+    {
+      "name": "negative_unsafe",
+      "input_json": "{\"n\":-9007199254740992}",
+      "input_kind": null,
+      "canonical_utf8": null,
+      "sha256": null,
+      "result": "reject"
+    },
+    {
+      "name": "fractional_lexeme",
+      "input_json": "{\"n\":1.0}",
+      "input_kind": "canonical_parse",
+      "canonical_utf8": null,
+      "sha256": null,
+      "result": "reject"
+    },
+    {
+      "name": "exponent_lexeme",
+      "input_json": "{\"n\":1e0}",
+      "input_kind": "canonical_parse",
+      "canonical_utf8": null,
+      "sha256": null,
+      "result": "reject"
+    },
+    {
+      "name": "duplicate_keys",
+      "input_json": "{\"a\":1,\"a\":2}",
+      "input_kind": "canonical_parse",
+      "canonical_utf8": null,
+      "sha256": null,
+      "result": "reject"
+    },
+    {
+      "name": "undefined",
+      "input_json": null,
+      "input_kind": "undefined",
+      "canonical_utf8": null,
+      "sha256": null,
+      "result": "reject"
+    },
+    {
+      "name": "symbol",
+      "input_json": null,
+      "input_kind": "symbol",
+      "canonical_utf8": null,
+      "sha256": null,
+      "result": "reject"
+    },
+    {
+      "name": "bigint",
+      "input_json": null,
+      "input_kind": "bigint",
+      "canonical_utf8": null,
+      "sha256": null,
+      "result": "reject"
+    },
+    {
+      "name": "nan",
+      "input_json": null,
+      "input_kind": "nan",
+      "canonical_utf8": null,
+      "sha256": null,
+      "result": "reject"
+    },
+    {
+      "name": "infinity",
+      "input_json": null,
+      "input_kind": "infinity",
+      "canonical_utf8": null,
+      "sha256": null,
+      "result": "reject"
+    },
+    {
+      "name": "binary",
+      "input_json": null,
+      "input_kind": "binary",
+      "canonical_utf8": null,
+      "sha256": null,
+      "result": "reject"
+    },
+    {
+      "name": "date",
+      "input_json": null,
+      "input_kind": "date",
+      "canonical_utf8": null,
+      "sha256": null,
+      "result": "reject"
+    },
+    {
+      "name": "custom_prototype",
+      "input_json": null,
+      "input_kind": "custom_prototype",
+      "canonical_utf8": null,
+      "sha256": null,
+      "result": "reject"
+    },
+    {
+      "name": "lone_surrogate",
+      "input_json": null,
+      "input_kind": "lone_surrogate",
+      "canonical_utf8": null,
+      "sha256": null,
+      "result": "reject"
+    },
+    {
+      "name": "cycle",
+      "input_json": null,
+      "input_kind": "cycle",
+      "canonical_utf8": null,
+      "sha256": null,
+      "result": "reject"
+    },
+    {
+      "name": "sparse_array",
+      "input_json": null,
+      "input_kind": "sparse_array",
+      "canonical_utf8": null,
+      "sha256": null,
+      "result": "reject"
+    },
+    {
+      "name": "accessor",
+      "input_json": null,
+      "input_kind": "accessor",
+      "canonical_utf8": null,
+      "sha256": null,
+      "result": "reject"
+    }
+  ]
+}

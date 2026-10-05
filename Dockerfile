@@ -23,6 +23,8 @@ COPY assert-runtime-model.mjs /evolution/assert-runtime-model.mjs
 COPY assert-groups-runtime.mjs /evolution/assert-groups-runtime.mjs
 COPY assert-attendance-runtime.mjs /evolution/assert-attendance-runtime.mjs
 COPY patch-attendance-source.mjs attendance-models.prisma nexi-attendance.cjs attendance-wave1b.test.cjs attendance-source.test.cjs /evolution/
+COPY nexi-canonical-json.cjs attendance-canonical.test.cjs attendance-corrections.test.cjs /evolution/
+COPY fixtures/attendance-canonical-json-v1.json /evolution/fixtures/attendance-canonical-json-v1.json
 COPY Dockerfile /evolution/Dockerfile
 COPY nexi-transport.cjs /evolution/nexi-transport.cjs
 COPY patch-trusted-baileys.mjs patch-managed-retry.mjs nexi-identity.cjs /evolution/
@@ -42,6 +44,8 @@ COPY prisma/postgresql-migrations/20261002000002_namespace_groups_source /evolut
 COPY prisma/mysql-migrations/20261002000002_namespace_groups_source /evolution/prisma/mysql-migrations/20261002000002_namespace_groups_source
 COPY prisma/postgresql-migrations/20261005000000_nexi_attendance_boundaries /evolution/prisma/postgresql-migrations/20261005000000_nexi_attendance_boundaries
 COPY prisma/mysql-migrations/20261005000000_nexi_attendance_boundaries /evolution/prisma/mysql-migrations/20261005000000_nexi_attendance_boundaries
+COPY prisma/postgresql-migrations/20261005000001_attendance_canonical_version /evolution/prisma/postgresql-migrations/20261005000001_attendance_canonical_version
+COPY prisma/mysql-migrations/20261005000001_attendance_canonical_version /evolution/prisma/mysql-migrations/20261005000001_attendance_canonical_version
 
 # The schema change must precede Prisma generation and tsup's bundled client.
 RUN node /tmp/patch-prisma-binding.mjs
@@ -99,6 +103,8 @@ COPY --from=source-builder /evolution/nexi-financial-transport.cjs /evolution/ne
 COPY --from=source-builder /evolution/nexi-identity.cjs /evolution/nexi-identity.cjs
 COPY --from=source-builder /evolution/nexi-groups.cjs /evolution/nexi-groups.cjs
 COPY --from=source-builder /evolution/nexi-attendance.cjs /evolution/nexi-attendance.cjs
+COPY --from=source-builder /evolution/nexi-canonical-json.cjs /evolution/nexi-canonical-json.cjs
+COPY --from=source-builder /evolution/fixtures /evolution/fixtures
 COPY --from=source-builder /evolution/node_modules/baileys /evolution/node_modules/baileys
 COPY --from=source-builder /evolution/node_modules/libsignal /evolution/node_modules/libsignal
 COPY select-provider-bundle.cjs /evolution/select-provider-bundle.cjs

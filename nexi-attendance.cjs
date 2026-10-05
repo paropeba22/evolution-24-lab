@@ -3,6 +3,8 @@
 const { createHash, createHmac, randomUUID, randomBytes, timingSafeEqual } = require('node:crypto');
 const { AsyncLocalStorage } = require('node:async_hooks');
 const identity = require('./nexi-identity.cjs');
+const canonicalJson = require('./nexi-canonical-json.cjs');
+const CANONICAL_VERSION = canonicalJson.VERSION;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const HASH = /^[0-9a-f]{64}$/;
 const PN = /^[1-9]\d{7,14}@s\.whatsapp\.net$/;
@@ -10,11 +12,11 @@ const LID = /^\d{1,20}@lid$/;
 const ID_PREFIX = '3EB0A77E1B'; // Denial marker; never permission to send/retry.
 const MAX_ATTEMPTS = 12; // Accepted persistent Groups outbox retry ceiling.
 const BARRIER_STATES = ['staged', 'fencing', 'active', 'pause_requested', 'paused', 'retired', 'unresolved'];
-const COMMON = ['version', 'protocol_version', 'audience', 'provider', 'account_id', 'managed_channel_id', 'instance_id',
+const COMMON = ['version', 'protocol_version', 'canonical_version', 'audience', 'provider', 'account_id', 'managed_channel_id', 'instance_id',
   'instance_lineage_id', 'session_identity', 'original_session_identity', 'sender_account_lineage_id', 'sender_attestation_id',
   'binding_generation', 'writer_epoch', 'writer_protocol_version', 'barrier_state'];
 const FIELDS = {
-  'attendance.context.request': ['version', 'audience', 'provider', 'account_id', 'inbox_id', 'nonce', 'session_identity'],
+  'attendance.context.request': ['version', 'canonical_version', 'audience', 'provider', 'account_id', 'inbox_id', 'nonce', 'session_identity'],
   'attendance.foundation.request': COMMON.concat(['action', 'request_id', 'execution_id', 'attempt_id', 'transport_unit',
     'external_id', 'authority_digest', 'payload_digest', 'preparation_id', 'preparation_nonce_digest', 'recipient', 'identity_version_id']),
   'attendance.session.observed': COMMON.concat(['observation_id', 'canonical_pn', 'canonical_lid', 'public_material_digest',
@@ -30,23 +32,24 @@ const FIELDS = {
 const configs = new WeakMap();
 const sockets = new WeakMap();
 const purposes = new WeakMap();
+const internalControls = new WeakMap();
 const scope = new AsyncLocalStorage();
 const workers = new Map();
 const healthWrites = new Map();
 
 function fail(code) { const error = new Error(code); error.code = code; throw error; }
 function canonical(value) {
-  if (Array.isArray(value)) return value.map(canonical);
-  if (value !== null && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype) {
-    // APP's accepted Ruby canonicalizer sorts UTF-8 keys. JavaScript's default
-    // UTF-16 sort differs for supplementary Unicode keys.
-    return Object.fromEntries(Object.keys(value).sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)))
-      .map(key => [key, canonical(value[key])]));
-  }
-  if (value === null || typeof value === 'string' || typeof value === 'boolean' || Number.isSafeInteger(value)) return value;
-  fail('nexi_attendance_noncanonical_material');
+  // A validated transport structure only. Digests/wire fingerprints must use
+  // canonicalBytes directly, never JSON.stringify of this parsed object.
+  return JSON.parse(canonicalJson.bytes(value));
 }
-const digest = value => createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex');
+const canonicalBytes = canonicalJson.bytes;
+const digest = canonicalJson.digest;
+function canonicalVersion(value, source = {}) {
+  if (value !== CANONICAL_VERSION) {
+    log(source, 'attendance.canonical_version.unsupported'); fail('nexi_attendance_canonical_version_unsupported');
+  }
+}
 const jid = value => typeof value === 'string' ? value.replace(/:\d{1,5}(?=@)/, '') : null;
 function log(source, event, values = {}) {
   const safe = Object.fromEntries(Object.entries(values).filter(([key, value]) =>
@@ -60,6 +63,7 @@ function eventPayload(event, data) {
   const fields = FIELDS[event];
   if (!fields || !data || Object.keys(data).sort().join(',') !== [...fields].sort().join(',') ||
       data.version !== 1 || (data.protocol_version !== undefined && data.protocol_version !== 1)) fail('nexi_attendance_contract_unsupported');
+  canonicalVersion(data.canonical_version);
   const normalized = canonical(data);
   const positive = value => Number.isSafeInteger(value) && value > 0;
   const external = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,512}$/.test(value);
@@ -97,14 +101,25 @@ function eventPayload(event, data) {
         fail('nexi_attendance_contract_invalid');
     } else if (!UUID.test(data.journal_id || '') || !external(data.external_id) || ![PN, LID].some(r => r.test(data.remote_jid || '')) ||
         !(data.participant === null || [PN, LID].some(r => r.test(data.participant || ''))) || typeof data.from_me !== 'boolean' ||
-        data.direction !== (data.from_me ? 'outgoing' : 'incoming') || !['SERVER_ACK', 'DELIVERY_ACK', 'READ', 'PLAYED', 'UNKNOWN'].includes(data.normalized_status) ||
+        data.direction !== (data.from_me ? 'outgoing' : 'incoming') || !['ERROR', 'SERVER_ACK', 'DELIVERY_ACK', 'READ', 'PLAYED', 'UNKNOWN'].includes(data.normalized_status) ||
         (!data.from_me && data.normalized_status !== 'UNKNOWN') || !/^[a-z-]{1,32}$/.test(data.semantic_class || '') ||
         !(data.receipt_timestamp === null || Number.isSafeInteger(data.receipt_timestamp) && data.receipt_timestamp >= 0) ||
-        !positive(data.captured_at) || digest(data.protocol_metadata) !== digest({ origin: 'baileys.handleReceipt.pre_buffer', protocol: 'baileys-7.0.0-rc13' }))
+        !positive(data.captured_at) || !receiptMetadata(data))
       fail('nexi_attendance_contract_invalid');
   }
   if (Buffer.byteLength(JSON.stringify(normalized)) > 16384) fail('nexi_attendance_event_limit');
   return normalized;
+}
+function receiptMetadata(data) {
+  const metadata = data.protocol_metadata;
+  if (!metadata || metadata.protocol !== 'baileys-7.0.0-rc13') return false;
+  if (metadata.origin === 'baileys.handleReceipt.pre_buffer') return data.normalized_status !== 'ERROR' &&
+    Object.keys(metadata).sort().join(',') === 'origin,protocol';
+  return metadata.origin === 'baileys.handleBadAck.pre_buffer' &&
+    Object.keys(metadata).sort().join(',') === 'error_category,error_code,origin,protocol' &&
+    metadata.error_category === 'message_ack_error' &&
+    (metadata.error_code === null || typeof metadata.error_code === 'string' && /^[A-Za-z0-9_-]{1,32}$/.test(metadata.error_code)) &&
+    data.semantic_class === 'message-ack-error' && data.normalized_status === (data.from_me ? 'ERROR' : 'UNKNOWN');
 }
 function common(context) {
   return Object.fromEntries(COMMON.map(key => [key, key === 'audience' ? 'nexi-attendance-app' : context[key] ?? null]));
@@ -175,7 +190,7 @@ async function request(source, data, event = 'attendance.foundation.request', fe
   const prepared = transport.prepareEvent(destination.headers, body, source.instance.name, source.instanceId);
   prepared.headers['X-Nexi-Event-Id'] = eventId;
   const response = await fetchImpl(destination.url, { method: 'POST', redirect: 'error',
-    headers: transport.freshEventHeaders(prepared.headers, prepared.body), body: JSON.stringify(prepared.body),
+    headers: transport.freshEventHeaders(prepared.headers, prepared.body), body: canonicalBytes(prepared.body),
     signal: AbortSignal.timeout(10000) });
   if (!response.ok) fail(response.status === 409 ? 'nexi_attendance_reservation_conflict' : 'nexi_attendance_app_unresolved');
   return response.json();
@@ -188,7 +203,8 @@ function verifyContext(source, envelope, nonce, session) {
   const secret = createHmac('sha256', master).update(`event:${source.instance.name}`).digest();
   const expected = createHmac('sha256', secret).update(`attendance-context:v1:${envelope.claims}`).digest();
   if (!timingSafeEqual(expected, Buffer.from(envelope.signature, 'hex'))) fail('nexi_attendance_context_invalid');
-  const context = JSON.parse(Buffer.from(envelope.claims, 'base64url').toString());
+  const context = decodeCanonicalClaims(envelope.claims);
+  canonicalVersion(context.canonical_version, source);
   const keys = [...COMMON, 'nonce', 'inbox_id', 'instance', 'channel_state', 'current_session', 'physical_dispatch', 'isolation_cutover'];
   if (Object.keys(context).sort().join(',') !== keys.sort().join(',') || context.version !== 1 || context.protocol_version !== 1 ||
       context.audience !== 'nexi-attendance-evolution' || context.provider !== 'evolution-baileys' || context.nonce !== nonce ||
@@ -212,7 +228,7 @@ async function refreshContext(source, session, fetchImpl = fetch) {
     return null;
   }
   const nonce = randomUUID();
-  const envelope = await request(source, { version: 1, audience: 'nexi-attendance-app', provider: 'evolution-baileys',
+  const envelope = await request(source, { version: 1, canonical_version: CANONICAL_VERSION, audience: 'nexi-attendance-app', provider: 'evolution-baileys',
     account_id: Number(destination.headers['X-Nexi-Chatwoot-Account-Id']), inbox_id: Number(destination.headers['X-Nexi-Chatwoot-Inbox-Id']),
     nonce, session_identity: session }, 'attendance.context.request', fetchImpl, nonce);
   const context = verifyContext(source, envelope, nonce, session);
@@ -220,9 +236,10 @@ async function refreshContext(source, session, fetchImpl = fetch) {
   const durable = { ...context }; delete durable.nonce;
   const fingerprint = digest(durable);
   const previous = await db.findUnique({ where: { fingerprint } });
-  if (previous) return previous.payload;
+  if (previous) { canonicalVersion(previous.canonicalVersion, source); return previous.payload; }
   try { await db.create({ data: { id: randomUUID(), instanceId: source.instanceId, instanceName: source.instance.name,
-    managedChannelId: String(context.managed_channel_id), sessionIdentity: session, fingerprint, payload: durable } }); }
+    managedChannelId: String(context.managed_channel_id), sessionIdentity: session, fingerprint, payload: durable,
+    canonicalVersion: CANONICAL_VERSION } }); }
   catch (error) { if (error.code !== 'P2002') throw error; }
   return durable;
 }
@@ -252,9 +269,10 @@ async function enqueue(tx, source, context, event, material, sourceKey) {
   const previous = await db.findUnique({ where: { instanceId_sourceKey: { instanceId: source.instanceId, sourceKey } } });
   if (previous) {
     if (previous.fingerprint !== fingerprint) fail('nexi_attendance_outbox_identity_conflict');
+    canonicalVersion(previous.canonicalVersion, source);
     return previous;
   }
-  return db.create({ data: { id: randomUUID(), instanceId: source.instanceId, instanceName: source.instance.name,
+  return db.create({ data: { id: randomUUID(), canonicalVersion: CANONICAL_VERSION, instanceId: source.instanceId, instanceName: source.instance.name,
     sessionIdentity: context.session_identity, eventType: event, version: 1, sourceKey, fingerprint, body,
     state: 'pending', nextAttemptAt: new Date() } });
 }
@@ -291,6 +309,17 @@ function normalizeReceipt(context, attrs, key, ids, capturedAt = Date.now()) {
     return { sourceKey, evidence };
   });
 }
+function normalizeBadAck(context, attrs, key, ids, capturedAt = Date.now()) {
+  if (!attrs.error) return [];
+  return normalizeReceipt(context, attrs, key, ids, capturedAt).map(item => {
+    const evidence = { ...item.evidence, semantic_class: 'message-ack-error',
+      normalized_status: key.fromMe ? 'ERROR' : 'UNKNOWN', protocol_metadata: {
+        origin: 'baileys.handleBadAck.pre_buffer', protocol: 'baileys-7.0.0-rc13',
+        error_category: 'message_ack_error', error_code: typeof attrs.error === 'string' &&
+          /^[A-Za-z0-9_-]{1,32}$/.test(attrs.error) ? attrs.error : null } };
+    return { evidence, sourceKey: digest({ ...evidence, journal_id: null, captured_at: null }) };
+  });
+}
 async function trip(source, reason) {
   const worker = workers.get(source.instanceId);
   if (worker) worker.unhealthy = true;
@@ -321,9 +350,9 @@ async function append(source, context, item, limits) {
     }
     const previous = await tx.nexiReceiptJournal.findUnique({ where: { instanceId_sourceKey: {
       instanceId: source.instanceId, sourceKey: item.sourceKey } } });
-    if (previous) return previous;
+    if (previous) { canonicalVersion(previous.canonicalVersion, source); return previous; }
     const id = randomUUID(), evidence = { ...item.evidence, journal_id: id };
-    const row = await tx.nexiReceiptJournal.create({ data: { id, instanceId: source.instanceId,
+    const row = await tx.nexiReceiptJournal.create({ data: { id, canonicalVersion: CANONICAL_VERSION, instanceId: source.instanceId,
       sessionIdentity: context.session_identity, sourceKey: item.sourceKey, fingerprint: digest(evidence),
       externalId: evidence.external_id, normalizedStatus: evidence.normalized_status, evidence } });
     await enqueue(tx, source, context, 'attendance.receipt.observed', evidence, item.sourceKey);
@@ -343,6 +372,8 @@ class ReceiptWorker {
       this.recovery.set(item.sourceKey, { item, context }); this.recoveryBytes += item.size;
     }
     void trip(this.source, reason);
+    if (item?.evidence?.protocol_metadata?.origin === 'baileys.handleBadAck.pre_buffer')
+      log(this.source, 'attendance.bad_ack.journal_failed', { reason });
   }
   submit(context, item) {
     item = { ...item, size: Buffer.byteLength(JSON.stringify(item)) };
@@ -363,8 +394,10 @@ class ReceiptWorker {
       const job = this.queue.shift(); this.bytes -= job.item.size;
       if (job.expired) { clearTimeout(job.timer); continue; }
       this.active++; this.activeBytes += job.item.size;
-      Promise.resolve().then(() => this.appendImpl(this.source, job.context, job.item, this.limits)).then(() => {
+      Promise.resolve().then(() => this.appendImpl(this.source, job.context, job.item, this.limits)).then(row => {
         job.resolve(true); log(this.source, 'attendance.receipt.appended', { instance_id: this.source.instanceId });
+        if (job.item.evidence?.protocol_metadata?.origin === 'baileys.handleBadAck.pre_buffer')
+          log(this.source, 'attendance.bad_ack.captured', { journal_id: row?.id });
       }, error => {
         // A competing append may have committed the same persistent identity.
         // Leave finite recovery to retry/readback, never a WhatsApp send.
@@ -385,7 +418,7 @@ class ReceiptWorker {
     await this.submit(context, item); // idempotent append; circuit remains sticky
   }
 }
-async function capture(config, attrs, key, ids) {
+async function capture(config, attrs, key, ids, normalize = normalizeReceipt) {
   const registration = configs.get(config);
   if (!registration) return;
   const { source, context } = registration;
@@ -403,9 +436,12 @@ async function capture(config, attrs, key, ids) {
     try { worker = new ReceiptWorker(source, settings()); workers.set(source.instanceId, worker); }
     catch { void trip(source, 'receipt_limits_unconfigured'); return; }
   }
-  const evidence = normalizeReceipt(context, attrs, key, ids);
+  const evidence = normalize(context, attrs, key, ids);
   if (ids.length > 128) worker.gap('receipt_packet_limit');
   await Promise.all(evidence.map(item => worker.submit(context, item)));
+}
+async function captureBadAck(config, attrs, key) {
+  await capture(config, attrs, { ...key, participant: attrs.participant }, [key.id], normalizeBadAck);
 }
 
 async function classification(source) {
@@ -435,7 +471,8 @@ async function configure(service, config) {
       if (session) {
         const historical = await source.prismaRepository.nexiManagedTransportContext.findFirst({ where: {
           instanceId: source.instanceId, sessionIdentity: session }, orderBy: { createdAt: 'desc' } });
-        if (historical && historical.fingerprint === digest(historical.payload) &&
+        if (historical?.canonicalVersion === CANONICAL_VERSION && historical.payload.canonical_version === CANONICAL_VERSION &&
+            historical.fingerprint === digest(historical.payload) &&
             historical.payload.instance_id === source.instanceId && historical.payload.session_identity === session)
           registration.context = historical.payload; // receipt provenance only; never current send authority
         registration.context = await refreshContext(source, session);
@@ -460,7 +497,12 @@ async function sessionObserved(config, attestation) {
   } catch { void trip(registration.source, 'session_observation_unresolved'); }
 }
 function validateIntent(context, intent) {
-  const fields = ['execution_id', 'transport_unit', 'authority_digest', 'payload_digest', 'identity_version_id', 'recipient', 'payload'];
+  canonicalVersion(context?.canonical_version);
+  canonicalVersion(intent?.canonical_version);
+  const fields = ['canonical_version', 'execution_id', 'transport_unit', 'authority_digest', 'payload_digest', 'identity_version_id', 'recipient', 'payload'];
+  if (intent && digest(intent.payload) !== intent.payload_digest) {
+    log({}, 'attendance.canonical_digest.mismatch'); fail('nexi_attendance_intent_digest_conflict');
+  }
   if (!intent || Object.keys(intent).sort().join(',') !== fields.sort().join(',') || !UUID.test(intent.execution_id || '') ||
       !Number.isSafeInteger(intent.transport_unit) || intent.transport_unit < 0 || !HASH.test(intent.authority_digest || '') ||
       !HASH.test(intent.payload_digest || '') || digest(intent.payload) !== intent.payload_digest || !PN.test(intent.recipient || '') ||
@@ -494,11 +536,12 @@ async function draft(source, context, intent, requestId, predecessor = null) {
   const previous = await db.findUnique({ where: { instanceId_requestId: { instanceId: source.instanceId, requestId } } });
   if (previous) {
     if (previous.inputDigest !== inputDigest) fail('nexi_attendance_preparation_identity_conflict');
+    canonicalVersion(previous.canonicalVersion, source);
     return previous;
   }
   const requests = Object.fromEntries(['attempt', 'reserve', 'readback', 'close_collision', 'replacement'].map(action => [action, randomUUID()]));
   requests.predecessor = predecessor?.id || null;
-  const data = { id: randomUUID(), instanceId: source.instanceId, instanceName: source.instance.name,
+  const data = { id: randomUUID(), canonicalVersion: CANONICAL_VERSION, instanceId: source.instanceId, instanceName: source.instance.name,
     executionId: intent.execution_id, transportUnit: intent.transport_unit, requestId, inputDigest, requests,
     authority: context, intent: canonical(intent), authorityDigest: intent.authority_digest, payloadDigest: intent.payload_digest,
     recipient: intent.recipient, sessionIdentity: context.session_identity, externalId: ID_PREFIX + randomBytes(12).toString('hex').toUpperCase(),
@@ -512,10 +555,12 @@ async function draft(source, context, intent, requestId, predecessor = null) {
     if (error.code !== 'P2002') throw error;
     const winner = await db.findUnique({ where: { instanceId_requestId: { instanceId: source.instanceId, requestId } } });
     if (!winner || winner.inputDigest !== inputDigest) fail('nexi_attendance_preparation_identity_conflict');
+    canonicalVersion(winner.canonicalVersion, source);
     return winner;
   }
 }
 async function prepare(source, row, requestImpl = request) {
+  canonicalVersion(row.canonicalVersion, source);
   const db = source.prismaRepository.nexiAttendancePreparation;
   if (row.state === 'definitively_not_sent' && row.closureReason === 'collision_fenced') {
     const replacement = await replacementDraft(source, row);
@@ -603,6 +648,49 @@ function foundationCapability(preparation, work) {
   if (!preparation?.reservationId || !preparation.preparationDigest) fail('nexi_attendance_not_prepared');
   return scope.run(Object.freeze({ kind: 'foundation_only', preparation }), work);
 }
+function semanticPurpose(message) {
+  // Bounded unwrapping of the pinned future-proof wrappers. Edits, reactions,
+  // revokes and all protocol containers are never ordinary customer content.
+  const wrappers = ['ephemeralMessage', 'viewOnceMessage', 'viewOnceMessageV2', 'viewOnceMessageV2Extension',
+    'documentWithCaptionMessage', 'deviceSentMessage', 'associatedChildMessage', 'groupStatusMessage', 'groupStatusMessageV2'];
+  for (let depth = 0; depth < 8; depth++) {
+    if (!message || typeof message !== 'object') return 'unresolved';
+    if (message.editedMessage || message.reactionMessage || message.encReactionMessage || message.pinInChatMessage)
+      return 'customer_affecting';
+    if (message.protocolMessage) {
+      const protocol = message.protocolMessage;
+      if (protocol.editedMessage || protocol.key || [0, 3, 11, 14, 27, 30].includes(protocol.type))
+        return 'customer_affecting';
+      return 'unresolved'; // Including unproven sync/history and every future enum.
+    }
+    const wrapper = wrappers.find(key => message[key]);
+    if (!wrapper) return 'customer';
+    // A wrapper combined with other content cannot conceal a protocol operation.
+    if (Object.keys(message).some(key => key !== wrapper && key !== 'messageContextInfo')) return 'unresolved';
+    message = message[wrapper]?.message;
+  }
+  return 'unresolved';
+}
+function markInternalControl(config, message, recipient) {
+  // Called only by the exact pinned sendPeerDataOperationMessage constructor.
+  // The allowlist is a request to recover an INCOMING placeholder from our own
+  // phone, not a retry of our customer send. History/mutation PDOs are excluded.
+  const protocol = message?.protocolMessage, request = protocol?.peerDataOperationRequestMessage;
+  const own = [jid(config.auth?.creds?.me?.id), jid(config.auth?.creds?.me?.lid)].filter(Boolean);
+  if (Object.keys(message || {}).join(',') !== 'protocolMessage' || protocol?.type !== 16 ||
+      Object.keys(protocol).sort().join(',') !== 'peerDataOperationRequestMessage,type' ||
+      request?.peerDataOperationRequestType !== 4 || !own.includes(jid(recipient)) ||
+      Object.keys(request).sort().join(',') !== 'peerDataOperationRequestType,placeholderMessageResendRequest' ||
+      !Array.isArray(request.placeholderMessageResendRequest) || !request.placeholderMessageResendRequest.length ||
+      request.placeholderMessageResendRequest.length > 128 || !request.placeholderMessageResendRequest.every(item =>
+        Object.keys(item).join(',') === 'messageKey' && item.messageKey?.fromMe === false &&
+        Object.keys(item.messageKey).every(key => ['remoteJid', 'fromMe', 'id', 'participant'].includes(key)) &&
+        (item.messageKey.participant == null || [PN, LID].some(pattern => pattern.test(jid(item.messageKey.participant) || ''))) &&
+        [PN, LID].some(pattern => pattern.test(jid(item.messageKey.remoteJid) || '')) &&
+        typeof item.messageKey.id === 'string' && /^[A-Za-z0-9_-]{1,512}$/.test(item.messageKey.id))) return;
+  internalControls.set(message, { config, recipient: jid(recipient), session: identity.sessionFingerprint(config.auth?.creds),
+    fingerprint: createHash('sha256').update(JSON.stringify(message)).digest('hex') });
+}
 function bindStanza(config, stanza, message, messageId) {
   const capability = scope.getStore();
   if (capability) {
@@ -613,7 +701,15 @@ function bindStanza(config, stanza, message, messageId) {
   }
   // Peer/protocol exemptions come from pinned internal message construction,
   // never from a serializable category/managed attribute supplied by an API.
-  purposes.set(stanza, message?.protocolMessage ? 'protocol' : 'customer');
+  const control = internalControls.get(message);
+  const own = [jid(config.auth?.creds?.me?.id), jid(config.auth?.creds?.me?.lid)].filter(Boolean);
+  const internal = control?.config === config && own.includes(jid(stanza?.attrs?.to)) &&
+    control.recipient === jid(stanza?.attrs?.to) && control.session && control.session === identity.sessionFingerprint(config.auth?.creds) &&
+    control.fingerprint === createHash('sha256').update(JSON.stringify(message)).digest('hex') &&
+    semanticPurpose(message) === 'unresolved';
+  purposes.set(stanza, internal ? Object.freeze({ kind: 'internal_control', config, session: control.session,
+    recipient: control.recipient, id: stanza.attrs.id,
+    fingerprint: createHash('sha256').update(JSON.stringify(stanza)).digest('hex') }) : semanticPurpose(message));
 }
 async function assertNode(config, stanza) {
   const registration = configs.get(config);
@@ -629,8 +725,18 @@ async function assertNode(config, stanza) {
   const row = await source.prismaRepository.nexiAttendancePreparation.findFirst({ where: {
     instanceId: source.instanceId, externalId: stanza.attrs?.id || '' } });
   if (row) fail('nexi_attendance_native_retry_denied');
-  if (purposes.get(stanza) === 'protocol') return;
+  const purpose = purposes.get(stanza) || 'unresolved';
+  if (purpose.kind === 'internal_control') {
+    if (purpose.config === config && purpose.session === identity.sessionFingerprint(config.auth?.creds) &&
+        purpose.recipient === jid(stanza.attrs?.to) && purpose.id === stanza.attrs?.id &&
+        purpose.fingerprint === createHash('sha256').update(JSON.stringify(stanza)).digest('hex')) return;
+    log(source, 'attendance.unknown_protocol.denied'); fail('nexi_attendance_unknown_protocol_denied');
+  }
   if (jid(stanza.attrs?.to)?.endsWith('@g.us')) return; // existing Groups guard remains authoritative
+  if (purpose === 'customer_affecting' || purpose === 'unresolved') {
+    log(source, purpose === 'customer_affecting' ? 'attendance.customer_protocol.denied' : 'attendance.unknown_protocol.denied');
+    fail(purpose === 'customer_affecting' ? 'nexi_attendance_customer_protocol_denied' : 'nexi_attendance_unknown_protocol_denied');
+  }
   if (registration.ambiguous) fail('nexi_attendance_classification_unresolved');
   // Generic legacy writers remain enabled until the APP-owned cutover. No
   // configuration flag can activate that cutover or physical Attendance here.
@@ -713,7 +819,10 @@ async function drain(source, fetchImpl = fetch, limit = 20) {
     const row = await db.findFirst({ where: eligible, orderBy: { createdAt: 'asc' } });
     if (!row) return;
     row.body = canonical(row.body);
-    if (row.version !== 1 || !FIELDS[row.eventType] || digest(row.body) !== row.fingerprint) {
+    if (row.canonicalVersion !== CANONICAL_VERSION || row.body.data?.canonical_version !== CANONICAL_VERSION ||
+        row.version !== 1 || !FIELDS[row.eventType] || digest(row.body) !== row.fingerprint) {
+      if (row.canonicalVersion !== CANONICAL_VERSION || row.body.data?.canonical_version !== CANONICAL_VERSION)
+        log(source, 'attendance.canonical_version.unsupported', { event_id: row.id });
       await db.updateMany({ where: { id: row.id, state: 'pending' }, data: { state: 'unsupported' } });
       log(source, 'attendance.outbox.unsupported', { event_id: row.id }); continue;
     }
@@ -726,7 +835,7 @@ async function drain(source, fetchImpl = fetch, limit = 20) {
       const prepared = transport.prepareEvent(destination.headers, row.body, row.instanceName, row.instanceId);
       prepared.headers['X-Nexi-Event-Id'] = row.id;
       const response = await fetchImpl(destination.url, { method: 'POST', redirect: 'error',
-        headers: transport.freshEventHeaders(prepared.headers, row.body), body: JSON.stringify(row.body),
+        headers: transport.freshEventHeaders(prepared.headers, row.body), body: canonicalBytes(row.body),
         signal: AbortSignal.timeout(10000) });
       const ack = response.ok ? await response.json() : null;
       if (ack?.ack === 'persisted' && ack.event_id === row.id && ack.fingerprint === row.fingerprint && ack.version === 1) {
@@ -827,8 +936,9 @@ function prepareClaims(service, envelope, now = Date.now()) {
   const secret = createHmac('sha256', master).update(`event:${service.instance.name}`).digest();
   const expected = createHmac('sha256', secret).update(`attendance-prepare:v1:${envelope.claims}`).digest();
   if (!timingSafeEqual(expected, Buffer.from(envelope.signature, 'hex'))) fail('nexi_attendance_prepare_authentication_required');
-  const claims = JSON.parse(Buffer.from(envelope.claims, 'base64url').toString());
-  if (Object.keys(claims).sort().join(',') !== 'audience,expires_at,instance,instance_id,intent,managed_channel_id,physical_dispatch,provider,request_id,session_identity,version,writer_epoch' ||
+  const claims = decodeCanonicalClaims(envelope.claims);
+  canonicalVersion(claims.canonical_version);
+  if (Object.keys(claims).sort().join(',') !== 'audience,canonical_version,expires_at,instance,instance_id,intent,managed_channel_id,physical_dispatch,provider,request_id,session_identity,version,writer_epoch' ||
       claims.version !== 1 || claims.audience !== 'nexi-attendance-evolution' || claims.provider !== 'evolution-baileys' ||
       claims.instance !== service.instance.name || claims.instance_id !== service.instanceId || claims.physical_dispatch !== false ||
       !['managed_channel_id', 'writer_epoch'].every(key => Number.isSafeInteger(claims[key]) && claims[key] > 0) ||
@@ -836,8 +946,14 @@ function prepareClaims(service, envelope, now = Date.now()) {
       claims.session_identity !== identity.sessionFingerprint(service.client?.authState?.creds)) fail('nexi_attendance_prepare_authentication_required');
   return claims;
 }
+function decodeCanonicalClaims(encoded) {
+  const buffer = Buffer.from(encoded, 'base64url'), text = buffer.toString('utf8');
+  if (!Buffer.from(text, 'utf8').equals(buffer)) fail('nexi_attendance_noncanonical_material');
+  return canonicalJson.parse(text);
+}
 module.exports = { canonical, digest, eventPayload, settings, publicAttestation, normalizeReceipt, normalization, numericNormalization,
   configure, sessionObserved, capture, refreshContext, classification, draft, prepare, closeCollision,
   foundationCapability, bindStanza, assertNode, externalRaw, retryMessage, legacyAllowed, legacyForInstance, ReceiptWorker,
   drain, installRoutes, requestMaterial, common, prepareClaims, rawNodeForInstance, rawNodeForSocket, trackSocket,
-  append, enqueue, inheritConfig, boundedMariaDb, recoverPreparation, ID_PREFIX };
+  append, enqueue, inheritConfig, boundedMariaDb, recoverPreparation, semanticPurpose, markInternalControl,
+  normalizeBadAck, captureBadAck, canonicalBytes, CANONICAL_VERSION, ID_PREFIX };

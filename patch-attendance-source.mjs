@@ -21,6 +21,10 @@ if (pkg.version !== '7.0.0-rc13' || lock.packages['node_modules/baileys'].versio
     lock.packages['node_modules/baileys'].integrity !== 'sha512-v8k74K8B5R7WNYGa26MyJAYEu3Wc4BSuK01QaK8lr30lhE8Nga31nWNu8KN0NDDt+Fsvkq4SQFFI8Q13ghjKmA==') {
   throw new Error('Attendance requires exact accepted Baileys runtime/lock');
 }
+const proto = fs.readFileSync(path.join(root, 'node_modules/baileys/WAProto/index.js'), 'utf8').replaceAll('\r\n', '\n');
+for (const anchor of ['values[valuesById[14] = "MESSAGE_EDIT"] = 14;',
+  'values[valuesById[16] = "PEER_DATA_OPERATION_REQUEST_MESSAGE"] = 16;',
+  'values[valuesById[4] = "PLACEHOLDER_MESSAGE_RESEND"] = 4;']) once(proto, anchor, anchor);
 const mariaPackage = JSON.parse(fs.readFileSync(path.join(root, 'node_modules/@prisma/adapter-mariadb/package.json')));
 const mariaSource = fs.readFileSync(path.join(root, 'node_modules/@prisma/adapter-mariadb/dist/index.js'), 'utf8');
 if (mariaPackage.version !== '7.8.0' || lock.packages['node_modules/@prisma/adapter-mariadb'].version !== '7.8.0' ||
@@ -52,11 +56,18 @@ patch('node_modules/baileys/lib/Socket/messages-recv.js', source => {
   source = once(source, receipt, `        // Exact rc13 direction/remoteJid/IDs, before any ev.emit or buffer merge.
         await nexiAttendance.capture(config, attrs, key, ids);
 ` + receipt);
+  source = once(source, `        if (attrs.error) {
+            const isReachoutTimelocked = attrs.error === String(NACK_REASONS.SenderReachoutTimelocked);`,
+    `        if (attrs.error) {
+            await nexiAttendance.captureBadAck(config, attrs, key);
+            const isReachoutTimelocked = attrs.error === String(NACK_REASONS.SenderReachoutTimelocked);`);
   return once(source, '            msgs.push(msg);',
     '            msg = await nexiAttendance.retryMessage(config, { ...key, id }, msg);\n            msgs.push(msg);');
 });
 patch('node_modules/baileys/lib/Socket/messages-send.js', source => {
   source = "import nexiAttendance from '/evolution/nexi-attendance.cjs';\n" + source;
+  source = once(source, '        const msgId = await relayMessage(meJid, protocolMessage, {',
+    '        nexiAttendance.markInternalControl(config, protocolMessage, meJid);\n        const msgId = await relayMessage(meJid, protocolMessage, {');
   source = once(source, '                logger.debug({ msgId }, `sending newsletter message to ${jid}`);',
     '                nexiAttendance.bindStanza(config, stanza, message, msgId);\n                logger.debug({ msgId }, `sending newsletter message to ${jid}`);');
   return once(source, '            nexiFinancial.assertWireRecipient(destinationJid, stanza, authState.creds, message, config.nexiFinancialManaged);',
