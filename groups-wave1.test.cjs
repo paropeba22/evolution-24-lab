@@ -11,6 +11,7 @@ const groups = require('./nexi-groups.cjs');
 const identity = require('./nexi-identity.cjs');
 const transport = require('./nexi-transport.cjs');
 const financial = require('./nexi-financial-transport.cjs');
+const attendance = require('./nexi-attendance.cjs');
 const revision = 'e273b904d53f5726970fd6a244ed9caa61dfeb9a';
 const upstream = process.env.EVOLUTION_UPSTREAM_SOURCE || path.join(__dirname, '../evolution-upstream');
 const baileysFile = 'src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts';
@@ -828,9 +829,15 @@ function pinnedLogout(socket, effects, { sendError } = {}) {
   assert.ok(logout.indexOf('await sendNode') < logout.indexOf('void end'));
   const ev = new (require('node:events').EventEmitter)(); ev.destroy = () => effects.push('native.ev.destroy');
   const deps = { ws: socket.ws, authState: { creds }, S_WHATSAPP_NET: 's.whatsapp.net', generateMessageTag: () => 'synthetic-tag',
+    // Execute the shipped sendNode's real snapshot/assertion gate with the same
+    // credentials as native logout; missing closures must not masquerade as send errors.
+    nexiAttendance: attendance, config: { auth: { creds } },
     Boom: require(require.resolve('@hapi/boom', { paths: [__dirname, upstream] })).Boom,
     DisconnectReason: { connectionClosed: 428, loggedOut: 401 },
-    encodeBinaryNode: node => { effects.push(['native.logout.attempt', socket.label, node.content[0].tag]); return Buffer.from('synthetic'); },
+    encodeBinaryNode: node => {
+      assert.ok(Object.isFrozen(node) && Object.isFrozen(node.attrs), 'native logout encodes the final immutable snapshot');
+      effects.push(['native.logout.attempt', socket.label, node.content[0].tag]); return Buffer.from('synthetic');
+    },
     binaryNodeToString: () => 'synthetic', noise: { encodeFrame: data => data }, connectTimeoutMs: 100,
     promiseTimeout: (_ms, work) => new Promise(work), sendPromise: async function () {
       if (sendError) throw sendError; effects.push('native.logout.sent');

@@ -310,7 +310,13 @@ test('restart restores exact historical receipt provenance during APP outage wit
     await a.capture(config, { type: 'read', t: '1234' }, { remoteJid: '5511888888888@s.whatsapp.net', fromMe: true }, ['historical-ID']);
     assert.equal(f.repo.nexiReceiptJournal.rows[0].evidence.session_identity, historical.session_identity);
     assert.equal(f.repo.nexiReceiptJournal.rows[0].evidence.barrier_state, 'retired');
-    await assert.rejects(a.assertNode(config, { tag: 'message', attrs: { id: 'ordinary-customer', to: '5511888888888@s.whatsapp.net' } }), /classification_unresolved/);
+    const ordinary = { tag: 'message', attrs: { id: 'ordinary-customer', to: '5511888888888@s.whatsapp.net' } };
+    // An unbound raw stanza is denied before ambiguous classification. Even
+    // proven ordinary content cannot recover send authority from receipt history.
+    await assert.rejects(a.assertNode(config, ordinary), { code: 'nexi_attendance_unknown_protocol_denied' });
+    a.bindStanza(config, ordinary, { conversation: 'synthetic ordinary content' }, ordinary.attrs.id);
+    await assert.rejects(a.assertNode(config, a.snapshotFrame(config, ordinary)),
+      { code: 'nexi_attendance_classification_unresolved' });
     assert.equal(await a.classification({ ...f.source, instanceId: randomUUID() }), 'managed_unresolved');
   } finally {
     global.fetch = previousFetch;
