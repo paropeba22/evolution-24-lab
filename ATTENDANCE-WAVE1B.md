@@ -1,5 +1,8 @@
 # NEXI Attendance Wave 1B — source review contract
 
+Strict review corrections and versioned canonical authority are documented
+in [ATTENDANCE-WAVE1B-CORRECTIONS.md](ATTENDANCE-WAVE1B-CORRECTIONS.md).
+
 Source implementation only. Managed Attendance physical dispatch is disabled.
 No deployment, dependency installation, project test, build or migration was
 executed on Serra. EasyPanel is the build/runtime validation environment.
