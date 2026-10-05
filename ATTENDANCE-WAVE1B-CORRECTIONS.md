@@ -1,5 +1,8 @@
 # Wave 1B strict source review corrections
 
+Final immutable encoding/frame correction is documented in
+[ATTENDANCE-WAVE1B-RESIDUAL.md](ATTENDANCE-WAVE1B-RESIDUAL.md).
+
 Scope: W1B-01/02/03 and their tests, additive metadata migrations, pinned and
 shipped-artifact assertions. Source for review only: no acceptance, promotion,
 deployment, admission/release, receipt reducer or dispatch activation.
