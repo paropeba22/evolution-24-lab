@@ -7,6 +7,15 @@ export function once(source, anchor, replacement) {
   if (count !== 1) throw new Error(`Attendance pinned anchor: expected 1, found ${count}: ${anchor.slice(0, 96)}`);
   return source.replace(anchor, () => replacement);
 }
+export function patchAttendanceSendNode(source) {
+  source = once(source, '    const sendNode = (frame) => {',
+    `    const sendNode = async (frame) => {
+        const nexiFrame = nexiAttendance.snapshotFrame(config, frame);
+        await nexiAttendance.assertNode(config, nexiFrame);`);
+  source = once(source, "            logger.trace({ xml: binaryNodeToString(frame), msg: 'xml send' });",
+    "            logger.trace({ xml: binaryNodeToString(nexiFrame), msg: 'xml send' });");
+  return once(source, '        const buff = encodeBinaryNode(frame);', '        const buff = encodeBinaryNode(nexiFrame);');
+}
 export function patchAttendanceTsupConfig(source) {
   source = once(source, "import { cpSync } from 'node:fs';", "import { cpSync, readFileSync } from 'node:fs';");
   source = once(source, "external: ['/evolution/nexi-groups.cjs', 'baileys',",
@@ -146,13 +155,7 @@ patch('node_modules/baileys/lib/Socket/index.js', source => once(
 patch('node_modules/baileys/lib/Socket/socket.js', source => {
   source = "import nexiAttendance from '/evolution/nexi-attendance.cjs';\n" +
     "import { WA_ADV_ACCOUNT_SIG_PREFIX, WA_ADV_HOSTED_ACCOUNT_SIG_PREFIX } from '../Defaults/index.js';\n" + source;
-  source = once(source, '    const sendNode = (frame) => {',
-    `    const sendNode = async (frame) => {
-        const nexiFrame = nexiAttendance.snapshotFrame(config, frame);
-        await nexiAttendance.assertNode(config, nexiFrame);`);
-  source = once(source, "            logger.trace({ xml: binaryNodeToString(frame), msg: 'xml send' });",
-    "            logger.trace({ xml: binaryNodeToString(nexiFrame), msg: 'xml send' });");
-  source = once(source, '        const buff = encodeBinaryNode(frame);', '        const buff = encodeBinaryNode(nexiFrame);');
+  source = patchAttendanceSendNode(source);
   // Exported raw bytes are a separate surface. Internal handshake/noise calls
   // retain their lexical sendRawMessage and cannot be forged through attributes.
   source = once(source, '        sendRawMessage,\n        sendNode,',

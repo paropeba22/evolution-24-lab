@@ -36,6 +36,13 @@ model NexiAttendancePreparation {
   preparationDigest String? @db.VarChar(64)
   admissionId String? @db.VarChar(36)
   releaseId String? @db.VarChar(36)
+  grantId String? @unique @db.VarChar(36)
+  grantDigest String? @db.VarChar(64)
+  releaseDigest String? @db.VarChar(64)
+  consumptionId String? @unique @db.VarChar(36)
+  consumptionDigest String? @db.VarChar(64)
+  releasedAuthority Json? JSON_TYPE
+  authorityDeadline DateTime?
   releaseConsumedAt DateTime?
   dispatchStartedAt DateTime?
   transportReturn Json? JSON_TYPE
@@ -53,6 +60,7 @@ model NexiAttendancePreparation {
   createdAt DateTime @default(now())
   @@unique([instanceId, requestId])
   @@unique([instanceId, externalId])
+  @@unique([releaseId])
   @@index([instanceId, state])
 }
 

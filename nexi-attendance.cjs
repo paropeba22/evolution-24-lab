@@ -40,6 +40,25 @@ const workers = new Map();
 const healthWrites = new Map();
 
 function fail(code) { const error = new Error(code); error.code = code; throw error; }
+function envelopeSecret(source) {
+  const master = process.env.NEXI_CHANNELS_EVENT_MASTER_SECRET || '';
+  if (Buffer.byteLength(master) < 32) fail('nexi_attendance_envelope_authentication_required');
+  return createHmac('sha256', master).update(`event:${source.instance.name}`).digest();
+}
+function signEnvelope(source, claims, domain) {
+  const encoded = Buffer.from(canonicalBytes(claims)).toString('base64url');
+  return { claims: encoded, signature:createHmac('sha256', envelopeSecret(source)).update(`${domain}:v1:${encoded}`).digest('hex') };
+}
+function verifyEnvelope(source, envelope, domain, maxBytes = 16384) {
+  if (!envelope || Object.keys(envelope).sort().join(',') !== 'claims,signature' || typeof envelope.claims !== 'string' ||
+      envelope.claims.length > maxBytes || !/^[A-Za-z0-9_-]+$/.test(envelope.claims) || !HASH.test(envelope.signature || ''))
+    fail('nexi_attendance_envelope_authentication_required');
+  const expected=createHmac('sha256',envelopeSecret(source)).update(`${domain}:v1:${envelope.claims}`).digest();
+  if (!timingSafeEqual(expected,Buffer.from(envelope.signature,'hex'))) fail('nexi_attendance_envelope_authentication_required');
+  const claims=decodeCanonicalClaims(envelope.claims);
+  if (Buffer.from(canonicalBytes(claims)).toString('base64url')!==envelope.claims) fail('nexi_attendance_noncanonical_material');
+  return claims;
+}
 function canonical(value) {
   // A validated transport structure only. Digests/wire fingerprints must use
   // canonicalBytes directly, never JSON.stringify of this parsed object.
@@ -568,7 +587,7 @@ async function prepare(source, row, requestImpl = request) {
     const replacement = await replacementDraft(source, row);
     return prepare(source, replacement, requestImpl);
   }
-  if (['prepared', 'awaiting_admission'].includes(row.state)) {
+  if (['prepared', 'awaiting_admission', 'dispatch_ready_but_disabled', 'dispatch_started', 'transport_returned'].includes(row.state)) {
     const content = digest({ intent: row.intent, attempt_id: row.attemptId, reservation_id: row.reservationId,
       external_id: row.externalId, authority: row.authority });
     if (!row.frozenAt || !row.reservationId || content !== row.contentDigest || row.preparationDigest !== digest({
@@ -649,6 +668,16 @@ async function closeCollision(source, row, requestImpl = request) {
 function foundationCapability(preparation, work) {
   if (!preparation?.reservationId || !preparation.preparationDigest) fail('nexi_attendance_not_prepared');
   return scope.run(Object.freeze({ kind: 'foundation_only', preparation }), work);
+}
+async function releasedGrantCapability(source, preparationId, consumptionId, work) {
+  const authority = require('./nexi-attendance-authority.cjs');
+  const row = await source.prismaRepository.nexiAttendancePreparation.findUnique({where:{id:preparationId}});
+  if (!row?.releaseConsumedAt || row.consumptionId !== consumptionId || row.state !== 'dispatch_ready_but_disabled')
+    fail('nexi_attendance_dispatch_unconsumed');
+  // No caller, environment variable or API parameter can supply this capability.
+  // The false branch never invokes work (including a hypothetical transport).
+  if (!authority.physicalDispatchEnabled()) return {state:'dispatch_ready_but_disabled',physical_dispatch:false};
+  return scope.run(Object.freeze({kind:'released_grant',source,preparation:row,consumptionId}),work);
 }
 function semanticPurpose(message) {
   // Bounded unwrapping of the pinned future-proof wrappers. Edits, reactions,
@@ -758,7 +787,8 @@ function bindStanza(config, stanza, message, messageId) {
     const row = capability.preparation;
     if (messageId !== row.externalId || stanza?.attrs?.id !== row.externalId || jid(stanza?.attrs?.to) !== row.recipient ||
         identity.sessionFingerprint(config.auth?.creds) !== row.sessionIdentity) fail('nexi_attendance_final_stanza_mismatch');
-    fail('nexi_attendance_dispatch_disabled_wave1b');
+    if (capability.kind !== 'released_grant') fail('nexi_attendance_dispatch_disabled_wave1b');
+    return;
   }
   // Peer/protocol exemptions come from pinned internal message construction,
   // never from a serializable category/managed attribute supplied by an API.
@@ -774,7 +804,19 @@ function bindStanza(config, stanza, message, messageId) {
 }
 async function assertNode(config, stanza) {
   const registration = configs.get(config);
-  if (scope.getStore()) fail('nexi_attendance_dispatch_disabled_wave1b');
+  const capability = scope.getStore();
+  if (capability) {
+    const authority=require('./nexi-attendance-authority.cjs');
+    // This is awaited by the patched lexical sendNode BEFORE encoding/socket
+    // write. The production capability remains a literal false in this slice.
+    if (capability.kind !== 'released_grant' || !authority.physicalDispatchEnabled()) fail('nexi_attendance_dispatch_disabled_wave1b');
+    if (!registration || registration.source.instanceId !== capability.source.instanceId ||
+        identity.sessionFingerprint(config.auth?.creds) !== capability.preparation.sessionIdentity)
+      fail('nexi_attendance_dispatch_socket_mismatch');
+    const started=await authority.dispatchStart(capability.source,capability.preparation.id,capability.consumptionId,stanza);
+    if (!started.started) fail('nexi_attendance_dispatch_already_started');
+    return;
+  }
   if (stanza?.tag !== 'message') return;
   if (typeof stanza.attrs?.id === 'string' && stanza.attrs.id.startsWith(ID_PREFIX)) {
     if (registration) log(registration.source, 'attendance.gate.denied', { reason: 'foundation_only' });
@@ -933,6 +975,7 @@ async function recoverPreparation(source, row) {
   }
 }
 function installRoutes(router, monitor, guard, repository) {
+  require('./nexi-attendance-authority.cjs').installRoute(router,monitor,guard,repository);
   // No preparation endpoint accepts arbitrary browser/API intent. Later APP
   // workers call authenticated contracts; exported primitives cannot dispatch.
   router.post('/nexi/attendance/prepare/:instanceName', guard, async (req, res) => {
@@ -943,6 +986,16 @@ function installRoutes(router, monitor, guard, repository) {
       const groups = require('./nexi-groups.cjs'), owner = groups.lifecycleCapture(service);
       if (!groups.lifecycleCurrent(owner)) fail('nexi_attendance_session_superseded');
       const source = { prismaRepository: repository, instanceId: service.instanceId, instance: { name: service.instance.name } };
+      // An exchange retry reads its original durable draft before consulting a
+      // fresh context. Context churn never reallocates the candidate/request.
+      const previous = await repository.nexiAttendancePreparation.findUnique({where:{instanceId_requestId:{instanceId:source.instanceId,requestId:claims.request_id}}});
+      if (previous) {
+        if (digest(previous.intent)!==digest(claims.intent) || previous.sessionIdentity!==claims.session_identity ||
+            previous.authority.managed_channel_id!==claims.managed_channel_id || previous.authority.writer_epoch!==claims.writer_epoch)
+          fail('nexi_attendance_preparation_identity_conflict');
+        const prepared=await prepare(source,previous);
+        return res.json({state:prepared.state,preparation_id:prepared.id,physical_dispatch:false});
+      }
       const context = await refreshContext(source, claims.session_identity);
       if (!groups.lifecycleCurrent(owner) || identity.sessionFingerprint(service.client?.authState?.creds) !== claims.session_identity)
         fail('nexi_attendance_session_superseded');
@@ -990,15 +1043,7 @@ function installRoutes(router, monitor, guard, repository) {
   timer.unref?.(); return timer;
 }
 function prepareClaims(service, envelope, now = Date.now()) {
-  if (!envelope || Object.keys(envelope).sort().join(',') !== 'claims,signature' || typeof envelope.claims !== 'string' ||
-      envelope.claims.length > 16384 || !/^[A-Za-z0-9_-]+$/.test(envelope.claims) || !HASH.test(envelope.signature || ''))
-    fail('nexi_attendance_prepare_authentication_required');
-  const master = process.env.NEXI_CHANNELS_EVENT_MASTER_SECRET || '';
-  if (Buffer.byteLength(master) < 32) fail('nexi_attendance_prepare_authentication_required');
-  const secret = createHmac('sha256', master).update(`event:${service.instance.name}`).digest();
-  const expected = createHmac('sha256', secret).update(`attendance-prepare:v1:${envelope.claims}`).digest();
-  if (!timingSafeEqual(expected, Buffer.from(envelope.signature, 'hex'))) fail('nexi_attendance_prepare_authentication_required');
-  const claims = decodeCanonicalClaims(envelope.claims);
+  const claims = verifyEnvelope(service, envelope, 'attendance-prepare');
   canonicalVersion(claims.canonical_version);
   if (Object.keys(claims).sort().join(',') !== 'audience,canonical_version,expires_at,instance,instance_id,intent,managed_channel_id,physical_dispatch,provider,request_id,session_identity,version,writer_epoch' ||
       claims.version !== 1 || claims.audience !== 'nexi-attendance-evolution' || claims.provider !== 'evolution-baileys' ||
@@ -1019,4 +1064,4 @@ module.exports = { canonical, digest, eventPayload, settings, publicAttestation,
   drain, installRoutes, requestMaterial, common, prepareClaims, rawNodeForInstance, rawNodeForSocket, trackSocket,
   append, enqueue, inheritConfig, boundedMariaDb, recoverPreparation, semanticPurpose, markInternalControl,
   normalizeBadAck, captureBadAck, canonicalBytes, CANONICAL_VERSION, ID_PREFIX,
-  beginRelay, encodingInput, patchEncoding, encodeMessage, snapshotFrame };
+  beginRelay, encodingInput, patchEncoding, encodeMessage, snapshotFrame, signEnvelope, verifyEnvelope, releasedGrantCapability };

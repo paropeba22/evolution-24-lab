@@ -31,3 +31,9 @@ Managed CTA errors return `nexi_financial_transport_failed` with allowlisted dia
 The existing authenticated Chatwoot route helper suppresses managed history by the event's own message ID/source ID, metadata, account, inbox and conversation. It never consults the latest conversation message to authorize a financial history outbound operation. Invalid managed metadata fails closed. The Channels bundle patcher remains unchanged and its existing provider bundle tests remain operational build gates.
 
 Full provider bundles, PostgreSQL/Redis integration and operational runtime checks remain pending EasyPanel. This wave performs no build, promotion, deployment or real delivery. Rails financial destination proof issuance remains a separate blocked Channels requirement.
+
+Attendance Wave 1C final Slice 4/5 adds the APP preparation/admission/release bridge,
+durable transport consumption and the one-way pre-write dispatch fence. Physical
+Attendance dispatch remains disabled in source. The exact contract, recovery
+rules and pending runtime acceptance are in
+[attendance-wave1c-final-slice.md](attendance-wave1c-final-slice.md).
