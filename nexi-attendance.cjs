@@ -617,6 +617,13 @@ async function prepare(source, row, requestImpl = request) {
       // unresolved and never licenses a resend or a substitute candidate.
       const observed = await requestImpl(source, requestMaterial(row, 'readback'));
       if (observed.outcome === 'reserved') result = observed;
+      else if (observed.outcome === 'collision_fenced' && observed.attempt_id === row.attemptId &&
+          observed.external_id === row.externalId && observed.replacement_permitted === true && observed.physical_dispatch === false) {
+        // APP committed the original collision fence before its response was
+        // lost. Replaying that same closure recovers it; timeout alone cannot.
+        const fenced = await closeCollision(source, row, requestImpl);
+        return replacementDraft(source, fenced);
+      }
       else if (error.code === 'nexi_attendance_reservation_conflict' && observed.outcome === 'unresolved' && observed.admission_registered === false) {
         const fenced = await closeCollision(source, row, requestImpl);
         return replacementDraft(source, fenced);

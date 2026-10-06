@@ -97,9 +97,10 @@ admission and release request identities already committed before this slice.
 `NexiAttendanceOrchestrationJob` runs every five minutes, registers at most 50
 previous executions from a partial due index and enqueues at most 100 due units.
 An atomic claim grants a 90-second lease. Backoff is exponential, capped at one
-hour and 12 recoveries. Exhaustion retains unresolved identities/evidence and
-requires explicit investigation; it is not not-sent proof. Terminal units are
-excluded. No transaction/graph lock is held across HTTP.
+hour, with no recovery-count termination. At 12 recoveries the diagnostic becomes
+`outcome_unresolved`; the same pending row remains scheduled indefinitely.
+An accepted durable prepared proof makes its matching pending row due promptly.
+Terminal units are excluded. No transaction/graph lock is held across HTTP.
 
 | Durable state at restart | Recovery |
 | --- | --- |
@@ -119,6 +120,27 @@ Timeout, connection error, 404 and absent response are ambiguous. Only transport
 chooses candidates. The accepted collision fencing is retained; candidate
 replacement requires original durable definitively-not-sent proof. Admission
 and release cannot replace an ID after a collision.
+
+The collision predecessor/successor gap stays pending. Signed
+`preparation_result.successor_chain` exposes only Evolution's committed
+`successorId` / `requests.replacement` chain and registered successor attempt.
+Each link binds predecessor preparation/request/attempt/external ID, the original
+closure request, and successor preparation/request/attempt/external ID. APP
+persists the append-only chain under its unchanged root preparation request.
+APP and its SQL guard also require the predecessor's exact permanent
+`close_collision` foundation result, no reservation/admission, and the successor's
+exact execution/unit graph. No APP code chooses a successor candidate or request.
+Lost APP collision-fence responses are recovered through the original foundation
+readback and replayed closure identity; generic timeout cannot enter this path.
+
+An attempt already UNKNOWN, dispatch-marked or transport-returned fences resend
+but supplies no consumption acknowledgment. Its orchestration remains pending
+and performs only the original signed consumption readback, without another
+consume. Only the exact authenticated committed result with consumption and
+dispatch-start timestamps can terminalize it as `outcome_unknown`. A temporarily
+missing dependency, unverifiable response or authority exception is unresolved;
+terminal denial requires durable cancellation, admission/release denial, immutable
+ownership conflict, or signed unconsumed readback after release expiry.
 
 ## DB invariants and lock order
 
@@ -142,6 +164,35 @@ Triggers protect immutable candidates, consumption, one-way dispatch and UNKNOWN
 CAS transactions check the actual catalog's pinned trigger/function definitions
 and unique indexes. Storage or commit failure prevents dispatch eligibility;
 there is no generic-send fallback.
+
+The final correction guard pins the inherited APP admission/reservation CHECK
+expression trees, 14 graph/lineage ownership FKs and 13 foundation/attempt/
+reservation/admission/grant/release unique indexes. It checks ordered ownership
+columns, tables, FK validation/actions/deferral, uniqueness, index method,
+expressions, included columns, order, opclass/collation and exact partial
+predicates. External-ID storage keeps its case-sensitive C collation. Foundation
+and reservation retention/correlation trigger wiring and function bodies are
+also pinned. No promoted migration changes.
+
+Evolution certifies all five protected Attendance tables: permanent DELETE/
+TRUNCATE guards, canonical immutability, preparation/outbox/consumption/dispatch
+functions and trigger wiring (rejecting unexpected table triggers), validated state/canonical CHECK trees, primary
+keys and original request/external-ID/source/grant/release/consumption uniqueness.
+PostgreSQL must use origin trigger execution mode. MySQL/MariaDB additionally
+requires InnoDB and exact binary identity columns, enforced CHECKs (including
+MariaDB session enforcement), and both current-principal SHOW GRANTS forms.
+DROP/ALL PRIVILEGES or other protection-altering privileges applying globally,
+to the protected schema or table fail closed. Roles, proxy, dynamic or unknown
+grant syntax also fail closed. A restricted runtime principal must be validated
+at the final gate; ordinary non-Attendance Prisma paths retain their behavior.
+See [MySQL SHOW GRANTS](https://dev.mysql.com/doc/refman/8.4/en/show-grants.html)
+for the explicit-current-user versus mandatory-role distinction.
+
+The corrected unpromoted MySQL INSERT trigger matches PostgreSQL's full initial
+authority shape: draft, revision zero, outcomeUnknown false, and all twelve
+admission/grant/release/consumption/dispatch-only fields NULL. This includes
+grantDigest, releaseDigest, consumptionDigest, releasedAuthority and
+authorityDeadline. Its effective body fingerprint is pinned by the guard.
 
 ## Physical boundary and unknown outcomes
 
@@ -168,7 +219,8 @@ authority. Slice 3 cutover and WriterBarrier remain unactivated.
 APP: `ruby test/attendance/run_source_tests.rb` runs isolated source suites with
 a network trap. Evolution: `node --require ./attendance-test-network-trap.cjs
 --test attendance-authority.test.cjs attendance-canonical.test.cjs
-attendance-corrections.test.cjs attendance-wave1b.test.cjs`.
+attendance-corrections.test.cjs attendance-wave1b.test.cjs
+attendance-storage-corrections.test.cjs`.
 
 Shared `authority-v1.json` is produced in order by actual Evolution preparation,
 actual Ruby APP ReleaseContract and actual Evolution consumption/signing. It is
@@ -187,6 +239,7 @@ boundary; managed writes/encodes stay zero. No WhatsApp connection occurs.
 
 Deferred final Wave 1C acceptance: real APP/Evolution migrations, Rails runtime,
 both Evolution provider catalogs/Prisma bundles, real concurrent workers,
-Redis/Postgres restart, actual outbox delivery and EasyPanel runtime. Full
+Redis/Postgres restart, actual outbox delivery, real MySQL/MariaDB runtime
+principal grants and EasyPanel runtime. Full
 snapshot/relay provider tests also need their installed patched Baileys/Long
 dependencies. None of these are declared accepted by source checks.

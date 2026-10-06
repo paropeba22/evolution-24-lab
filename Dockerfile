@@ -27,6 +27,8 @@ COPY patch-attendance-source.mjs attendance-models.prisma nexi-attendance.cjs at
 COPY nexi-canonical-json.cjs attendance-canonical.test.cjs attendance-corrections.test.cjs /evolution/
 COPY nexi-attendance-snapshot.cjs attendance-snapshot.test.cjs /evolution/
 COPY nexi-attendance-authority.cjs nexi-attendance-storage-guard.cjs attendance-authority.test.cjs attendance-authority-test-support.cjs attendance-test-network-trap.cjs /evolution/
+COPY nexi-attendance-storage-check.cjs /evolution/
+COPY attendance-storage-corrections.test.cjs /evolution/
 COPY fixtures/attendance-authority-v1.json /evolution/fixtures/attendance-authority-v1.json
 COPY fixtures/baileys-send-node-rc13.json /evolution/fixtures/baileys-send-node-rc13.json
 COPY fixtures/attendance-canonical-json-v1.json /evolution/fixtures/attendance-canonical-json-v1.json
@@ -114,6 +116,7 @@ COPY --from=source-builder /evolution/nexi-canonical-json.cjs /evolution/nexi-ca
 COPY --from=source-builder /evolution/nexi-attendance-snapshot.cjs /evolution/nexi-attendance-snapshot.cjs
 COPY --from=source-builder /evolution/nexi-attendance-authority.cjs /evolution/nexi-attendance-authority.cjs
 COPY --from=source-builder /evolution/nexi-attendance-storage-guard.cjs /evolution/nexi-attendance-storage-guard.cjs
+COPY --from=source-builder /evolution/nexi-attendance-storage-check.cjs /evolution/nexi-attendance-storage-check.cjs
 COPY --from=source-builder /evolution/fixtures /evolution/fixtures
 COPY --from=source-builder /evolution/node_modules/baileys /evolution/node_modules/baileys
 COPY --from=source-builder /evolution/node_modules/libsignal /evolution/node_modules/libsignal

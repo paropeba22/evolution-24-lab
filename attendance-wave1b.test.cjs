@@ -1,4 +1,5 @@
 'use strict';
+require('./attendance-test-network-trap.cjs');
 // Run only in the designated EasyPanel build/runtime environment.
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -90,6 +91,72 @@ function appResponder(row, reservationId = randomUUID()) {
   };
   return { request, calls, reservationId };
 }
+test('collision crash before successor creation exposes a recoverable gap and resumes original durable chain',async()=>{
+  const authority=require('./nexi-attendance-authority.cjs');
+  const f=fixture(),root=await a.draft(f.source,f.c,intent(),randomUUID()),app=appResponder(root);
+  const db=f.repo.nexiAttendancePreparation,create=db.create.bind(db);
+  let paused=true;
+  db.create=async args=>{if(paused&&args.data.requests.predecessor)throw Error('crash before successor commit');return create(args);};
+  const request=async(source,body)=>{
+    if(body.action==='reserve')throw Object.assign(Error('collision'),{code:'nexi_attendance_reservation_conflict'});
+    if(body.action==='readback')return {outcome:'unresolved',admission_registered:false};
+    if(body.action==='close_collision')return {outcome:'collision_fenced',attempt_id:body.attempt_id,external_id:body.external_id,replacement_permitted:true,physical_dispatch:false};
+    return app.request(source,body);
+  };
+  await assert.rejects(a.prepare(f.source,root,request),/crash/);
+  const fenced=await db.findUnique({where:{id:root.id}});
+  assert.equal(fenced.state,'definitively_not_sent');assert.equal(db.rows.length,1);assert.equal(fenced.successorId,null);
+  const value={request_id:root.requestId,material:{execution_id:root.executionId,transport_unit:root.transportUnit,
+    prepare_request_id:root.requestId,preparation_id:root.id,attempt_id:fenced.attemptId}};
+  assert.deepEqual((await authority.preparationReadback(f.source,value)).successor_chain,[]);
+  assert.equal(db.rows.length,1);
+  paused=false;
+  // Resume only the transport's persisted replacement request identity.
+  const replacement=await a.draft(f.source,fenced.authority,fenced.intent,fenced.requests.replacement,fenced);
+  const prepared=await a.prepare(f.source,fenced,appResponder(replacement).request);
+  assert.equal(prepared.id,replacement.id);assert.equal(prepared.requestId,fenced.requests.replacement);
+  assert.equal(db.rows.length,2);
+  const result=await authority.preparationReadback(f.source,value),link=result.successor_chain[0];
+  assert.equal(link.successor_request_id,fenced.requests.replacement);assert.equal(link.successor_preparation_id,prepared.id);
+  assert.equal(link.successor_external_id,prepared.externalId);assert.equal(link.successor_attempt_id,prepared.attemptId);
+  assert.equal(link.closure_request_id,fenced.requests.close_collision);
+  assert.equal(link.predecessor_request_id,root.requestId);
+  assert.deepEqual(await authority.preparationReadback(f.source,value),result);assert.equal(db.rows.length,2);
+  await a.prepare(f.source,fenced,()=>assert.fail('prepared successor cannot allocate or call APP again'));
+  assert.equal(db.rows.length,2);
+});
+test('lost original APP collision fence is recovered through authenticated foundation readback',async()=>{
+  const f=fixture(),root=await a.draft(f.source,f.c,intent(),randomUUID()),app=appResponder(root);
+  let committed=false,lose=true;const closures=[];
+  const request=async(source,body)=>{
+    if(body.action==='reserve')throw Object.assign(Error('lost'),{code:committed?'response_lost':'nexi_attendance_reservation_conflict'});
+    if(body.action==='readback')return committed?{outcome:'collision_fenced',attempt_id:body.attempt_id,
+      external_id:body.external_id,replacement_permitted:true,physical_dispatch:false}:{outcome:'unresolved',admission_registered:false};
+    if(body.action==='close_collision'){
+      closures.push(body.request_id);committed=true;
+      if(lose)throw Error('closure response lost');
+      return {outcome:'collision_fenced',attempt_id:body.attempt_id,external_id:body.external_id,replacement_permitted:true,physical_dispatch:false};
+    }return app.request(source,body);
+  };
+  await assert.rejects(a.prepare(f.source,root,request),/response lost/);
+  assert.equal(f.repo.nexiAttendancePreparation.rows.length,1);
+  const original=await f.repo.nexiAttendancePreparation.findUnique({where:{id:root.id}});
+  assert.equal(original.state,'draft');lose=false;
+  const successor=await a.prepare(f.source,original,request);
+  assert.equal(successor.requestId,root.requests.replacement);assert.equal(closures.length,2);
+  assert.equal(new Set(closures).size,1);assert.equal(f.repo.nexiAttendancePreparation.rows.length,2);
+});
+test('generic timeout with missing reservation never grants collision replacement',async()=>{
+  const f=fixture(),root=await a.draft(f.source,f.c,intent(),randomUUID()),app=appResponder(root);
+  await assert.rejects(a.prepare(f.source,root,async(source,body)=>{
+    if(body.action==='reserve')throw Error('timeout');
+    if(body.action==='readback')return {outcome:'unresolved',admission_registered:false};
+    if(body.action==='close_collision')assert.fail('timeout is not collision evidence');
+    return app.request(source,body);
+  }),/timeout/);
+  assert.equal(f.repo.nexiAttendancePreparation.rows.length,1);
+  assert.equal(root.successorId,null);
+});
 const limits = { queueItems: 2, queueBytes: 32768, concurrent: 1, acquireMs: 5, statementMs: 10,
   lockMs: 5, deadlineMs: 30, recoveryItems: 1, recoveryBytes: 32768 };
 

@@ -129,9 +129,28 @@ async function preparationReadback(source, value) {
   if (!row || row.instanceId !== source.instanceId || row.instanceName !== source.instance.name || row.executionId !== m.execution_id ||
       row.transportUnit !== m.transport_unit || row.attemptId !== m.attempt_id || row.requestId !== m.prepare_request_id)
     fail('nexi_attendance_preparation_readback_unresolved');
-  // Existing bounded Evolution recovery/outbox owns unfinished preparation.
-  // Readback never allocates a candidate, substitutes an ID or sends.
-  return { state:row.state, preparation_id:row.id, physical_dispatch:false };
+  // Follow only the transport's committed original successor references. No
+  // readback allocates anything, even during the collision/creation crash gap.
+  const chain=[],seen=new Set([row.id]);let previous=row;
+  while (previous.successorId && chain.length<32) {
+    if (previous.state!=='definitively_not_sent' || previous.closureReason!=='collision_fenced' || !previous.closedAt ||
+        previous.reservationId || previous.admissionId || previous.releaseId || previous.dispatchStartedAt)
+      fail('nexi_attendance_successor_unproved');
+    const next=await source.prismaRepository.nexiAttendancePreparation.findUnique({where:{id:previous.successorId}});
+    if (!next) break;
+    if (seen.has(next.id) || next.requestId!==previous.requests.replacement || next.requests.predecessor!==previous.id ||
+        next.instanceId!==row.instanceId || next.instanceName!==row.instanceName || next.executionId!==row.executionId ||
+        next.transportUnit!==row.transportUnit || next.preparationRevision!==previous.preparationRevision+1 ||
+        canonical.digest(next.intent)!==canonical.digest(row.intent) || canonical.digest(next.authority)!==canonical.digest(row.authority))
+      fail('nexi_attendance_successor_conflict');
+    if (!next.attemptId) break;
+    chain.push({predecessor_preparation_id:previous.id,predecessor_request_id:previous.requestId,
+      predecessor_attempt_id:previous.attemptId,predecessor_external_id:previous.externalId,closure_request_id:previous.requests.close_collision,
+      successor_preparation_id:next.id,successor_request_id:next.requestId,successor_attempt_id:next.attemptId,successor_external_id:next.externalId});
+    previous=next;seen.add(next.id);
+  }
+  if (previous.successorId && chain.length===32) fail('nexi_attendance_successor_chain_limit');
+  return { state:row.state, preparation_id:row.id, successor_chain:chain, physical_dispatch:false };
 }
 function response(source, requestClaims, materialValue, now = Date.now()) {
   return attendance().signEnvelope(source, { version:1, protocol_version:1, canonical_version:canonical.VERSION,

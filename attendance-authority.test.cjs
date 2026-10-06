@@ -82,7 +82,7 @@ test('production gate is false and even exact consumed capability never calls wo
 });
 test('provider migrations pin original immutability plus one-way authority transitions',async()=>{
   for(const provider of ['postgresql','mysql']){
-    const rows=catalog(provider);assert.equal(rows.length,provider==='mysql'?3:2);
+    const rows=catalog(provider);assert.equal(rows.length,Object.keys(storage.PINNED[provider]).length);
     for(const r of rows)assert.equal(storage.fingerprint(r.source),storage.PINNED[provider][r.name]);
     const f=memory();await storage.verify(f.repo,provider);
     const sql=fs.readFileSync(__dirname+`/prisma/${provider}-migrations/20261006000000_attendance_release_dispatch/migration.sql`,'utf8');

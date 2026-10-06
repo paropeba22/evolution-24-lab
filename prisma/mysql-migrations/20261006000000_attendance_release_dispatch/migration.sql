@@ -96,6 +96,6 @@ BEGIN
 END;
 CREATE TRIGGER NexiAttendancePreparation_authority_insert BEFORE INSERT ON NexiAttendancePreparation FOR EACH ROW
 BEGIN
- IF NEW.state<>'draft' OR NEW.consumptionId IS NOT NULL OR NEW.grantId IS NOT NULL OR NEW.releaseId IS NOT NULL OR NEW.admissionId IS NOT NULL OR NEW.dispatchStartedAt IS NOT NULL OR NEW.releaseConsumedAt IS NOT NULL OR NEW.transportReturn IS NOT NULL OR NEW.outcomeUnknown OR NEW.revision<>0
+ IF NEW.state<>'draft' OR NEW.consumptionId IS NOT NULL OR NEW.grantId IS NOT NULL OR NEW.releaseId IS NOT NULL OR NEW.admissionId IS NOT NULL OR NEW.dispatchStartedAt IS NOT NULL OR NEW.releaseConsumedAt IS NOT NULL OR NEW.transportReturn IS NOT NULL OR NEW.outcomeUnknown OR NEW.revision<>0 OR NEW.grantDigest IS NOT NULL OR NEW.releaseDigest IS NOT NULL OR NEW.consumptionDigest IS NOT NULL OR NEW.releasedAuthority IS NOT NULL OR NEW.authorityDeadline IS NOT NULL
  THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='nexi_attendance_authority_initial'; END IF;
 END;
