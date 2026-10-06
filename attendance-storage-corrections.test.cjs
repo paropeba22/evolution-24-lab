@@ -10,6 +10,7 @@ const authority=require('./nexi-attendance-authority.cjs');
 function tx(state){return {$queryRawUnsafe:async sql=>{
   if(sql.includes('session_replication_role'))return [{attendance_replication_role:state.attendance_replication_role}];
   if(sql.includes('VERSION()'))return [{server_version:state.server_version,attendance_database:state.attendance_database}];
+  if(sql.includes('CURRENT_ROLE()'))return Object.hasOwn(state,'attendance_current_role')?[{attendance_current_role:state.attendance_current_role}]:[{}];
   if(sql.startsWith('SHOW GRANTS'))return state.grants;
   if(sql.includes('check_constraint_checks'))return [{checks_enabled:state.checks_enabled}];
   if(sql.includes('pg_proc p JOIN pg_namespace'))return state.functions;
@@ -128,6 +129,7 @@ for(const grant of [
 test('MySQL and MariaDB safe restricted runtime grants certify',async()=>{
   for(const version of ['8.4.0','10.11.8-MariaDB']){
     const state=catalogState('mysql');state.server_version=version;
+    if(version.includes('MariaDB'))state.attendance_current_role=null;
     state.grants=[{x:"GRANT USAGE ON *.* TO `runtime`@`%`"},{x:"GRANT SELECT, INSERT, UPDATE, DELETE ON `attendance`.* TO `runtime`@`%`"}];
     await storage.verify(tx(state),'mysql');
   }
@@ -140,6 +142,138 @@ test('mandatory roles in SHOW GRANTS fail even with safe explicit CURRENT_USER g
   const state=catalogState('mysql'),base=tx(state),original=base.$queryRawUnsafe;
   base.$queryRawUnsafe=sql=>sql==='SHOW GRANTS'?Promise.resolve([{x:'GRANT `mandatory_admin`@`%` TO `runtime`@`%`'}]):original(sql);
   await assert.rejects(storage.verify(base,'mysql'),/unguarded/);
+});
+
+// Exercise the production verifier, including server-owned schema/role reads.
+// Catalog definitions remain valid so each failure is privilege certification.
+const unsafePrincipalGrants=[
+  "GRANT CREATE TEMPORARY TABLES ON attendance.* TO 'runtime'@'%'",
+  "GRANT CREATE TEMPORARY TABLES ON `attendance`.* TO `runtime`@`%`",
+  "GRANT CREATE TEMPORARY TABLES ON `attend%`.* TO 'runtime'@'%'",
+  "GRANT CREATE TEMPORARY TABLES ON *.* TO 'runtime'@'%'",
+  "GRANT SELECT, INSERT, UPDATE, DELETE, RELOAD ON *.* TO 'runtime'@'%'",
+  "GRANT SELECT, INSERT, UPDATE, DELETE ON *.* TO 'runtime'@'%'",
+  "GRANT ALL PRIVILEGES ON *.* TO 'runtime'@'%'",
+  "GRANT ALL PRIVILEGES ON `attendance`.* TO 'runtime'@'%'",
+  "GRANT INSERT, UPDATE, DELETE ON mysql.* TO 'runtime'@'%'",
+  "GRANT INSERT ON `mysql`.`user` TO 'runtime'@'%'",
+  "GRANT UPDATE ON `mysql`.`global_priv` TO 'runtime'@'%'",
+  "GRANT DELETE ON `mysql`.`db` TO 'runtime'@'%'",
+  "GRANT UPDATE ON `mysql`.`tables_priv` TO 'runtime'@'%'",
+  "GRANT INSERT ON `mysql`.`role_edges` TO 'runtime'@'%'",
+  "GRANT UPDATE ON `mysql`.`roles_mapping` TO 'runtime'@'%'",
+  "GRANT DELETE ON `sys`.* TO 'runtime'@'%'",
+  "GRANT INSERT ON `information_schema`.* TO 'runtime'@'%'",
+  "GRANT UPDATE ON `performance_schema`.* TO 'runtime'@'%'",
+  "GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, DROP, INDEX, TRIGGER ON attendance.* TO 'runtime'@'%'",
+  "GRANT CREATE TEMPORARY TABLES ON `other`.* TO 'runtime'@'%'",
+  "GRANT EXECUTE ON attendance.* TO 'runtime'@'%'",
+  "GRANT EXECUTE ON PROCEDURE `attendance`.`make_shadow` TO 'runtime'@'%'",
+  "GRANT RELOAD ON *.* TO 'runtime'@'%'",
+  "GRANT FLUSH_PRIVILEGES ON *.* TO 'runtime'@'%'",
+  "GRANT `temporary_table_role`@`%` TO `runtime`@`%`",
+  "GRANT `temporary_table_role` TO `runtime`@`%`",
+  "SET DEFAULT ROLE `temporary_table_role` TO `runtime`@`%`",
+  "GRANT PROXY ON `privileged`@`%` TO `runtime`@`%` WITH GRANT OPTION",
+  "GRANT SELECT ON attendance.* TO 'runtime'@'%' WITH GRANT OPTION",
+  "GRANT SELECT (externalId) ON attendance.NexiAttendancePreparation TO 'runtime'@'%'",
+  "GRANT UNKNOWN_AUTHORITY ON *.* TO 'runtime'@'%'"
+];
+for(const version of ['8.4.0','10.11.8-MariaDB'])for(const grant of unsafePrincipalGrants)
+  test(`${version}: production certification rejects unsafe principal: ${grant}`,async()=>{
+    const state=catalogState('mysql');state.server_version=version;
+    state.attendance_current_role=version.includes('MariaDB')?null:'NONE';
+    state.grants.push({grants:grant});
+    await assert.rejects(storage.verify(tx(state),'mysql'),/unguarded/);
+  });
+
+test('temporary-shadow capability fails before permanent-table metadata can certify',async()=>{
+  const state=catalogState('mysql');
+  state.grants.push({x:"GRANT CREATE TEMPORARY TABLES ON attendance.* TO 'runtime'@'%'"});
+  const base=tx(state),query=base.$queryRawUnsafe,queries=[];
+  base.$queryRawUnsafe=sql=>{queries.push(sql);return query(sql);};
+  await assert.rejects(storage.verify(base,'mysql'),/unguarded/);
+  assert.ok(!queries.some(sql=>sql.includes('information_schema.')));
+  // That privilege would allow CREATE TEMPORARY TABLE NexiAttendancePreparation;
+  // permanent INFORMATION_SCHEMA metadata cannot detect the session's shadow.
+});
+
+test('separate metadata-write and reload grants cannot compose escalation',async()=>{
+  for(const schema of ['mysql','*']){
+    const state=catalogState('mysql');
+    state.grants.push({x:`GRANT UPDATE ON ${schema}.* TO 'runtime'@'%'`},
+      {x:"GRANT RELOAD ON *.* TO 'runtime'@'%'"});
+    await assert.rejects(storage.verify(tx(state),'mysql'),/unguarded/);
+  }
+});
+
+for(const version of ['8.4.0','10.11.8-MariaDB'])
+  test(`${version}: active, missing or ambiguous role state fails closed`,async()=>{
+    for(const role of ["`admin`@`%`",'admin','',undefined,[],0,...(version.includes('MariaDB')?['NONE']:[null])]){
+      const state=catalogState('mysql');state.server_version=version;state.attendance_current_role=role;
+      await assert.rejects(storage.verify(tx(state),'mysql'),/unguarded/);
+    }
+    const state=catalogState('mysql');state.server_version=version;delete state.attendance_current_role;
+    await assert.rejects(storage.verify(tx(state),'mysql'),/unguarded/);
+  });
+
+test('unavailable grants/role introspection blocks certification',async()=>{
+  for(const blocked of ['SHOW GRANTS FOR CURRENT_USER()','SHOW GRANTS','CURRENT_ROLE()']){
+    const base=tx(catalogState('mysql')),query=base.$queryRawUnsafe;
+    base.$queryRawUnsafe=sql=>{if(sql.includes(blocked))throw Error('introspection unavailable');return query(sql);};
+    await assert.rejects(storage.verify(base,'mysql'),/unavailable/);
+  }
+});
+
+test('runtime schema comes from DATABASE(), with quoted account and scoped Prisma CRUD',async()=>{
+  for(const version of ['8.4.0','10.11.8-MariaDB'])for(const schema of ['evolution','evolution_api','evolution`api']){
+    const state=catalogState('mysql');state.server_version=version;state.attendance_database=schema;
+    state.attendance_current_role=version.includes('MariaDB')?null:'NONE';
+    const encoded=schema.replaceAll('_','\\_').replaceAll('`','``');
+    const account="`evolution_runtime`@`localhost`"+(version.includes('MariaDB')?" IDENTIFIED BY PASSWORD '*SYNTHETIC_TEST_ONLY'":'');
+    state.grants=[{x:`GRANT USAGE ON *.* TO ${account}`},
+      {x:`GRANT SELECT,  INSERT , UPDATE, DELETE ON \`${encoded}\`.* TO ${account}`}];
+    await storage.verify(tx(state),'mysql');
+    state.grants[1].x=`GRANT SELECT, INSERT, UPDATE, DELETE ON attendance.* TO ${account}`;
+    await assert.rejects(storage.verify(tx(state),'mysql'),/unguarded/);
+  }
+});
+
+test('table-scoped application DML passes; system/wildcard metadata scopes fail',async()=>{
+  const state=catalogState('mysql');
+  state.grants=[{x:"GRANT SELECT, INSERT, UPDATE, DELETE ON `attendance`.`NexiAttendancePreparation` TO 'runtime'@'%'"}];
+  await storage.verify(tx(state),'mysql');
+  for(const [database,scope] of [['mysql','mysql'],['sys','sys'],['information_schema','information_schema'],
+    ['performance_schema','performance_schema'],['myapplication','my%'],['attendance','%'],['mysql_copy','mysql%']]){
+    state.attendance_database=database;
+    state.grants=[{x:`GRANT SELECT, INSERT, UPDATE, DELETE ON \`${scope}\`.* TO 'runtime'@'%'`}];
+    await assert.rejects(storage.verify(tx(state),'mysql'),/unguarded/);
+  }
+});
+
+test('both authority CAS operations recertify the current MySQL session without cached PASS',async()=>{
+  const prior=process.env.DATABASE_PROVIDER;process.env.DATABASE_PROVIDER='mysql';
+  try{
+    for(const unsafe of ['temporary privilege','global escalation','active role']){
+      const f=memory(),state=catalogState('mysql'),catalogQuery=tx(state).$queryRawUnsafe;
+      const base=f.repo.$queryRawUnsafe.bind(f.repo);let checks=0;
+      f.repo.$queryRawUnsafe=sql=>{if(sql==='SHOW GRANTS FOR CURRENT_USER()')checks++;return sql.includes('attendance_now')?base(sql):catalogQuery(sql);};
+      const corrupt=()=>{
+        if(unsafe==='active role')state.attendance_current_role='admin';
+        else state.grants.push({x:unsafe==='temporary privilege'?"GRANT CREATE TEMPORARY TABLES ON attendance.* TO 'runtime'@'%'":
+          "GRANT SELECT, INSERT, UPDATE, DELETE, RELOAD ON *.* TO 'runtime'@'%'"});
+      };
+      await storage.verify(tx(state),'mysql');corrupt();
+      await assert.rejects(authority.consumption(f.source,original()),/unguarded/);
+      assert.equal(f.repo.row().consumptionId,null);assert.deepEqual(f.repo.trace,[]);
+      state.grants=catalogState('mysql').grants;state.attendance_current_role='NONE';
+      await authority.consumption(f.source,original());
+      const trace=[...f.repo.trace],id=f.repo.row().consumptionId;corrupt();
+      await assert.rejects(authority.dispatchStart(f.source,f.repo.row().id,id,{attrs:{}}),/unguarded/);
+      assert.equal(f.repo.row().dispatchStartedAt,null);assert.deepEqual(f.repo.trace,trace);
+      assert.equal(checks,3); // failed consume, committed consume, failed dispatch.
+    }
+  }finally{if(prior===undefined)delete process.env.DATABASE_PROVIDER;else process.env.DATABASE_PROVIDER=prior;}
 });
 for(const field of ['non_unique','method','weakened'])test(`MySQL index ${field} weakening fails`,async()=>{
   const state=catalogState('mysql');state.indexes[0][field]=({non_unique:1,method:'HASH',weakened:1})[field];

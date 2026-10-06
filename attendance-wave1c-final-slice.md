@@ -181,12 +181,67 @@ keys and original request/external-ID/source/grant/release/consumption uniquenes
 PostgreSQL must use origin trigger execution mode. MySQL/MariaDB additionally
 requires InnoDB and exact binary identity columns, enforced CHECKs (including
 MariaDB session enforcement), and both current-principal SHOW GRANTS forms.
-DROP/ALL PRIVILEGES or other protection-altering privileges applying globally,
-to the protected schema or table fail closed. Roles, proxy, dynamic or unknown
-grant syntax also fail closed. A restricted runtime principal must be validated
-at the final gate; ordinary non-Attendance Prisma paths retain their behavior.
+A restricted runtime principal must be validated at the final gate; ordinary
+non-Attendance Prisma paths retain their behavior.
 See [MySQL SHOW GRANTS](https://dev.mysql.com/doc/refman/8.4/en/show-grants.html)
 for the explicit-current-user versus mandatory-role distinction.
+
+### Final F5 MySQL/MariaDB principal correction
+
+The production verifier accepts only global `USAGE` and `SELECT, INSERT, UPDATE,
+DELETE` on the application database returned by server-owned `DATABASE()` (whole
+database or individual tables). Database wildcard/escape scopes are checked
+against that database and rejected if they can also reach `mysql`, `sys`,
+`information_schema` or `performance_schema`. A provider system database cannot
+be the configured application database. Global DML, DML in other databases,
+`ALL`/`ALL PRIVILEGES`, `WITH GRANT OPTION`, DDL and all other privileges fail
+closed. Quoted/backtick accounts and identifiers, escaped identifiers, comma
+spacing and the existing MariaDB password-hash grant suffix remain supported;
+unknown/ambiguous syntax, column/routine grants, roles, default-role lines,
+dynamic privileges and proxy grants are rejected.
+
+`CREATE TEMPORARY TABLES` is excluded at every scope, including application,
+wildcard and global grants. Same-name temporary tables hide permanent tables;
+their creation is not certified by permanent-table catalog metadata.
+`EXECUTE` is also excluded because a definer routine can create a temporary table
+that remains accessible in the caller's session.
+See [MySQL temporary tables](https://dev.mysql.com/doc/refman/8.4/en/create-temporary-table.html).
+
+No write grant can reach any provider system schema, covering the entire `mysql`
+privilege store rather than only `mysql.user`. This includes MySQL role/grant
+tables and MariaDB's `global_priv`/`user` view and role mapping. Writes are denied
+independently of `RELOAD`, since later reloading/restarting can activate changes.
+`RELOAD` and newer flush/admin privileges are themselves excluded: Prisma CRUD
+does not need them, and accepting reactivation authority would weaken the
+restricted-runtime certification.
+See [MySQL grant tables](https://dev.mysql.com/doc/refman/8.4/en/grant-tables.html),
+[MariaDB global_priv](https://mariadb.com/docs/server/reference/system-tables/the-mysql-database-tables/mysql-global_priv-table)
+and [MariaDB FLUSH](https://mariadb.com/docs/server/reference/sql-statements/administrative-sql-statements/flush-commands/flush).
+
+On the current transaction connection, both SHOW GRANTS forms must pass and
+`CURRENT_ROLE()` must explicitly prove no active role: MySQL returns `NONE`,
+MariaDB returns SQL NULL. Assigned/mandatory/default-role grants are rejected
+even when inactive; active or unverifiable role state also fails closed.
+See [MySQL roles](https://dev.mysql.com/doc/refman/8.4/en/roles.html) and
+[MariaDB CURRENT_ROLE](https://mariadb.com/docs/server/reference/sql-functions/secondary-functions/information-functions/current_role).
+Both consumption and dispatch-start repeat this certification before their
+CAS on the same transaction connection. No PASS is cached across operations,
+principals or sessions. Unavailable introspection blocks managed authority.
+
+Offline production-verifier tests reproduce temporary shadow capability,
+global CRUD plus RELOAD, explicit/system privilege-store writes, roles/proxy,
+unknown syntax and DDL. Restricted Prisma CRUD fixtures pass for both providers;
+an earlier PASS followed by unsafe grants or active roles blocks either CAS.
+PostgreSQL verification, F6 INSERT shape and all migration fingerprints remain
+unchanged.
+
+Deferred runtime acceptance must inspect actual MySQL and MariaDB SHOW GRANTS,
+active roles and the deployed runtime principal; prove `CREATE TEMPORARY TABLE
+NexiAttendancePreparation ...` is denied in its configured application database;
+and execute the provider migrations/catalog checks. Use fresh pool sessions
+after privilege restriction: revoking creation privileges does not erase a
+temporary table already created in an old session. No live grant or shadowing
+test has passed locally. Provider/Prisma builds and EasyPanel remain deferred.
 
 The corrected unpromoted MySQL INSERT trigger matches PostgreSQL's full initial
 authority shape: draft, revision zero, outcomeUnknown false, and all twelve

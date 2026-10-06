@@ -230,25 +230,32 @@ function grantRowsSafe(rows,database){
   const identifier='(?:\\*|`(?:``|[^`])+`|[a-zA-Z_][a-zA-Z_0-9]*)';
   const scopeRx=new RegExp('^GRANT ([A-Z ,]+) ON ('+identifier+')\\.('+identifier+') TO (.+)$');
   const account=/^(?:'(?:''|[^'])*'|`(?:``|[^`])*`)@(?:'(?:''|[^'])*'|`(?:``|[^`])*`)(?: IDENTIFIED BY PASSWORD '(?:''|[^'])*')?(?: WITH GRANT OPTION)?$/;
-  const known=new Set(['USAGE','SELECT','INSERT','UPDATE','DELETE','REFERENCES','EXECUTE','SHOW VIEW','LOCK TABLES','CREATE TEMPORARY TABLES',
-    'ALL PRIVILEGES','ALL','DROP','ALTER','INDEX','TRIGGER','CREATE','CREATE VIEW','CREATE ROUTINE','ALTER ROUTINE','EVENT','GRANT OPTION',
-    'SUPER','FILE','RELOAD','SHUTDOWN','PROCESS','SHOW DATABASES','CREATE USER','CREATE TABLESPACE','REPLICATION SLAVE','REPLICATION CLIENT']);
-  const unsafe=new Set(['ALL PRIVILEGES','ALL','DROP','ALTER','INDEX','TRIGGER','CREATE','GRANT OPTION','SUPER','FILE']);
+  // Prisma's application runtime needs CRUD, not migration/administrative
+  // authority. A positive list also excludes temporary-table shadowing,
+  // definer-routine EXECUTE, privilege-store writes and privilege reloading.
+  const dml=new Set(['SELECT','INSERT','UPDATE','DELETE']);
+  const systemSchemas=['mysql','sys','information_schema','performance_schema'];
+  if(systemSchemas.includes(database.toLowerCase()))return false;
   const decode=v=>v.startsWith('`')?v.slice(1,-1).replaceAll('``','`'):v;
-  function databaseMatches(pattern){
+  function databaseMatches(pattern,target){
     if(pattern==='*')return true;let rx='';for(let i=0;i<pattern.length;i++){
       const c=pattern[i];if(c==='\\'){const next=pattern[++i];if(!['%','_','\\'].includes(next))throw Error('scope escape');rx+=next.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');}
       else if(c==='%')rx+='.*';else if(c==='_')rx+='.';else rx+=c.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
-    }return new RegExp('^'+rx+'$','i').test(database);
+    }return new RegExp('^'+rx+'$','i').test(target);
   }
   try{
     for(const row of rows){
       const values=Object.values(row);if(values.length!==1||typeof values[0]!=='string')return false;
       const m=scopeRx.exec(values[0]);if(!m||!account.test(m[4]))return false;
-      const privileges=m[1].split(',').map(p=>p.trim());if(privileges.some(p=>!known.has(p)))return false;
+      if(m[4].endsWith(' WITH GRANT OPTION'))return false;
+      const privileges=m[1].split(',').map(p=>p.trim().replace(/ +/g,' '));
       const schema=decode(m[2]),table=decode(m[3]);
-      const applies=databaseMatches(schema)&&(table==='*'||TABLES.some(t=>t.toLowerCase()===table.toLowerCase()));
-      if(applies&&(privileges.some(p=>unsafe.has(p))||m[4].endsWith(' WITH GRANT OPTION')))return false;
+      if(privileges.length===1&&privileges[0]==='USAGE'&&schema==='*'&&table==='*')continue;
+      // No global DML or DML in the provider's system schemas (including all
+      // mysql privilege tables/views, across MySQL and MariaDB versions).
+      // Database grant wildcards/escapes must not reach a system schema.
+      if(privileges.some(p=>!dml.has(p))||schema==='*'||!databaseMatches(schema,database)||
+        systemSchemas.some(s=>databaseMatches(schema,s)))return false;
     }return true;
   }catch{return false;}
 }
@@ -264,6 +271,11 @@ async function verify(tx,provider){
     // SHOW GRANTS (without FOR) also exposes MySQL mandatory role assignments.
     // Any role/proxy/dynamic/unknown syntax is unverifiable and fails closed.
     for(const query of ['SHOW GRANTS FOR CURRENT_USER()','SHOW GRANTS'])if(!grantRowsSafe(await tx.$queryRawUnsafe(query),database))deny();
+    // Query the current transaction connection: no role expansion is trusted,
+    // and no earlier certification is cached across sessions/principals.
+    const roles=await tx.$queryRawUnsafe('SELECT CURRENT_ROLE() AS attendance_current_role');
+    if(!Array.isArray(roles)||roles.length!==1||!Object.hasOwn(roles[0]||{},'attendance_current_role')||
+      roles[0].attendance_current_role!==(maria?null:'NONE'))deny();
     if(maria){const enabled=await tx.$queryRawUnsafe('SELECT @@SESSION.check_constraint_checks AS checks_enabled');if(Number(enabled[0]?.checks_enabled)!==1)deny();}
     functions=await tx.$queryRawUnsafe(`SELECT EVENT_OBJECT_TABLE AS table_name,TRIGGER_NAME AS name,ACTION_STATEMENT AS source,
       EVENT_MANIPULATION AS event,ACTION_TIMING AS timing,ACTION_ORIENTATION AS orientation

@@ -34,7 +34,7 @@ function catalogState(provider){
   });
   const columns=Object.values(storage.INDEXES).flatMap(([table,cols])=>cols.split(',').map(c=>({table_name:table,column_name:c,data_type:'varchar',collation_name:'utf8mb4_bin',nullable:['grantId','releaseId','consumptionId'].includes(c)?'YES':'NO'})));
   return {functions,triggers,checks,indexes,columns,engines:storage.TABLES.map(t=>({table_name:t,engine:'InnoDB'})),
-    server_version:'8.4.0',attendance_database:'attendance',checks_enabled:1,attendance_replication_role:'origin',
+    server_version:'8.4.0',attendance_database:'attendance',checks_enabled:1,attendance_replication_role:'origin',attendance_current_role:'NONE',
     grants:[{grants:"GRANT USAGE ON *.* TO 'attendance_runtime'@'%'"},{grants:"GRANT SELECT, INSERT, UPDATE, DELETE ON `attendance`.* TO 'attendance_runtime'@'%'"}]};
 }
 function memory() {
@@ -52,6 +52,7 @@ function memory() {
       if(sql.includes('session_replication_role'))return [{attendance_replication_role:'origin'}];
       const mysql=sql.includes('information_schema'),state=catalogState(mysql?'mysql':'postgresql');
       if(sql.includes('VERSION()'))return [{server_version:'8.4.0',attendance_database:'attendance'}];
+      if(sql.includes('CURRENT_ROLE()'))return [{attendance_current_role:'NONE'}];
       if(sql.startsWith('SHOW GRANTS'))return state.grants;
       if(sql.includes('pg_proc p JOIN pg_namespace')){if(this.badGuard)state.functions[0].source='BEGIN RETURN NEW; END';return state.functions;}
       if(sql.includes('information_schema.TRIGGERS'))return state.triggers;
