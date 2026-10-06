@@ -317,8 +317,8 @@ async function verify(tx,provider){
       AND am.amname='btree' AND i.indpred IS NULL AND i.indexprs IS NULL AND i.indnkeyatts=i.indnatts
       AND NOT EXISTS(SELECT 1 FROM unnest(i.indoption) o WHERE o<>0)
       AND NOT EXISTS(SELECT 1 FROM unnest(i.indclass) k(opclass) JOIN pg_opclass opc ON opc.oid=k.opclass JOIN pg_namespace opns ON opns.oid=opc.opcnamespace WHERE NOT opc.opcdefault OR opns.nspname<>'pg_catalog')
-      AND NOT EXISTS(SELECT 1 FROM unnest(i.indkey,i.indcollation) k(id,collation) JOIN pg_attribute a ON a.attrelid=r.oid AND a.attnum=k.id
-        LEFT JOIN pg_collation col ON col.oid=k.collation WHERE k.collation<>a.attcollation OR (k.collation<>0 AND NOT col.collisdeterministic))
+      AND NOT EXISTS(SELECT 1 FROM unnest(i.indkey,i.indcollation) k(id,collation_oid) JOIN pg_attribute a ON a.attrelid=r.oid AND a.attnum=k.id
+        LEFT JOIN pg_collation col ON col.oid=k.collation_oid WHERE k.collation_oid<>a.attcollation OR (k.collation_oid<>0 AND NOT col.collisdeterministic))
       AND ix.relname IN (${Object.keys(INDEXES).map(n=>"'"+n+"'").join(',')}) GROUP BY r.relname,ix.relname,i.indisprimary`);
     checks=await tx.$queryRawUnsafe(`SELECT r.relname AS table_name,c.conname AS name,pg_get_constraintdef(c.oid,true) AS definition FROM pg_constraint c
       JOIN pg_class r ON r.oid=c.conrelid JOIN pg_namespace ns ON ns.oid=r.relnamespace

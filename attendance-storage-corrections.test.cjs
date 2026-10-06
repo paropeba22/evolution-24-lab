@@ -27,7 +27,7 @@ function tx(state){return {$queryRawUnsafe:async sql=>{
     if(sql.includes('i.indnkeyatts=i.indnatts')&&r.included===true)return false;
     if(sql.includes('unnest(i.indoption)')&&r.descending===true)return false;
     if(sql.includes('NOT opc.opcdefault')&&r.opclass_default===false)return false;
-    if(sql.includes('k.collation<>a.attcollation')&&r.collation_matches===false)return false;
+    if(sql.includes('k.collation_oid<>a.attcollation')&&r.collation_matches===false)return false;
     return true;
   });
   if(sql.includes('information_schema.STATISTICS'))return state.indexes;
@@ -100,6 +100,18 @@ test('PostgreSQL every CHECK must be validated and inherited normally',async()=>
     row[field]=value;await assert.rejects(storage.verify(tx(state),'postgresql'),/unguarded/);delete row[field];
   }
 });
+test('PostgreSQL index query uses a legal collation alias and retains the complete safety predicate',async()=>{
+  // Query contract only: the catalog mock does not execute PostgreSQL's parser.
+  // Real PostgreSQL execution remains deferred to the EasyPanel disposable DB.
+  const base=tx(catalogState('postgresql')),query=base.$queryRawUnsafe,queries=[];
+  base.$queryRawUnsafe=sql=>{queries.push(sql);return query(sql);};
+  await storage.verify(base,'postgresql');
+  const sql=queries.find(s=>s.includes('FROM pg_index')).replace(/\s+/g,' ');
+  assert.ok(sql.includes('AND NOT EXISTS(SELECT 1 FROM unnest(i.indkey,i.indcollation) k(id,collation_oid) JOIN pg_attribute a ON a.attrelid=r.oid AND a.attnum=k.id '+
+    'LEFT JOIN pg_collation col ON col.oid=k.collation_oid WHERE k.collation_oid<>a.attcollation OR (k.collation_oid<>0 AND NOT col.collisdeterministic))'));
+  assert.ok(!/k\(id,collation\)|k\.collation\b/.test(sql));
+});
+
 test('PostgreSQL every identity index must satisfy the effective catalog predicates',async()=>{
   const state=catalogState('postgresql');
   for(const row of state.indexes)for(const [field,value] of [['indisunique',false],['indisvalid',false],['indisready',false],
