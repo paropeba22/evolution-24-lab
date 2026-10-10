@@ -455,7 +455,10 @@ test('APP preparation authorization signature, immutable session, audience and e
     return { claims: encoded, signature: createHmac('sha256', secret).update(`attendance-prepare:v1:${encoded}`).digest('hex') };
   };
   assert.deepEqual(a.prepareClaims(service, signed(claims), now), claims);
-  for (const change of [{ physical_dispatch: true }, { session_identity: 'b'.repeat(64) }, { audience: 'browser' }, { expires_at: now }, { writer_epoch: 0 }])
+  // A signed enabled context is valid preparation metadata, never a release.
+  const enabledClaims = { ...claims, physical_dispatch: true };
+  assert.deepEqual(a.prepareClaims(service, signed(enabledClaims), now), enabledClaims);
+  for (const change of [{ physical_dispatch: 'true' }, { physical_dispatch: null }, { session_identity: 'b'.repeat(64) }, { audience: 'browser' }, { expires_at: now }, { writer_epoch: 0 }])
     assert.throws(() => a.prepareClaims(service, signed({ ...claims, ...change }), now), /authentication_required/);
   const forged = signed(claims); forged.signature = '0'.repeat(64);
   assert.throws(() => a.prepareClaims(service, forged, now), /authentication_required/);

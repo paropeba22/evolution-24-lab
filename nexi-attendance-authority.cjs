@@ -17,15 +17,22 @@ const RELEASE_KEYS = ['release_id','request_id','request_digest','grant_id','gra
 function attendance() { return require('./nexi-attendance.cjs'); }
 function fail(code) { throw Object.assign(new Error(code), { code }); }
 function exact(value, keys) { return value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).sort().join(',') === [...keys].sort().join(','); }
-function physicalDispatchEnabled() { return false; } // Source capability; no ENV/admin activation.
+const WRITER_VERSION = 2;
+function physicalDispatchEnabled(source, row) {
+  return !!(source?.service && row?.releasedAuthority?.grant?.scope === 'attendance_dispatch_v1' &&
+    row.releasedAuthority.grant.physical_dispatch === true && row.authority?.physical_dispatch === true &&
+    row.authority.isolation_cutover === true && row.authority.barrier_state === 'active' &&
+    row.authority.writer_protocol_version === WRITER_VERSION);
+}
 
 function claims(source, envelope, now = Date.now()) {
   const value = attendance().verifyEnvelope(source, envelope, 'attendance-authority', 32768);
   if (!exact(value, KEYS) || value.version !== 1 || value.protocol_version !== 1 || value.canonical_version !== canonical.VERSION ||
       value.audience !== 'nexi-attendance-evolution' || value.provider !== 'evolution-baileys' ||
-      value.instance !== source.instance.name || value.instance_id !== source.instanceId || value.physical_dispatch !== false ||
+      value.instance !== source.instance.name || value.instance_id !== source.instanceId || ![true,false].includes(value.physical_dispatch) ||
       !UUID.test(value.request_id || '') || !Number.isSafeInteger(value.expires_at) || value.expires_at <= now || value.expires_at > now + 60000 ||
-      !['consume','consumption_readback','preparation_readback'].includes(value.action)) fail('nexi_attendance_authority_invalid');
+      !['consume','consumption_readback','preparation_readback','writer_probe'].includes(value.action)) fail('nexi_attendance_authority_invalid');
+  if (value.physical_dispatch !== (value.material?.grant?.physical_dispatch === true)) fail('nexi_attendance_authority_invalid');
   return value;
 }
 function material(value) {
@@ -39,7 +46,8 @@ function material(value) {
       !['account_id','managed_channel_id','message_id','identity_version_id','writer_epoch','binding_generation','expires_at'].every(k => Number.isSafeInteger(g[k]) && g[k] > 0) ||
       !Number.isSafeInteger(g.transport_unit_index) || g.transport_unit_index < 0 ||
       typeof g.external_id !== 'string' || !g.external_id.length || Buffer.byteLength(g.external_id) > 512 || g.external_id.includes('\0') ||
-      g.scope !== 'attendance_release_v1' || g.physical_dispatch !== false ||
+      !((g.scope === 'attendance_release_v1' && g.physical_dispatch === false) ||
+        (g.scope === 'attendance_dispatch_v1' && g.physical_dispatch === true)) ||
       !UUID.test(r.release_id || '') || !UUID.test(r.request_id || '') || !HASH.test(r.request_digest || '') ||
       r.decision !== 'released' || r.grant_state !== 'release_committed' || !Number.isSafeInteger(r.deadline) || r.deadline <= 0 || r.deadline > g.expires_at ||
       !['grant_id','attempt_id','reservation_id','external_id','preparation_id','preparation_digest'].every(k => r[k] === g[k]) || r.grant_digest !== value.grant_digest ||
@@ -54,6 +62,7 @@ function binding(source, row, m) {
       row.attemptId !== g.attempt_id || row.reservationId !== g.reservation_id || row.externalId !== g.external_id ||
       row.sessionIdentity !== g.session_identity || row.authorityDigest !== g.authority_snapshot_digest ||
       row.preparationDigest !== g.preparation_digest || row.contentDigest !== g.prepared_content_digest ||
+      (g.physical_dispatch && !physicalDispatchEnabled(source, {...row,releasedAuthority:m})) ||
       row.intent.identity_version_id !== g.identity_version_id || !row.frozenAt ||
       !['account_id','managed_channel_id','instance_lineage_id','sender_account_lineage_id','session_identity','writer_epoch','binding_generation'].every(k => a[k] === g[k]) ||
       row.contentDigest !== canonical.digest({ intent:row.intent, attempt_id:row.attemptId, reservation_id:row.reservationId,
@@ -80,7 +89,7 @@ function result(row, m) {
     reservation_id:m.grant.reservation_id, external_id:m.grant.external_id, state:row?.state || 'unresolved',
     consumed_at:row?.releaseConsumedAt ? +row.releaseConsumedAt : null,
     dispatch_started_at:row?.dispatchStartedAt ? +row.dispatchStartedAt : null,
-    outcome_unknown:row?.outcomeUnknown || false, physical_dispatch:false };
+    outcome_unknown:row?.outcomeUnknown || false, physical_dispatch:m.grant.physical_dispatch };
 }
 function replay(row, m) {
   if (row.consumptionId !== m.consumption_id || row.consumptionDigest !== canonical.digest(m) ||
@@ -156,8 +165,8 @@ function response(source, requestClaims, materialValue, now = Date.now()) {
   return attendance().signEnvelope(source, { version:1, protocol_version:1, canonical_version:canonical.VERSION,
     audience:'nexi-attendance-app', provider:'evolution-baileys', instance:source.instance.name, instance_id:source.instanceId,
     request_id:requestClaims.request_id, expires_at:now+60000,
-    action:requestClaims.action==='preparation_readback'?'preparation_result':'consumption_result',
-    material:materialValue, physical_dispatch:false }, 'attendance-authority');
+    action:requestClaims.action==='writer_probe'?'writer_result':requestClaims.action==='preparation_readback'?'preparation_result':'consumption_result',
+    material:materialValue, physical_dispatch:requestClaims.physical_dispatch === true }, 'attendance-authority');
 }
 async function dispatchStart(source, preparationId, consumptionId, stanza) {
   return source.prismaRepository.$transaction(async tx => {
@@ -200,13 +209,28 @@ function installRoute(router, monitor, guard, repository) {
       if (!instance) return res.sendStatus(404);
       const source={prismaRepository:repository,instanceId:instance.id,instance:{name:instance.name},service:monitor.waInstances[instance.name]};
       const value=claims(source,req.body);
+      if (value.action==='writer_probe') {
+        const m=value.material, groups=require('./nexi-groups.cjs');
+        if (!exact(m,['managed_channel_id','session_identity']) || !Number.isSafeInteger(m.managed_channel_id) ||
+            !source.service?.client?.ws?.isOpen || !groups.lifecycleCurrent(groups.lifecycleCapture(source.service)) ||
+            identity.sessionFingerprint(source.service.client.authState?.creds)!==m.session_identity)
+          fail('nexi_attendance_writer_unavailable');
+        await repository.$transaction(storageGuard);
+        const context=await attendance().refreshContext(source,m.session_identity);
+        if (context.managed_channel_id!==m.managed_channel_id) fail('nexi_attendance_writer_binding_conflict');
+        return res.json(response(source,value,{request_digest:canonical.digest(m),writer_version:WRITER_VERSION,
+          storage_guarded:true,physical_dispatch:true,session_identity:m.session_identity}));
+      }
       if (value.action==='preparation_readback') return res.json(response(source,value,
         {...await preparationReadback(source,value),request_digest:canonical.digest(value.material)}));
-      const observed=await consumption(source,value);
+      let observed=await consumption(source,value);
+      if (value.material.grant.physical_dispatch && observed.consumed_at && !observed.dispatch_started_at) {
+        observed=await require('./nexi-attendance-dispatch.cjs').dispatch(source,value.material);
+      }
       return res.json(response(source,value,observed));
     } catch(error) {
       return res.status(error.code?.includes('conflict')?409:422).json({error:'nexi_attendance_authority_unresolved',physical_dispatch:false});
     }
   });
 }
-module.exports={claims,material,binding,consumption,preparationReadback,response,dispatchStart,transportReturned,physicalDispatchEnabled,installRoute};
+module.exports={claims,material,binding,consumption,preparationReadback,response,result,dispatchStart,transportReturned,physicalDispatchEnabled,clock,storageGuard,WRITER_VERSION,installRoute};

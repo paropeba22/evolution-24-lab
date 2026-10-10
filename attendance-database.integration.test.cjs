@@ -109,6 +109,42 @@ for (const provider of ['postgresql', 'mysql']) {
         await assert.rejects(update(b, 'NexiAttendanceEventOutbox', event.id, { state: 'pending', acknowledgedAt: null }));
         await assert.rejects(update(b, 'NexiAttendanceEventOutbox', event.id, { acknowledgedAt: null }));
         await assert.rejects(b.query(`DELETE FROM ${table('NexiAttendanceEventOutbox')}`));
+        if (provider === 'postgresql') {
+          // Apply the actual release and physical migrations to this disposable
+          // schema. Exercise the new guard with real commits, not catalog mocks.
+          for (const version of ['20261006000000_attendance_release_dispatch', '20261010000000_attendance_physical_dispatch'])
+            await a.query(fs.readFileSync(path.join(__dirname, 'prisma/postgresql-migrations', version, 'migration.sql'), 'utf8'));
+          const { fixture, original } = require('./attendance-authority-test-support.cjs');
+          const canonical = require('./nexi-attendance.cjs');
+          const row = structuredClone(fixture.prepared_row), material = original().material;
+          Object.assign(row.authority, { physical_dispatch: true, isolation_cutover: true, barrier_state: 'active', writer_protocol_version: 2 });
+          const initial = { ...prep, id: row.id, instanceId: row.instanceId, instanceName: row.instanceName,
+            executionId: row.executionId, requestId: row.requestId, inputDigest: row.inputDigest,
+            authority: JSON.stringify(row.authority), intent: JSON.stringify(row.intent),
+            authorityDigest: row.authorityDigest, payloadDigest: row.payloadDigest, recipient: row.recipient,
+            sessionIdentity: row.sessionIdentity, externalId: row.externalId, preparationNonce: row.preparationNonce,
+            canonicalVersion: 'canonical_json_v1' };
+          await insert(a, 'NexiAttendancePreparation', initial);
+          await update(a, 'NexiAttendancePreparation', row.id, { attemptId: row.attemptId, reservationId: row.reservationId, state: 'reserved', revision: 1 });
+          await update(a, 'NexiAttendancePreparation', row.id, { contentDigest: row.contentDigest, preparationDigest: row.preparationDigest,
+            frozenAt: new Date(), state: 'prepared', revision: 2 });
+          const deadline = Date.now() + 60000, grant = material.grant, release = material.release;
+          Object.assign(grant, { scope: 'attendance_dispatch_v1', physical_dispatch: true, expires_at: deadline });
+          material.grant_digest = canonical.digest(grant);
+          Object.assign(release, { grant_digest: material.grant_digest, deadline });
+          material.release_digest = canonical.digest(release);
+          await update(a, 'NexiAttendancePreparation', row.id, {
+            grantId: grant.grant_id, admissionId: grant.admission_id, releaseId: release.release_id,
+            consumptionId: material.consumption_id, consumptionDigest: canonical.digest(material),
+            grantDigest: material.grant_digest, releaseDigest: material.release_digest, releasedAuthority: JSON.stringify(material),
+            authorityDeadline: new Date(deadline).toISOString(), releaseConsumedAt: new Date().toISOString(), state: 'dispatch_ready_but_disabled', revision: 3 });
+          const started = new Date();
+          await update(a, 'NexiAttendancePreparation', row.id, { dispatchStartedAt: started.toISOString(), outcomeUnknown: true, state: 'dispatch_started', revision: 4 });
+          assert.equal((await b.query(`SELECT * FROM ${table('NexiAttendancePreparation')} WHERE id=?`, [row.id]))[0].outcomeUnknown, true);
+          await assert.rejects(update(b, 'NexiAttendancePreparation', row.id, { dispatchStartedAt: new Date(started.getTime() + 1), revision: 5 }));
+          await assert.rejects(update(b, 'NexiAttendancePreparation', row.id, { outcomeUnknown: false, revision: 5 }));
+          await assert.rejects(update(b, 'NexiAttendancePreparation', row.id, { releasedAuthority: '{}', revision: 5 }));
+        }
       } finally {
         try {
           if (created) await a.query(provider === 'mysql' ? `DROP DATABASE ${quote(namespace)}` : `DROP SCHEMA ${quote(namespace)} CASCADE`);

@@ -29,6 +29,7 @@ const FIELDS = {
     'authority_digest', 'preparation_digest', 'observed_at']),
   'attendance.receipt.observed': COMMON.concat(['journal_id', 'external_id', 'remote_jid', 'participant', 'from_me',
     'direction', 'semantic_class', 'normalized_status', 'receipt_timestamp', 'captured_at', 'protocol_metadata']),
+  'attendance.media.request': COMMON.concat(['inbox_id','execution_id','attempt_id','preparation_id','reservation_id','external_id','grant_id','release_id']),
 };
 const configs = new WeakMap();
 const sockets = new WeakMap();
@@ -96,7 +97,7 @@ function eventPayload(event, data) {
   } else {
     const observation = event.startsWith('attendance.session.') || event === 'attendance.receipt.observed';
     if (!positive(data.managed_channel_id) || typeof data.instance_id !== 'string' || !data.instance_id.length || data.instance_id.length > 100 ||
-        !HASH.test(data.session_identity || '') || data.writer_protocol_version !== 1 ||
+        !HASH.test(data.session_identity || '') || ![1,2].includes(data.writer_protocol_version) ||
         !BARRIER_STATES.includes(data.barrier_state) ||
         !(data.original_session_identity === null || HASH.test(data.original_session_identity || '')) ||
         !['instance_lineage_id', 'sender_account_lineage_id', 'sender_attestation_id'].every(key =>
@@ -120,6 +121,9 @@ function eventPayload(event, data) {
           !['public_material_digest', 'registration_digest'].every(key => HASH.test(data[key] || '')) ||
           !['verified_pairing', 'verified_restored_account'].includes(data.provenance) || !positive(data.observed_at))
         fail('nexi_attendance_contract_invalid');
+    } else if (event === 'attendance.media.request') {
+      if (!['execution_id','attempt_id','preparation_id','reservation_id','grant_id','release_id'].every(k=>UUID.test(data[k]||'')) ||
+          !external(data.external_id)) fail('nexi_attendance_media_identity_invalid');
     } else if (!UUID.test(data.journal_id || '') || !external(data.external_id) || ![PN, LID].some(r => r.test(data.remote_jid || '')) ||
         !(data.participant === null || [PN, LID].some(r => r.test(data.participant || ''))) || typeof data.from_me !== 'boolean' ||
         data.direction !== (data.from_me ? 'outgoing' : 'incoming') || !['ERROR', 'SERVER_ACK', 'DELIVERY_ACK', 'READ', 'PLAYED', 'UNKNOWN'].includes(data.normalized_status) ||
@@ -230,11 +234,12 @@ function verifyContext(source, envelope, nonce, session) {
   if (Object.keys(context).sort().join(',') !== keys.sort().join(',') || context.version !== 1 || context.protocol_version !== 1 ||
       context.audience !== 'nexi-attendance-evolution' || context.provider !== 'evolution-baileys' || context.nonce !== nonce ||
       context.instance !== source.instance.name || context.instance_id !== source.instanceId || context.session_identity !== session ||
-      context.physical_dispatch !== false || context.isolation_cutover !== false ||
+      ![true,false].includes(context.physical_dispatch) || ![true,false].includes(context.isolation_cutover) ||
+      (context.physical_dispatch && (!context.isolation_cutover || context.barrier_state !== 'active' || context.writer_protocol_version !== 2)) ||
       !['account_id', 'inbox_id', 'managed_channel_id'].every(key => Number.isSafeInteger(context[key]) && context[key] > 0) ||
       !['instance_lineage_id', 'sender_account_lineage_id', 'sender_attestation_id'].every(key => context[key] === null || UUID.test(context[key] || '')) ||
       !['binding_generation', 'writer_epoch'].every(key => context[key] === null || Number.isSafeInteger(context[key]) && context[key] > 0) ||
-      context.writer_protocol_version !== 1 || !BARRIER_STATES.includes(context.barrier_state) ||
+      ![1,2].includes(context.writer_protocol_version) || !BARRIER_STATES.includes(context.barrier_state) ||
       typeof context.current_session !== 'boolean' || !['active', 'disabled', 'removed'].includes(context.channel_state) ||
       !(context.original_session_identity === null || HASH.test(context.original_session_identity || '')))
     fail('nexi_attendance_context_invalid');
@@ -531,7 +536,7 @@ function validateIntent(context, intent) {
       !UUID.test(context.instance_lineage_id || '') || !UUID.test(context.sender_account_lineage_id || '') ||
       !UUID.test(context.sender_attestation_id || '') || context.current_session !== true || context.channel_state !== 'active' ||
       !['staged', 'active'].includes(context.barrier_state) || !Number.isSafeInteger(context.writer_epoch) ||
-      context.writer_epoch <= 0 || Buffer.byteLength(JSON.stringify(intent)) > 8192) fail('nexi_attendance_intent_unresolved');
+      context.writer_epoch <= 0 || Buffer.byteLength(JSON.stringify(intent)) > 1048576) fail('nexi_attendance_intent_unresolved');
 }
 function requestMaterial(row, action) {
   return { ...common(row.authority), action, request_id: row.requests[action], execution_id: row.executionId,
@@ -681,9 +686,7 @@ async function releasedGrantCapability(source, preparationId, consumptionId, wor
   const row = await source.prismaRepository.nexiAttendancePreparation.findUnique({where:{id:preparationId}});
   if (!row?.releaseConsumedAt || row.consumptionId !== consumptionId || row.state !== 'dispatch_ready_but_disabled')
     fail('nexi_attendance_dispatch_unconsumed');
-  // No caller, environment variable or API parameter can supply this capability.
-  // The false branch never invokes work (including a hypothetical transport).
-  if (!authority.physicalDispatchEnabled()) return {state:'dispatch_ready_but_disabled',physical_dispatch:false};
+  if (!authority.physicalDispatchEnabled(source,row)) return {state:'dispatch_ready_but_disabled',physical_dispatch:false};
   return scope.run(Object.freeze({kind:'released_grant',source,preparation:row,consumptionId}),work);
 }
 function semanticPurpose(message) {
@@ -810,13 +813,15 @@ function bindStanza(config, stanza, message, messageId) {
     recipient: jid(stanza.attrs?.to), id: stanza.attrs?.id, fingerprint: snapshots.fingerprint(snapshots.copy(stanza)) }));
 }
 async function assertNode(config, stanza) {
+  if (stanza?.tag !== 'message') return;
   const registration = configs.get(config);
   const capability = scope.getStore();
   if (capability) {
     const authority=require('./nexi-attendance-authority.cjs');
-    // This is awaited by the patched lexical sendNode BEFORE encoding/socket
-    // write. The production capability remains a literal false in this slice.
-    if (capability.kind !== 'released_grant' || !authority.physicalDispatchEnabled()) fail('nexi_attendance_dispatch_disabled_wave1b');
+    // Commit the original one-way CAS before the lexical socket write.
+    if (capability.kind !== 'released_grant') fail('nexi_attendance_dispatch_disabled_wave1b');
+    if (!authority.physicalDispatchEnabled(capability.source,capability.preparation))
+      fail('nexi_attendance_dispatch_unreleased');
     if (!registration || registration.source.instanceId !== capability.source.instanceId ||
         identity.sessionFingerprint(config.auth?.creds) !== capability.preparation.sessionIdentity)
       fail('nexi_attendance_dispatch_socket_mismatch');
@@ -849,8 +854,8 @@ async function assertNode(config, stanza) {
     fail(purpose === 'customer_affecting' ? 'nexi_attendance_customer_protocol_denied' : 'nexi_attendance_unknown_protocol_denied');
   }
   if (registration.ambiguous) fail('nexi_attendance_classification_unresolved');
-  // Generic legacy writers remain enabled until the APP-owned cutover. No
-  // configuration flag can activate that cutover or physical Attendance here.
+  // A cached pre-activation context cannot authorize an independent writer.
+  registration.context = await refreshContext(source, identity.sessionFingerprint(config.auth?.creds));
   if (registration.context?.isolation_cutover) fail('nexi_attendance_legacy_bypass_denied');
 }
 function externalRaw(config) {
@@ -1001,7 +1006,7 @@ function installRoutes(router, monitor, guard, repository) {
             previous.authority.managed_channel_id!==claims.managed_channel_id || previous.authority.writer_epoch!==claims.writer_epoch)
           fail('nexi_attendance_preparation_identity_conflict');
         const prepared=await prepare(source,previous);
-        return res.json({state:prepared.state,preparation_id:prepared.id,physical_dispatch:false});
+        return res.json({state:prepared.state,preparation_id:prepared.id,physical_dispatch:prepared.authority.physical_dispatch === true});
       }
       const context = await refreshContext(source, claims.session_identity);
       if (!groups.lifecycleCurrent(owner) || identity.sessionFingerprint(service.client?.authState?.creds) !== claims.session_identity)
@@ -1012,7 +1017,7 @@ function installRoutes(router, monitor, guard, repository) {
       const prepared = await prepare(source, row);
       return res.json({ state: prepared.state, preparation_id: prepared.id, attempt_id: prepared.attemptId,
         reservation_id: prepared.reservationId, external_id: prepared.externalId, preparation_digest: prepared.preparationDigest,
-        physical_dispatch: false });
+        physical_dispatch: prepared.authority.physical_dispatch === true });
     } catch (error) {
       return res.status(error.code?.includes('conflict') ? 409 : 422).json({ error: 'nexi_attendance_preparation_unresolved', physical_dispatch: false });
     }
@@ -1023,7 +1028,11 @@ function installRoutes(router, monitor, guard, repository) {
       if (!instance) return res.sendStatus(404);
       const row = await repository.nexiAttendanceHealth.findUnique({ where: { instanceId: instance.id } });
       const worker = workers.get(instance.id);
-      return res.json({ physical_dispatch: false, receipt_health: row?.unhealthy || worker?.unhealthy ? 'evidence_gap' : 'unproved',
+      const service = monitor.waInstances[instance.name];
+      const session = identity.sessionFingerprint(service?.client?.authState?.creds);
+      const context = service?.client?.ws?.isOpen && session ? await refreshContext({prismaRepository:repository,
+        instanceId:instance.id,instance:{name:instance.name}},session) : null;
+      return res.json({ physical_dispatch: context?.physical_dispatch === true, receipt_health: row?.unhealthy || worker?.unhealthy ? 'evidence_gap' : 'unproved',
         reason: row?.reason || null, queue_items: worker?.queue.length || 0, queue_bytes: worker?.bytes || 0,
         active_appends: worker?.active || 0, recovery_items: worker?.recovery.size || 0, recovery_bytes: worker?.recoveryBytes || 0 });
     } catch { return res.sendStatus(503); }
@@ -1050,11 +1059,11 @@ function installRoutes(router, monitor, guard, repository) {
   timer.unref?.(); return timer;
 }
 function prepareClaims(service, envelope, now = Date.now()) {
-  const claims = verifyEnvelope(service, envelope, 'attendance-prepare');
+  const claims = verifyEnvelope(service, envelope, 'attendance-prepare', 2097152);
   canonicalVersion(claims.canonical_version);
   if (Object.keys(claims).sort().join(',') !== 'audience,canonical_version,expires_at,instance,instance_id,intent,managed_channel_id,physical_dispatch,provider,request_id,session_identity,version,writer_epoch' ||
       claims.version !== 1 || claims.audience !== 'nexi-attendance-evolution' || claims.provider !== 'evolution-baileys' ||
-      claims.instance !== service.instance.name || claims.instance_id !== service.instanceId || claims.physical_dispatch !== false ||
+      claims.instance !== service.instance.name || claims.instance_id !== service.instanceId || ![true,false].includes(claims.physical_dispatch) ||
       !['managed_channel_id', 'writer_epoch'].every(key => Number.isSafeInteger(claims[key]) && claims[key] > 0) ||
       !UUID.test(claims.request_id || '') || !Number.isSafeInteger(claims.expires_at) || claims.expires_at <= now || claims.expires_at > now + 60000 ||
       claims.session_identity !== identity.sessionFingerprint(service.client?.authState?.creds)) fail('nexi_attendance_prepare_authentication_required');
@@ -1071,4 +1080,4 @@ module.exports = { canonical, digest, eventPayload, settings, publicAttestation,
   drain, installRoutes, requestMaterial, common, prepareClaims, rawNodeForInstance, rawNodeForSocket, trackSocket,
   append, enqueue, inheritConfig, boundedMariaDb, recoverPreparation, semanticPurpose, markInternalControl,
   normalizeBadAck, captureBadAck, canonicalBytes, CANONICAL_VERSION, ID_PREFIX,
-  beginRelay, encodingInput, patchEncoding, encodeMessage, snapshotFrame, signEnvelope, verifyEnvelope, releasedGrantCapability };
+  beginRelay, encodingInput, patchEncoding, encodeMessage, snapshotFrame, signEnvelope, verifyEnvelope, releasedGrantCapability, boundary, envelopeSecret };

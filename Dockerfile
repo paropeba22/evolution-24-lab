@@ -27,6 +27,7 @@ COPY patch-attendance-source.mjs attendance-models.prisma nexi-attendance.cjs at
 COPY nexi-canonical-json.cjs attendance-canonical.test.cjs attendance-corrections.test.cjs /evolution/
 COPY nexi-attendance-snapshot.cjs attendance-snapshot.test.cjs /evolution/
 COPY nexi-attendance-authority.cjs nexi-attendance-storage-guard.cjs attendance-authority.test.cjs attendance-authority-test-support.cjs attendance-test-network-trap.cjs /evolution/
+COPY nexi-attendance-dispatch.cjs attendance-physical-dispatch.test.cjs /evolution/
 COPY nexi-attendance-storage-check.cjs /evolution/
 COPY attendance-storage-corrections.test.cjs /evolution/
 COPY fixtures/attendance-authority-v1.json /evolution/fixtures/attendance-authority-v1.json
@@ -55,6 +56,8 @@ COPY prisma/postgresql-migrations/20261005000001_attendance_canonical_version /e
 COPY prisma/mysql-migrations/20261005000001_attendance_canonical_version /evolution/prisma/mysql-migrations/20261005000001_attendance_canonical_version
 COPY prisma/postgresql-migrations/20261006000000_attendance_release_dispatch /evolution/prisma/postgresql-migrations/20261006000000_attendance_release_dispatch
 COPY prisma/mysql-migrations/20261006000000_attendance_release_dispatch /evolution/prisma/mysql-migrations/20261006000000_attendance_release_dispatch
+COPY prisma/postgresql-migrations/20261010000000_attendance_physical_dispatch /evolution/prisma/postgresql-migrations/20261010000000_attendance_physical_dispatch
+COPY prisma/mysql-migrations/20261010000000_attendance_physical_dispatch /evolution/prisma/mysql-migrations/20261010000000_attendance_physical_dispatch
 
 # The schema change must precede Prisma generation and tsup's bundled client.
 RUN node /tmp/patch-prisma-binding.mjs
@@ -115,6 +118,7 @@ COPY --from=source-builder /evolution/nexi-attendance.cjs /evolution/nexi-attend
 COPY --from=source-builder /evolution/nexi-canonical-json.cjs /evolution/nexi-canonical-json.cjs
 COPY --from=source-builder /evolution/nexi-attendance-snapshot.cjs /evolution/nexi-attendance-snapshot.cjs
 COPY --from=source-builder /evolution/nexi-attendance-authority.cjs /evolution/nexi-attendance-authority.cjs
+COPY --from=source-builder /evolution/nexi-attendance-dispatch.cjs /evolution/nexi-attendance-dispatch.cjs
 COPY --from=source-builder /evolution/nexi-attendance-storage-guard.cjs /evolution/nexi-attendance-storage-guard.cjs
 COPY --from=source-builder /evolution/nexi-attendance-storage-check.cjs /evolution/nexi-attendance-storage-check.cjs
 COPY --from=source-builder /evolution/fixtures /evolution/fixtures

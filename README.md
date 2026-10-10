@@ -34,6 +34,30 @@ Full provider bundles, PostgreSQL/Redis integration and operational runtime chec
 
 Attendance Wave 1C final Slice 4/5 adds the APP preparation/admission/release bridge,
 durable transport consumption and the one-way pre-write dispatch fence. Physical
-Attendance dispatch remains disabled in source. The exact contract, recovery
+Attendance dispatch remained disabled in that source baseline. The exact contract, recovery
 rules and pending runtime acceptance are in
 [attendance-wave1c-final-slice.md](attendance-wave1c-final-slice.md).
+
+## Attendance physical dispatch (development)
+
+Writer version 2 accepts APP-signed `attendance_dispatch_v1` grants after a
+verified permanent APP activation. `writer_probe` proves current session and
+durable guards. Consumption/readback invokes `nexi-attendance-dispatch.cjs`,
+which calls the actual Baileys client with the reserved external ID. The lexical
+socket gate commits the existing one-way CAS before writing. Replays never
+repeat a committed CAS, and method completion remains UNKNOWN until real
+receipt evidence arrives. Expired consumption without dispatch is reconciled
+under a row lock; no new grant is invented.
+
+Text, frozen replies and image/document/audio/video attachments use the same
+operation. Media bytes come from the authenticated APP callback and are checked
+against the immutable size/checksum. There is no recipient allowlist, message
+quota, temporary test session or per-message approval. Generic writers and
+native retries cannot bypass the APP on an isolated managed channel.
+
+Apply the additive PostgreSQL/MySQL physical-dispatch migration and deploy both
+APP and transport version 2 before activation. The full provider image build
+and actual WhatsApp delivery remain operational validation; deterministic
+socket tests are not physical delivery proof. See the APP report
+`docs/attendance-full-physical-dispatch.md` for baseline, deployment steps,
+tests and final evidence boundaries. No production cutover is performed here.

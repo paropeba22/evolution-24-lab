@@ -15,7 +15,7 @@ function catalog(provider='postgresql') {
     {name:m[1],source:m[4],event:m[2],timing:'BEFORE',table_name:m[3],orientation:'ROW'}:{name:m[1],source:m[2]}])).values()];
 }
 function sqlSource(provider){
-  return ['20261005000000_nexi_attendance_boundaries','20261005000001_attendance_canonical_version','20261006000000_attendance_release_dispatch']
+  return ['20261005000000_nexi_attendance_boundaries','20261005000001_attendance_canonical_version','20261006000000_attendance_release_dispatch','20261010000000_attendance_physical_dispatch']
     .map(m=>fs.readFileSync(__dirname+`/prisma/${provider}-migrations/${m}/migration.sql`,'utf8').replaceAll('\r\n','\n')).join('\n');
 }
 function catalogState(provider){
@@ -48,6 +48,7 @@ function memory() {
         row={...row,...data,revision:row.revision+1};trace.push(data.state);return {count:1};}},
     async $queryRawUnsafe(sql){
       if(this.failStorage)throw Error('storage failed');
+      if(sql.includes('FOR UPDATE'))return [{id:row.id}];
       if(sql.includes('attendance_now'))return [{attendance_now:new Date(this.now)}];
       if(sql.includes('session_replication_role'))return [{attendance_replication_role:'origin'}];
       const mysql=sql.includes('information_schema'),state=catalogState(mysql?'mysql':'postgresql');

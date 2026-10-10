@@ -8,7 +8,7 @@ const PINNED={
     "nexi_attendance_preparation_guard": "0e4e025376bbeba6c6f73e0423dc8f260e985423c40935cac429d1068bed7133",
     "nexi_attendance_outbox_guard": "a3fd7215fcb2f7422923d3cb94b7cf51c49d652039e242dc5b228bbac56b4583",
     "nexi_attendance_canonical_version_immutable": "1e81e8b7aeade4bbeb94c2931033d9ba8deae5a5263fc25b7c436baa1c692178",
-    "nexi_attendance_authority_guard": "9bc239c4ed24b11111ff2e00f26140d0238adb061634e075640a34ab8d237003"
+    "nexi_attendance_authority_guard": "4a61d13356499e44ead32f5a430cceed7a0f3362280edd2008859ab81ae2ebec"
   },
   "mysql": {
     "NexiManagedTransportContext_no_delete": "944d4a11ff497956db29905863e4916ae14d27fb611117bd6e263cf670c7f564",
@@ -22,7 +22,7 @@ const PINNED={
     "NexiAttendanceEventOutbox_guard": "dabd39e284ec779c210ea909e95ba8d26b8a3021e3bc678bbf6d884cfd38695d",
     "NexiAttendancePreparation_canonical": "e6f0f0f6dabb196197b79e81b8dde4eb9eeaf3339aacc77e625729d53c5a113a",
     "NexiAttendanceEventOutbox_canonical": "e6f0f0f6dabb196197b79e81b8dde4eb9eeaf3339aacc77e625729d53c5a113a",
-    "NexiAttendancePreparation_authority_update": "e68e5a81186773b999f684f6bd0e5b280355356c48cc8cbbff850d0839acfc0e",
+    "NexiAttendancePreparation_authority_update": "8511fc1333b4e48da85b39975e684a1bc7cc7d874c10425afe7a3865323d1201",
     "NexiAttendancePreparation_authority_insert": "e23c088adf0e8288bb8b64cd1e77740193fcbcf200d8de9e17c3ec6045657bf4"
   }
 };
