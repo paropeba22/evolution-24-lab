@@ -18,6 +18,7 @@ const COMMON = ['version', 'protocol_version', 'canonical_version', 'audience', 
   'binding_generation', 'writer_epoch', 'writer_protocol_version', 'barrier_state'];
 const FIELDS = {
   'attendance.context.request': ['version', 'canonical_version', 'audience', 'provider', 'account_id', 'inbox_id', 'nonce', 'session_identity'],
+  'attendance.writer.context.request': ['version', 'canonical_version', 'audience', 'provider', 'account_id', 'inbox_id', 'nonce', 'session_identity', 'socket_owner'],
   'attendance.foundation.request': COMMON.concat(['action', 'request_id', 'execution_id', 'attempt_id', 'transport_unit',
     'external_id', 'authority_digest', 'payload_digest', 'preparation_id', 'preparation_nonce_digest', 'recipient', 'identity_version_id']),
   'attendance.session.observed': COMMON.concat(['observation_id', 'canonical_pn', 'canonical_lid', 'public_material_digest',
@@ -91,8 +92,10 @@ function eventPayload(event, data) {
   const external = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,512}$/.test(value);
   if (data.audience !== 'nexi-attendance-app' || data.provider !== 'evolution-baileys' || !positive(data.account_id))
     fail('nexi_attendance_contract_invalid');
-  if (event === 'attendance.context.request') {
+  if (event === 'attendance.context.request' || event === 'attendance.writer.context.request') {
     if (!positive(data.inbox_id) || !UUID.test(data.nonce || '') || !HASH.test(data.session_identity || ''))
+      fail('nexi_attendance_contract_invalid');
+    if (event === 'attendance.writer.context.request' && !UUID.test(data.socket_owner || ''))
       fail('nexi_attendance_contract_invalid');
   } else {
     const observation = event.startsWith('attendance.session.') || event === 'attendance.receipt.observed';
@@ -245,7 +248,7 @@ function verifyContext(source, envelope, nonce, session) {
     fail('nexi_attendance_context_invalid');
   return context;
 }
-async function refreshContext(source, session, fetchImpl = fetch) {
+async function refreshContext(source, session, fetchImpl = fetch, socketOwner = null) {
   const destination = await boundary(source);
   const db = source.prismaRepository.nexiManagedTransportContext;
   if (!destination) {
@@ -256,7 +259,8 @@ async function refreshContext(source, session, fetchImpl = fetch) {
   const nonce = randomUUID();
   const envelope = await request(source, { version: 1, canonical_version: CANONICAL_VERSION, audience: 'nexi-attendance-app', provider: 'evolution-baileys',
     account_id: Number(destination.headers['X-Nexi-Chatwoot-Account-Id']), inbox_id: Number(destination.headers['X-Nexi-Chatwoot-Inbox-Id']),
-    nonce, session_identity: session }, 'attendance.context.request', fetchImpl, nonce);
+    nonce, session_identity: session, ...(socketOwner ? {socket_owner:socketOwner} : {}) },
+    socketOwner ? 'attendance.writer.context.request' : 'attendance.context.request', fetchImpl, nonce);
   const context = verifyContext(source, envelope, nonce, session);
   // Nonce authenticates the exchange, not classification identity.
   const durable = { ...context }; delete durable.nonce;
@@ -511,6 +515,9 @@ async function configure(service, config) {
 async function sessionObserved(config, attestation) {
   const registration = configs.get(config);
   if (!registration || !attestation) return;
+  // Produced only by the pinned public-account signature verifier. Retain
+  // evidence for this exact configured socket, never for a replacement.
+  registration.attestation = attestation;
   try {
     if (await classification(registration.source) === 'legacy') return;
     // Pairing may change credentials in this exact socket. Obtain a fresh
@@ -869,6 +876,21 @@ function trackSocket(socket, config) {
   if (!configs.has(config)) fail('nexi_attendance_raw_context_missing');
   sockets.set(socket, config);
 }
+function writerIsolation(source, context) {
+  const config = sockets.get(source.service?.client), registration = configs.get(config);
+  const session = identity.sessionFingerprint(source.service?.client?.authState?.creds);
+  if (!registration || registration.source.instanceId !== source.instanceId ||
+      registration.source.instance.name !== source.instance.name || !context?.current_session ||
+      context.channel_state !== 'active' || context.session_identity !== session ||
+      registration.attestation?.session_identity !== session ||
+      !['verified_pairing','verified_restored_account'].includes(registration.attestation.provenance))
+    fail('nexi_attendance_writer_isolation_unproved');
+  // Install the fresh managed context in the lexical gate before attesting
+  // isolation. Old/native customer writers remain denied by assertNode.
+  registration.context = context;
+  registration.ambiguous = false;
+  return true;
+}
 function rawNodeForSocket(socket, node) {
   const registration = configs.get(sockets.get(socket));
   if (!registration) fail('nexi_attendance_raw_context_missing');
@@ -1008,7 +1030,7 @@ function installRoutes(router, monitor, guard, repository) {
         const prepared=await prepare(source,previous);
         return res.json({state:prepared.state,preparation_id:prepared.id,physical_dispatch:prepared.authority.physical_dispatch === true});
       }
-      const context = await refreshContext(source, claims.session_identity);
+      const context = await refreshContext(source, claims.session_identity, fetch, owner.token);
       if (!groups.lifecycleCurrent(owner) || identity.sessionFingerprint(service.client?.authState?.creds) !== claims.session_identity)
         fail('nexi_attendance_session_superseded');
       if (context?.managed_channel_id !== claims.managed_channel_id || context.writer_epoch !== claims.writer_epoch)
@@ -1031,7 +1053,8 @@ function installRoutes(router, monitor, guard, repository) {
       const service = monitor.waInstances[instance.name];
       const session = identity.sessionFingerprint(service?.client?.authState?.creds);
       const context = service?.client?.ws?.isOpen && session ? await refreshContext({prismaRepository:repository,
-        instanceId:instance.id,instance:{name:instance.name}},session) : null;
+        instanceId:instance.id,instance:{name:instance.name}},session,fetch,
+        require('./nexi-groups.cjs').lifecycleCapture(service).token) : null;
       return res.json({ physical_dispatch: context?.physical_dispatch === true, receipt_health: row?.unhealthy || worker?.unhealthy ? 'evidence_gap' : 'unproved',
         reason: row?.reason || null, queue_items: worker?.queue.length || 0, queue_bytes: worker?.bytes || 0,
         active_appends: worker?.active || 0, recovery_items: worker?.recovery.size || 0, recovery_bytes: worker?.recoveryBytes || 0 });
@@ -1077,7 +1100,7 @@ function decodeCanonicalClaims(encoded) {
 module.exports = { canonical, digest, eventPayload, settings, publicAttestation, normalizeReceipt, normalization, numericNormalization,
   configure, sessionObserved, capture, refreshContext, classification, draft, prepare, closeCollision,
   foundationCapability, bindStanza, assertNode, externalRaw, retryMessage, legacyAllowed, legacyForInstance, ReceiptWorker,
-  drain, installRoutes, requestMaterial, common, prepareClaims, rawNodeForInstance, rawNodeForSocket, trackSocket,
+  drain, installRoutes, requestMaterial, common, prepareClaims, rawNodeForInstance, rawNodeForSocket, trackSocket, writerIsolation,
   append, enqueue, inheritConfig, boundedMariaDb, recoverPreparation, semanticPurpose, markInternalControl,
   normalizeBadAck, captureBadAck, canonicalBytes, CANONICAL_VERSION, ID_PREFIX,
   beginRelay, encodingInput, patchEncoding, encodeMessage, snapshotFrame, signEnvelope, verifyEnvelope, releasedGrantCapability, boundary, envelopeSecret };

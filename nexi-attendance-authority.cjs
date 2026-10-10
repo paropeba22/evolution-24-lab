@@ -169,8 +169,18 @@ function response(source, requestClaims, materialValue, now = Date.now()) {
     material:materialValue, physical_dispatch:requestClaims.physical_dispatch === true }, 'attendance-authority');
 }
 async function dispatchStart(source, preparationId, consumptionId, stanza) {
+  const groups = require('./nexi-groups.cjs'), owner = groups.lifecycleCapture(source.service);
+  const session = identity.sessionFingerprint(source.service?.client?.authState?.creds);
+  const current = await attendance().refreshContext(source, session, fetch, owner.token);
+  if (!UUID.test(owner.token || '') || !groups.lifecycleCurrent(owner) || !current?.physical_dispatch)
+    fail('nexi_attendance_dispatch_fenced');
   return source.prismaRepository.$transaction(async tx => {
     await storageGuard(tx);
+    // Serialize with socket replacement across processes. A stale process
+    // cannot dispatch using only its own in-memory lifecycle snapshot.
+    const socket = await tx.instance.updateMany({where:{id:source.instanceId,nexiGroupsSocketOwner:owner.token},
+      data:{nexiGroupsSocketOwner:owner.token}});
+    if (socket.count !== 1 || !groups.lifecycleCurrent(owner)) fail('nexi_attendance_dispatch_fenced');
     // Match expiryReadback's row lock before reading authority or its clock.
     // MySQL statement time must not be captured before waiting for this lock.
     const mysql = process.env.DATABASE_PROVIDER === 'mysql';
@@ -183,8 +193,9 @@ async function dispatchStart(source, preparationId, consumptionId, stanza) {
     // Even after a crash or a socket exception the original CAS is permanent.
     if (row.dispatchStartedAt) return { started:false, outcome_unknown:true };
     const now = await clock(tx);
-    const owner=source.service && require('./nexi-groups.cjs').lifecycleCapture(source.service);
     if (row.state !== 'dispatch_ready_but_disabled' || now>=m.release.deadline || now>=m.grant.expires_at ||
+        current.writer_epoch !== row.authority.writer_epoch || current.binding_generation !== row.authority.binding_generation ||
+        current.session_identity !== row.sessionIdentity || current.managed_channel_id !== row.authority.managed_channel_id ||
         !row.releaseConsumedAt || row.outcomeUnknown || stanza?.attrs?.id !== row.externalId || stanza?.attrs?.to !== row.recipient ||
         identity.sessionFingerprint(source.service?.client?.authState?.creds) !== row.sessionIdentity ||
         source.service.instanceId !== source.instanceId || source.service.instance.name !== source.instance.name ||
@@ -217,15 +228,27 @@ function installRoute(router, monitor, guard, repository) {
       const value=claims(source,req.body);
       if (value.action==='writer_probe') {
         const m=value.material, groups=require('./nexi-groups.cjs');
+        const owner=source.service && groups.lifecycleCapture(source.service);
         if (!exact(m,['managed_channel_id','session_identity']) || !Number.isSafeInteger(m.managed_channel_id) ||
-            !source.service?.client?.ws?.isOpen || !groups.lifecycleCurrent(groups.lifecycleCapture(source.service)) ||
+            !source.service?.client?.ws?.isOpen || !UUID.test(owner?.token || '') || !groups.lifecycleCurrent(owner) ||
             identity.sessionFingerprint(source.service.client.authState?.creds)!==m.session_identity)
           fail('nexi_attendance_writer_unavailable');
-        await repository.$transaction(storageGuard);
-        const context=await attendance().refreshContext(source,m.session_identity);
-        if (context.managed_channel_id!==m.managed_channel_id) fail('nexi_attendance_writer_binding_conflict');
+        const context=await attendance().refreshContext(source,m.session_identity,fetch,owner.token);
+        if (context.managed_channel_id!==m.managed_channel_id || context.barrier_state!=='fencing')
+          fail('nexi_attendance_writer_binding_conflict');
+        await repository.$transaction(async tx => {
+          await storageGuard(tx);
+          const current=await tx.instance.updateMany({where:{id:source.instanceId,nexiGroupsSocketOwner:owner.token},
+            data:{nexiGroupsSocketOwner:owner.token}});
+          if (current.count!==1 || !groups.lifecycleCurrent(owner) || !source.service.client?.ws?.isOpen)
+            fail('nexi_attendance_writer_isolation_unproved');
+          attendance().writerIsolation(source,context);
+        });
+        if (!groups.lifecycleCurrent(owner)) fail('nexi_attendance_writer_isolation_unproved');
         return res.json(response(source,value,{request_digest:canonical.digest(m),writer_version:WRITER_VERSION,
-          storage_guarded:true,physical_dispatch:true,session_identity:m.session_identity}));
+          storage_guarded:true,physical_dispatch:true,session_identity:m.session_identity,isolated_writer:'nexi-app',
+          socket_owner:owner.token,verified_account_identity:true,account_id:context.account_id,inbox_id:context.inbox_id,
+          writer_epoch:context.writer_epoch,binding_generation:context.binding_generation}));
       }
       if (value.action==='preparation_readback') return res.json(response(source,value,
         {...await preparationReadback(source,value),request_digest:canonical.digest(value.material)}));
