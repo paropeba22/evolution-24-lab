@@ -171,6 +171,12 @@ function response(source, requestClaims, materialValue, now = Date.now()) {
 async function dispatchStart(source, preparationId, consumptionId, stanza) {
   return source.prismaRepository.$transaction(async tx => {
     await storageGuard(tx);
+    // Match expiryReadback's row lock before reading authority or its clock.
+    // MySQL statement time must not be captured before waiting for this lock.
+    const mysql = process.env.DATABASE_PROVIDER === 'mysql';
+    const locked = await tx.$queryRawUnsafe(mysql ? 'SELECT id FROM NexiAttendancePreparation WHERE id=? FOR UPDATE' :
+      'SELECT id FROM "NexiAttendancePreparation" WHERE id=$1 FOR UPDATE',preparationId);
+    if (!Array.isArray(locked) || locked.length !== 1) fail('nexi_attendance_dispatch_unconsumed');
     const db = tx.nexiAttendancePreparation, row = await db.findUnique({where:{id:preparationId}});
     if (!row?.consumptionId || row.consumptionId !== consumptionId) fail('nexi_attendance_dispatch_unconsumed');
     const m = material(row.releasedAuthority); binding(source,row,m); replay(row,m);
