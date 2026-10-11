@@ -134,6 +134,17 @@ function writerProbeTrace(envelope) {
           emit('attendance.writer_probe.socket_checks', safe);
         } catch { /* A diagnostic read cannot replace the original checks. */ }
       },
+      isolationChecks(read) {
+        try {
+          const safe = Object.fromEntries(Object.entries(read()).filter(([key, value]) =>
+            ['database_socket_owner_matched', 'lifecycle_current_after_cas', 'socket_open_after_cas',
+              'registration_present', 'registration_instance_id_matches', 'registration_instance_name_matches',
+              'context_current_session', 'context_channel_active', 'context_session_matches', 'attestation_present',
+              'attestation_session_matches', 'attestation_provenance_valid', 'lifecycle_current_after_transaction'].includes(key) &&
+            typeof value === 'boolean'));
+          emit('attendance.writer_probe.isolation_checks', safe);
+        } catch { /* Omit unavailable diagnostics; never affect isolation. */ }
+      },
       failure(error) {
         emit('attendance.writer_probe.rejected', { last_stage: lastStage, failure_stage: phase, category: writerProbeFailure(error) });
       },
@@ -959,15 +970,23 @@ function trackSocket(socket, config) {
   if (!configs.has(config)) fail('nexi_attendance_raw_context_missing');
   sockets.set(socket, config);
 }
-function writerIsolation(source, context) {
+function writerIsolation(source, context, writerProbe = null) {
   const config = sockets.get(source.service?.client), registration = configs.get(config);
   const session = identity.sessionFingerprint(source.service?.client?.authState?.creds);
-  if (!registration || registration.source.instanceId !== source.instanceId ||
-      registration.source.instance.name !== source.instance.name || !context?.current_session ||
-      context.channel_state !== 'active' || context.session_identity !== session ||
-      registration.attestation?.session_identity !== session ||
-      !['verified_pairing','verified_restored_account'].includes(registration.attestation.provenance))
-    fail('nexi_attendance_writer_isolation_unproved');
+  // Capture only predicates actually reached by the original short-circuit.
+  // The captured values, not a second read of live state, describe the decision.
+  const checks = {};
+  const rejected = !(checks.registration_present = !!registration) ||
+    !(checks.registration_instance_id_matches = registration.source.instanceId === source.instanceId) ||
+    !(checks.registration_instance_name_matches = registration.source.instance.name === source.instance.name) ||
+    !(checks.context_current_session = !!context?.current_session) ||
+    !(checks.context_channel_active = context.channel_state === 'active') ||
+    !(checks.context_session_matches = context.session_identity === session) ||
+    !(checks.attestation_session_matches = registration.attestation?.session_identity === session) ||
+    !(checks.attestation_provenance_valid = ['verified_pairing','verified_restored_account'].includes(registration.attestation.provenance));
+  writerProbe?.isolationChecks(() => ({ ...checks,
+    ...(registration ? { attestation_present: !!registration.attestation } : {}) }));
+  if (rejected) fail('nexi_attendance_writer_isolation_unproved');
   // Install the fresh managed context in the lexical gate before attesting
   // isolation. Old/native customer writers remain denied by assertNode.
   registration.context = context;

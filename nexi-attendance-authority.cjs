@@ -257,11 +257,19 @@ function installRoute(router, monitor, guard, repository) {
           probe?.attempt('writer_isolation');
           const current=await tx.instance.updateMany({where:{id:source.instanceId,nexiGroupsSocketOwner:owner.token},
             data:{nexiGroupsSocketOwner:owner.token}});
-          if (current.count!==1 || !groups.lifecycleCurrent(owner) || !source.service.client?.ws?.isOpen)
-            fail('nexi_attendance_writer_isolation_unproved');
-          attendance().writerIsolation(source,context);
+          // Retain the original evaluation order and omit unreached checks.
+          const checks={};
+          const rejected=!(checks.database_socket_owner_matched=current.count===1) ||
+            !(checks.lifecycle_current_after_cas=!!groups.lifecycleCurrent(owner)) ||
+            !(checks.socket_open_after_cas=!!source.service.client?.ws?.isOpen);
+          probe?.isolationChecks(() => checks);
+          if (rejected) fail('nexi_attendance_writer_isolation_unproved');
+          attendance().writerIsolation(source,context,probe);
         });
-        if (!groups.lifecycleCurrent(owner)) fail('nexi_attendance_writer_isolation_unproved');
+        // This separate rejection can occur while the transaction completes.
+        const lifecycleCurrent=groups.lifecycleCurrent(owner);
+        probe?.isolationChecks(() => ({lifecycle_current_after_transaction:!!lifecycleCurrent}));
+        if (!lifecycleCurrent) fail('nexi_attendance_writer_isolation_unproved');
         probe?.stage('writer_isolation_proved');
         probe?.attempt('response_production');
         const proof=response(source,value,{request_digest:canonical.digest(m),writer_version:WRITER_VERSION,
