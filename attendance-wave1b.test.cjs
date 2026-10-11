@@ -259,7 +259,14 @@ test('attestation diagnostics distinguish missing material, signature rejection 
     ['session_material_unavailable', c => { delete c.signedIdentityKey; }],
     ['account_identity_invalid', c => { c.me.id = 'invalid'; }],
     ['account_material_unavailable', c => { delete c.account; }],
-    ['account_signature_key_invalid', c => { c.account.accountSignatureKey = Buffer.alloc(31); }],
+    ['account_signature_key_missing', c => { delete c.account.accountSignatureKey; }],
+    ['account_signature_key_missing', c => { c.account.accountSignatureKey = null; }],
+    ['account_signature_key_wrong_type', c => { c.account.accountSignatureKey = { type: 'Buffer', data: 'untrusted' }; }],
+    ['account_signature_key_wrong_type', c => { c.account.accountSignatureKey = Array(32).fill(3); }],
+    ['account_signature_key_wrong_type', c => { c.account.accountSignatureKey = 'not base64!'; }],
+    ['account_signature_key_wrong_length', c => { c.account.accountSignatureKey = Buffer.alloc(0); }],
+    ['account_signature_key_wrong_length', c => { c.account.accountSignatureKey = Buffer.alloc(31); }],
+    ['account_signature_key_wrong_length', c => { c.account.accountSignatureKey = new Uint8Array(33); }],
     ['account_signature_invalid', c => { c.account.accountSignature = Buffer.alloc(63); }],
     ['account_details_invalid', c => { c.account.details = Buffer.alloc(0); }],
   ];
@@ -304,6 +311,101 @@ test('real Signal account signature remains required and rejects changed identit
   for (const truthy of [1, 'true', {}]) assert.equal(a.publicAttestation(c, () => truthy, () => prefix), null);
 });
 
+test('rc13 protobuf account survives supported JSON storage layers only after faithful restored-byte decoding', async () => {
+  // Exact installed rc13 protobuf and BufferJSON export, without importing
+  // sockets or invoking a storage provider. All account material is synthetic.
+  const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
+  const root = path.dirname(require.resolve('baileys/package.json'));
+  assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'package.json'))).version, '7.0.0-rc13');
+  const { proto } = await import(require('node:url').pathToFileURL(path.join(root, 'WAProto/index.js')).href);
+  const generics = fs.readFileSync(path.join(root, 'lib/Utils/generics.js'), 'utf8').replaceAll('\r\n', '\n');
+  const start = generics.indexOf('export const BufferJSON = '), end = generics.indexOf('\nexport const getKeyAuthor');
+  assert.ok(start >= 0 && end > start);
+  const BufferJSON = vm.runInNewContext(generics.slice(start, end).replace('export const BufferJSON = ', 'globalThis.BufferJSON = ') +
+    '\nBufferJSON;', { Buffer, Uint8Array });
+  const curve = require('libsignal/src/curve.js'), accountKey = curve.generateKeyPair(), deviceKey = curve.generateKeyPair();
+  const prefix = Buffer.from([6, 0]), c = credentials();
+  c.signedIdentityKey.public = Buffer.from(deviceKey.pubKey.subarray(1));
+  const details = proto.ADVDeviceIdentity.encode({ keyIndex: 1 }).finish();
+  c.account = proto.ADVSignedDeviceIdentity.decode(proto.ADVSignedDeviceIdentity.encode({
+    details, accountSignatureKey: Buffer.from(accountKey.pubKey.subarray(1)),
+    accountSignature: curve.calculateSignature(accountKey.privKey, Buffer.concat([prefix, details, c.signedIdentityKey.public]))
+  }).finish());
+  const original = a.publicAttestation(c, a.verifyPublicAccountSignature, () => prefix, 'verified_pairing');
+  assert.ok(original);
+  const serialized = JSON.stringify(c, BufferJSON.replacer), restore = raw => JSON.parse(raw, BufferJSON.reviver);
+  const paths = [restore(serialized), // Baileys filesystem helper
+    restore(restore(JSON.stringify(serialized, BufferJSON.replacer))), // CacheService + RedisCache/LocalCache
+    restore(JSON.parse(JSON.stringify(serialized))), // Prisma saveKey/getAuthKey layers
+    restore(JSON.stringify(JSON.parse(serialized)))]; // ProviderFiles object response
+  for (const restored of paths) {
+    const snapshot = JSON.stringify(restored, BufferJSON.replacer), statuses = [];
+    for (const field of ['accountSignatureKey', 'accountSignature', 'details']) {
+      assert.equal(typeof restored.account[field], 'string');
+      assert.ok(Buffer.from(restored.account[field], 'base64').equals(c.account[field]));
+    }
+    // V8.3 rejects this exact stored type; only the restored hook may decode it.
+    assert.equal(a.publicAttestation(restored, a.verifyPublicAccountSignature, () => prefix, 'verified_pairing', 1,
+      status => statuses.push(status)), null);
+    assert.deepEqual(statuses, ['account_signature_key_wrong_type']);
+    const observed = a.publicAttestation(restored, (key, bytes, signature) => {
+      assert.ok(Buffer.from(key).equals(c.account.accountSignatureKey));
+      assert.ok(Buffer.from(signature).equals(c.account.accountSignature));
+      assert.ok(bytes.equals(Buffer.concat([prefix, c.account.details, c.signedIdentityKey.public])));
+      return a.verifyPublicAccountSignature(key, bytes, signature);
+    }, value => { assert.ok(Buffer.from(value).equals(c.account.details)); return prefix; });
+    assert.ok(observed);
+    assert.equal(observed.session_identity, original.session_identity);
+    assert.equal(observed.public_material_digest, original.public_material_digest);
+    assert.equal(observed.registration_digest, original.registration_digest);
+    assert.equal(JSON.stringify(restored, BufferJSON.replacer), snapshot);
+    for (const field of ['accountSignatureKey', 'accountSignature', 'details']) {
+      const changed = restore(serialized), bytes = Buffer.from(changed.account[field], 'base64');
+      bytes[0] ^= 1; changed.account[field] = bytes.toString('base64');
+      const rejected = [];
+      assert.equal(a.publicAttestation(changed, a.verifyPublicAccountSignature, () => prefix, 'verified_restored_account', 1,
+        status => rejected.push(status)), null);
+      assert.deepEqual(rejected, ['signature_rejected']);
+    }
+    const changedIdentity = restore(serialized); changedIdentity.signedIdentityKey.public[0] ^= 1;
+    assert.equal(a.publicAttestation(changedIdentity, a.verifyPublicAccountSignature, () => prefix), null);
+    for (const result of [false, undefined, 1, 'true', {}])
+      assert.equal(a.publicAttestation(restored, () => result, () => prefix), null);
+    assert.throws(() => a.publicAttestation(restored, () => { throw Error('synthetic-verifier-failure'); }, () => prefix),
+      /synthetic-verifier-failure/);
+  }
+  for (const value of ['AB==', 'AA', 'AA-_', ' AA==', 'AA==\n', 'A'.repeat(1372), { type: 'Buffer', data: 'AA==' }]) {
+    const restored = restore(serialized), statuses = []; restored.account.accountSignatureKey = value;
+    assert.equal(a.publicAttestation(restored, () => { assert.fail('verifier must not run'); }, () => prefix,
+      'verified_restored_account', 1, status => statuses.push(status)), null);
+    assert.deepEqual(statuses, ['account_signature_key_wrong_type']);
+  }
+  const f = fixture(), restored = restore(serialized), config = { auth: { creds: restored } };
+  f.repo.webhook.rows.length = 0; // Only the existing in-memory legacy path.
+  const service = { ...f.source, client: { authState: { creds: restored } } }; f.source.service = service;
+  const current = { ...f.c, session_identity: identity.sessionFingerprint(restored) };
+  const logs = [], previous = console.warn; console.warn = value => logs.push(JSON.parse(value));
+  const probe = () => a.writerIsolation(f.source, current,
+    a.writerProbeTrace({ claims: Buffer.from(JSON.stringify({ action: 'writer_probe' })).toString('base64url') }));
+  try {
+    await a.configure(service, config); a.trackSocket(service.client, config);
+    assert.throws(probe, /writer_isolation_unproved/);
+    const invalid = restore(serialized); invalid.account.accountSignature = Buffer.alloc(64).toString('base64');
+    await a.observePublicAccount(config, invalid, a.verifyPublicAccountSignature, () => prefix, 'verified_restored_account');
+    assert.throws(probe, /writer_isolation_unproved/);
+    assert.equal(logs.findLast(v => v.event === 'attendance.writer_probe.attestation').attestation_present, false);
+    await a.observePublicAccount(config, restored, a.verifyPublicAccountSignature, () => prefix, 'verified_restored_account');
+    assert.equal(probe(), true);
+    // A replacement registration cannot inherit even a real verified signature.
+    const replacement = { auth: { creds: restored } }; service.client = { authState: { creds: restored } };
+    await a.configure(service, replacement); a.trackSocket(service.client, replacement);
+    assert.throws(probe, /writer_isolation_unproved/);
+    assert.equal(logs.findLast(v => v.event === 'attendance.writer_probe.attestation').attestation_present, false);
+    for (const log of logs.filter(v => v.event === 'attendance.attestation.observation'))
+      assert.deepEqual(Object.keys(log).sort(), ['event', 'registration_present', 'status', 'trigger']);
+  } finally { console.warn = previous; }
+});
+
 test('socket attestation diagnostics follow inherited config, never transfer to replacement or authorize missing evidence', async () => {
   const f = fixture(), creds = credentials(), config = { auth: { creds } }, completed = { ...config };
   f.repo.webhook.rows.length = 0; // In-memory legacy classification: no HTTP or database service.
@@ -318,6 +420,16 @@ test('socket attestation diagnostics follow inherited config, never transfer to 
     await a.observePublicAccount(completed, { ...creds, account: undefined }, () => true, () => Buffer.from([6, 0]), 'verified_restored_account');
     assert.throws(probe, /writer_isolation_unproved/);
     assert.equal(logs.findLast(v => v.event === 'attendance.writer_probe.attestation').status, 'account_material_unavailable');
+    for (const [status, key] of [['account_signature_key_missing', undefined], ['account_signature_key_wrong_type', {}],
+      ['account_signature_key_wrong_length', Buffer.alloc(31)]]) {
+      const invalid = { ...creds, account: { ...creds.account, accountSignatureKey: key } };
+      await a.observePublicAccount(completed, invalid, () => { assert.fail('verifier must not run'); },
+        () => Buffer.from([6, 0]), 'verified_restored_account');
+      assert.equal(logs.findLast(v => v.event === 'attendance.attestation.observation').status, status);
+      assert.throws(probe, /writer_isolation_unproved/);
+      const diagnostic = logs.findLast(v => v.event === 'attendance.writer_probe.attestation');
+      assert.equal(diagnostic.status, status); assert.equal(diagnostic.attestation_present, false);
+    }
     await a.observePublicAccount({}, creds, () => true, () => Buffer.from([6, 0]), 'verified_restored_account');
     assert.equal(logs.findLast(v => v.event === 'attendance.attestation.observation').registration_present, false);
     assert.throws(probe, /writer_isolation_unproved/);

@@ -386,6 +386,16 @@ function verifyPublicAccountSignature(key, bytes, signature) {
   // primitive's positive result; the Signal public key version byte is 0x05.
   return require('libsignal/src/curve.js').verifySignature(Buffer.concat([Buffer.from([5]), key]), bytes, signature) === true;
 }
+function restoredAccountBytes(value, provenance) {
+  // rc13 ADVSignedDeviceIdentity.toJSON runs before BufferJSON.replacer and
+  // emits canonical Base64 strings. BufferJSON.reviver leaves those strings
+  // intact. Restore only that bounded encoding at the restored-account hook;
+  // never mutate credentials, invent absent bytes or infer another encoding.
+  if (provenance !== 'verified_restored_account' || typeof value !== 'string' || value.length > 1368 ||
+      !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) return value;
+  const bytes = Buffer.from(value, 'base64');
+  return bytes.toString('base64') === value ? bytes : value;
+}
 function publicAttestation(credentials, verify, prefixes, provenance = 'verified_restored_account', observedAt = Date.now(), diagnose) {
   const report = status => { try { diagnose?.(status); } catch { /* Diagnostics confer no authority. */ } };
   const absent = status => { report(status); return null; };
@@ -394,29 +404,34 @@ function publicAttestation(credentials, verify, prefixes, provenance = 'verified
   if (!session) return absent('session_material_unavailable');
   if (!PN.test(pn || '') || (lid && !LID.test(lid))) return absent('account_identity_invalid');
   if (!account) return absent('account_material_unavailable');
-  if (!(account.accountSignatureKey instanceof Uint8Array) || account.accountSignatureKey.length !== 32)
-    return absent('account_signature_key_invalid');
-  if (!(account.accountSignature instanceof Uint8Array) || account.accountSignature.length !== 64)
+  const key = restoredAccountBytes(account.accountSignatureKey, provenance);
+  if (key == null) return absent('account_signature_key_missing');
+  if (!(key instanceof Uint8Array)) return absent('account_signature_key_wrong_type');
+  if (key.length !== 32) return absent('account_signature_key_wrong_length');
+  const signature = restoredAccountBytes(account.accountSignature, provenance);
+  const details = restoredAccountBytes(account.details, provenance);
+  if (!(signature instanceof Uint8Array) || signature.length !== 64)
     return absent('account_signature_invalid');
-  if (!(account.details instanceof Uint8Array) || account.details.length > 1024 || !account.details.length)
+  if (!(details instanceof Uint8Array) || details.length > 1024 || !details.length)
     return absent('account_details_invalid');
   let prefix;
-  try { prefix = prefixes(account.details); }
+  try { prefix = prefixes(details); }
   catch (error) { report('account_details_decode_failed'); throw error; }
-  const bytes = Buffer.concat([prefix, account.details, credentials.signedIdentityKey.public]);
+  const bytes = Buffer.concat([prefix, details, credentials.signedIdentityKey.public]);
   let verified;
-  try { verified = verify(account.accountSignatureKey, bytes, account.accountSignature); }
+  try { verified = verify(key, bytes, signature); }
   catch (error) { report('signature_verifier_failed'); throw error; }
   if (verified !== true) return absent('signature_rejected');
   report('verified');
   return Object.freeze({ observation_id: randomUUID(), session_identity: session, canonical_pn: pn, canonical_lid: lid || null,
-    public_material_digest: digest({ public_key: Buffer.from(account.accountSignatureKey).toString('base64'),
-      signature: Buffer.from(account.accountSignature).toString('base64'), details: Buffer.from(account.details).toString('base64') }),
+    public_material_digest: digest({ public_key: Buffer.from(key).toString('base64'),
+      signature: Buffer.from(signature).toString('base64'), details: Buffer.from(details).toString('base64') }),
     registration_digest: digest({ registration_id: credentials.registrationId, session_identity: session }),
     provenance, observed_at: observedAt });
 }
 const ATTESTATION_STATUSES = new Set(['not_observed', 'session_material_unavailable', 'account_identity_invalid',
-  'account_material_unavailable', 'account_signature_key_invalid', 'account_signature_invalid', 'account_details_invalid',
+  'account_material_unavailable', 'account_signature_key_missing', 'account_signature_key_wrong_type',
+  'account_signature_key_wrong_length', 'account_signature_invalid', 'account_details_invalid',
   'account_details_decode_failed', 'signature_verifier_failed', 'signature_rejected', 'verified', 'unexpected_failure']);
 const ATTESTATION_TRIGGERS = new Set(['verified_pairing', 'verified_restored_account']);
 function attestationDiagnostic(config, status, trigger) {
