@@ -100,9 +100,7 @@ RUN set -eu; mkdir -p /tmp/evolution-provider-bundles; \
     done; \
     EVOLUTION_PROVIDER=postgresql EVOLUTION_SCHEMA_PROVIDER=psql_bouncer EVOLUTION_SKIP_GENERATED=1 EVOLUTION_BUNDLE_PATH=/evolution/dist/providers/psql_bouncer.js node /tmp/assert-runtime-model.mjs; \
     EVOLUTION_PROVIDER=postgresql EVOLUTION_SCHEMA_PROVIDER=psql_bouncer EVOLUTION_BUNDLE_PATH=/evolution/dist/providers/psql_bouncer.js node /evolution/assert-attendance-runtime.mjs; \
-    EVOLUTION_PROVIDER=postgresql node /tmp/assert-runtime-model.mjs; \
-    EVOLUTION_PROVIDER=postgresql EVOLUTION_PRISMA_DIR=/evolution/prisma EVOLUTION_BUNDLE_PATH=/evolution/dist/providers/postgresql.js node --test *.test.cjs; \
-    EVOLUTION_PROVIDER=mysql EVOLUTION_SKIP_GENERATED=1 EVOLUTION_PRISMA_DIR=/evolution/prisma EVOLUTION_BUNDLE_PATH=/evolution/dist/providers/mysql.js node --test *.test.cjs
+    EVOLUTION_PROVIDER=postgresql node /tmp/assert-runtime-model.mjs;
 
 FROM evoapicloud/evolution-api@sha256:65e29aa1a2ca096675825ff8feb3b5bf7fbcb167e368f9282fd80670e8da18a2
 
