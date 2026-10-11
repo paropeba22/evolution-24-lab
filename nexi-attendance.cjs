@@ -81,6 +81,75 @@ function log(source, event, values = {}) {
   if (source.logger?.warn) source.logger.warn({ event, ...safe });
   else console.warn(JSON.stringify({ event, ...safe }));
 }
+const WRITER_PROBE_STAGES = new Set(['request_received', 'signed_contract_validated', 'instance_socket_verified',
+  'context_requested', 'authenticated_context_received', 'binding_fencing_validated', 'storage_guard_executed',
+  'writer_isolation_proved', 'proof_response_produced']);
+const WRITER_PROBE_PHASES = new Set(['instance_lookup', 'contract_validation', 'socket_validation', 'context_request_setup',
+  'context_transport', 'context_response', 'context_authentication', 'context_storage', 'binding_validation', 'storage_guard',
+  'writer_isolation', 'response_production']);
+const WRITER_PROBE_FAILURES = new Set(['nexi_attendance_envelope_authentication_required', 'nexi_attendance_noncanonical_material',
+  'nexi_attendance_canonical_version_unsupported', 'nexi_attendance_authority_invalid', 'nexi_attendance_writer_unavailable',
+  'nexi_attendance_boundary_invalid', 'nexi_attendance_binding_ambiguous', 'nexi_attendance_boundary_unavailable',
+  'nexi_attendance_managed_binding_missing', 'nexi_attendance_contract_unsupported', 'nexi_attendance_contract_invalid',
+  'nexi_attendance_event_limit', 'nexi_attendance_reservation_conflict', 'nexi_attendance_app_unresolved',
+  'nexi_attendance_context_invalid', 'nexi_attendance_writer_binding_conflict', 'nexi_attendance_writer_isolation_unproved']);
+function writerProbeFailure(error) {
+  try {
+    if (WRITER_PROBE_FAILURES.has(error?.code)) return error.code;
+    // These existing errors have no code. Match only exact allowlisted literals;
+    // never emit the error message itself or classify arbitrary message text.
+    const messages = { nexi_attendance_authority_storage_unguarded: 'storage_guard_rejected',
+      nexi_event_secret_missing: 'event_authentication_unavailable', nexi_event_instance_missing: 'event_identity_unavailable' };
+    if (Object.hasOwn(messages, error?.message)) return messages[error.message];
+    const code = error?.code || error?.cause?.code;
+    if (['TimeoutError', 'AbortError'].includes(error?.name) ||
+        ['ETIMEDOUT', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT'].includes(code)) return 'timeout';
+    if (error?.name === 'SyntaxError') return 'invalid_response';
+    if (['ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'EAI_AGAIN', 'UND_ERR_SOCKET'].includes(code)) return 'transport_unavailable';
+    return 'unexpected_failure';
+  } catch { return 'unexpected_failure'; }
+}
+function writerProbeTrace(envelope) {
+  try {
+    // This untrusted action hint scopes logging only, before HMAC validation.
+    if (typeof envelope?.claims !== 'string' || envelope.claims.length > 32768 ||
+        JSON.parse(Buffer.from(envelope.claims, 'base64url').toString('utf8'))?.action !== 'writer_probe') return null;
+    const correlation = digest(envelope).slice(0, 24);
+    let lastStage = null, phase = 'instance_lookup';
+    const emit = (event, values) => {
+      try { console.warn(JSON.stringify({ event, operation: 'writer_probe', correlation, ...values })); }
+      catch { /* Diagnostics must never affect authority or its response. */ }
+    };
+    return {
+      attempt(value) { if (WRITER_PROBE_PHASES.has(value)) phase = value; },
+      stage(value) {
+        if (!WRITER_PROBE_STAGES.has(value)) return;
+        lastStage = value;
+        emit('attendance.writer_probe.stage', { stage: value });
+      },
+      socketChecks(read) {
+        try {
+          const safe = Object.fromEntries(Object.entries(read()).filter(([key, value]) =>
+            ['material_valid', 'socket_open', 'owner_token_valid', 'lifecycle_current', 'session_matches'].includes(key) && typeof value === 'boolean'));
+          emit('attendance.writer_probe.socket_checks', safe);
+        } catch { /* A diagnostic read cannot replace the original checks. */ }
+      },
+      failure(error) {
+        emit('attendance.writer_probe.rejected', { last_stage: lastStage, failure_stage: phase, category: writerProbeFailure(error) });
+      },
+      instanceMissing() {
+        emit('attendance.writer_probe.rejected', { last_stage: lastStage, failure_stage: phase, category: 'instance_not_found', http_status: 404 });
+      },
+      contextHttp(status, result) {
+        if (!Number.isInteger(status) || status < 100 || status > 599 || !['success', 'http_error'].includes(result)) return;
+        emit('attendance.writer_probe.context_http', { http_status: status, result });
+      },
+      contextFailure(error) {
+        emit('attendance.writer_probe.context_failed', { category: writerProbeFailure(error) });
+      }
+    };
+  } catch { return null; }
+}
 function eventPayload(event, data) {
   if (!event.startsWith('attendance.')) return null;
   const fields = FIELDS[event];
@@ -210,18 +279,29 @@ async function boundary(source) {
       !/^[1-9]\d*$/.test(headers['X-Nexi-Chatwoot-Inbox-Id'] || '')) fail('nexi_attendance_binding_ambiguous');
   return { url, headers, enabled: webhook.enabled };
 }
-async function request(source, data, event = 'attendance.foundation.request', fetchImpl = fetch, eventId = randomUUID()) {
+async function request(source, data, event = 'attendance.foundation.request', fetchImpl = fetch, eventId = randomUUID(), writerProbe = null) {
   const destination = await boundary(source);
   if (!destination?.enabled) fail('nexi_attendance_boundary_unavailable');
   const transport = require('./nexi-transport.cjs');
   const body = { event, instance: source.instance.name, data: eventPayload(event, data) };
   const prepared = transport.prepareEvent(destination.headers, body, source.instance.name, source.instanceId);
   prepared.headers['X-Nexi-Event-Id'] = eventId;
-  const response = await fetchImpl(destination.url, { method: 'POST', redirect: 'error',
-    headers: transport.freshEventHeaders(prepared.headers, prepared.body), body: canonicalBytes(prepared.body),
-    signal: AbortSignal.timeout(10000) });
+  const probe = event === 'attendance.writer.context.request' ? writerProbe : null;
+  let response;
+  try {
+    const options = { method: 'POST', redirect: 'error',
+      headers: transport.freshEventHeaders(prepared.headers, prepared.body), body: canonicalBytes(prepared.body),
+      signal: AbortSignal.timeout(10000) };
+    probe?.attempt('context_transport');
+    probe?.stage('context_requested');
+    response = await fetchImpl(destination.url, options);
+  } catch (error) { probe?.contextFailure(error); throw error; }
+  probe?.contextHttp(response.status, response.ok ? 'success' : 'http_error');
   if (!response.ok) fail(response.status === 409 ? 'nexi_attendance_reservation_conflict' : 'nexi_attendance_app_unresolved');
-  return response.json();
+  if (!probe) return response.json();
+  probe.attempt('context_response');
+  try { return await response.json(); }
+  catch (error) { probe.contextFailure(error); throw error; }
 }
 function verifyContext(source, envelope, nonce, session) {
   if (!envelope || typeof envelope.claims !== 'string' || envelope.claims.length > 8192 ||
@@ -248,7 +328,7 @@ function verifyContext(source, envelope, nonce, session) {
     fail('nexi_attendance_context_invalid');
   return context;
 }
-async function refreshContext(source, session, fetchImpl = fetch, socketOwner = null) {
+async function refreshContext(source, session, fetchImpl = fetch, socketOwner = null, writerProbe = null) {
   const destination = await boundary(source);
   const db = source.prismaRepository.nexiManagedTransportContext;
   if (!destination) {
@@ -260,8 +340,11 @@ async function refreshContext(source, session, fetchImpl = fetch, socketOwner = 
   const envelope = await request(source, { version: 1, canonical_version: CANONICAL_VERSION, audience: 'nexi-attendance-app', provider: 'evolution-baileys',
     account_id: Number(destination.headers['X-Nexi-Chatwoot-Account-Id']), inbox_id: Number(destination.headers['X-Nexi-Chatwoot-Inbox-Id']),
     nonce, session_identity: session, ...(socketOwner ? {socket_owner:socketOwner} : {}) },
-    socketOwner ? 'attendance.writer.context.request' : 'attendance.context.request', fetchImpl, nonce);
+    socketOwner ? 'attendance.writer.context.request' : 'attendance.context.request', fetchImpl, nonce, writerProbe);
+  writerProbe?.attempt('context_authentication');
   const context = verifyContext(source, envelope, nonce, session);
+  writerProbe?.stage('authenticated_context_received');
+  writerProbe?.attempt('context_storage');
   // Nonce authenticates the exchange, not classification identity.
   const durable = { ...context }; delete durable.nonce;
   const fingerprint = digest(durable);
@@ -1100,7 +1183,7 @@ function decodeCanonicalClaims(encoded) {
 module.exports = { canonical, digest, eventPayload, settings, publicAttestation, normalizeReceipt, normalization, numericNormalization,
   configure, sessionObserved, capture, refreshContext, classification, draft, prepare, closeCollision,
   foundationCapability, bindStanza, assertNode, externalRaw, retryMessage, legacyAllowed, legacyForInstance, ReceiptWorker,
-  drain, installRoutes, requestMaterial, common, prepareClaims, rawNodeForInstance, rawNodeForSocket, trackSocket, writerIsolation,
+  drain, installRoutes, requestMaterial, common, prepareClaims, rawNodeForInstance, rawNodeForSocket, trackSocket, writerIsolation, writerProbeTrace,
   append, enqueue, inheritConfig, boundedMariaDb, recoverPreparation, semanticPurpose, markInternalControl,
   normalizeBadAck, captureBadAck, canonicalBytes, CANONICAL_VERSION, ID_PREFIX,
   beginRelay, encodingInput, patchEncoding, encodeMessage, snapshotFrame, signEnvelope, verifyEnvelope, releasedGrantCapability, boundary, envelopeSecret };

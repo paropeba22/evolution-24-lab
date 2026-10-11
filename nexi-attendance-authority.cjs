@@ -221,23 +221,40 @@ async function transportReturned(source, preparationId, consumptionId, succeeded
 }
 function installRoute(router, monitor, guard, repository) {
   router.post('/nexi/attendance/authority/:instanceName', guard, async (req,res) => {
+    let probe=null;
     try {
+      probe=attendance().writerProbeTrace(req.body);
+      probe?.stage('request_received');
       const instance=await repository.instance.findUnique({where:{name:req.params.instanceName}});
-      if (!instance) return res.sendStatus(404);
+      if (!instance) { probe?.instanceMissing(); return res.sendStatus(404); }
       const source={prismaRepository:repository,instanceId:instance.id,instance:{name:instance.name},service:monitor.waInstances[instance.name]};
+      probe?.attempt('contract_validation');
       const value=claims(source,req.body);
       if (value.action==='writer_probe') {
+        probe?.stage('signed_contract_validated');
+        probe?.attempt('socket_validation');
         const m=value.material, groups=require('./nexi-groups.cjs');
         const owner=source.service && groups.lifecycleCapture(source.service);
+        probe?.socketChecks(() => ({ material_valid:!!exact(m,['managed_channel_id','session_identity']) && Number.isSafeInteger(m?.managed_channel_id),
+          socket_open:!!source.service?.client?.ws?.isOpen, owner_token_valid:UUID.test(owner?.token || ''),
+          lifecycle_current:!!groups.lifecycleCurrent(owner),
+          session_matches:identity.sessionFingerprint(source.service?.client?.authState?.creds)===m?.session_identity }));
         if (!exact(m,['managed_channel_id','session_identity']) || !Number.isSafeInteger(m.managed_channel_id) ||
             !source.service?.client?.ws?.isOpen || !UUID.test(owner?.token || '') || !groups.lifecycleCurrent(owner) ||
             identity.sessionFingerprint(source.service.client.authState?.creds)!==m.session_identity)
           fail('nexi_attendance_writer_unavailable');
-        const context=await attendance().refreshContext(source,m.session_identity,fetch,owner.token);
+        probe?.stage('instance_socket_verified');
+        probe?.attempt('context_request_setup');
+        const context=await attendance().refreshContext(source,m.session_identity,fetch,owner.token,probe);
+        probe?.attempt('binding_validation');
         if (context.managed_channel_id!==m.managed_channel_id || context.barrier_state!=='fencing')
           fail('nexi_attendance_writer_binding_conflict');
+        probe?.stage('binding_fencing_validated');
+        probe?.attempt('storage_guard');
         await repository.$transaction(async tx => {
           await storageGuard(tx);
+          probe?.stage('storage_guard_executed');
+          probe?.attempt('writer_isolation');
           const current=await tx.instance.updateMany({where:{id:source.instanceId,nexiGroupsSocketOwner:owner.token},
             data:{nexiGroupsSocketOwner:owner.token}});
           if (current.count!==1 || !groups.lifecycleCurrent(owner) || !source.service.client?.ws?.isOpen)
@@ -245,10 +262,14 @@ function installRoute(router, monitor, guard, repository) {
           attendance().writerIsolation(source,context);
         });
         if (!groups.lifecycleCurrent(owner)) fail('nexi_attendance_writer_isolation_unproved');
-        return res.json(response(source,value,{request_digest:canonical.digest(m),writer_version:WRITER_VERSION,
+        probe?.stage('writer_isolation_proved');
+        probe?.attempt('response_production');
+        const proof=response(source,value,{request_digest:canonical.digest(m),writer_version:WRITER_VERSION,
           storage_guarded:true,physical_dispatch:true,session_identity:m.session_identity,isolated_writer:'nexi-app',
           socket_owner:owner.token,verified_account_identity:true,account_id:context.account_id,inbox_id:context.inbox_id,
-          writer_epoch:context.writer_epoch,binding_generation:context.binding_generation}));
+          writer_epoch:context.writer_epoch,binding_generation:context.binding_generation});
+        probe?.stage('proof_response_produced');
+        return res.json(proof);
       }
       if (value.action==='preparation_readback') return res.json(response(source,value,
         {...await preparationReadback(source,value),request_digest:canonical.digest(value.material)}));
@@ -258,6 +279,7 @@ function installRoute(router, monitor, guard, repository) {
       }
       return res.json(response(source,value,observed));
     } catch(error) {
+      probe?.failure(error);
       return res.status(error.code?.includes('conflict')?409:422).json({error:'nexi_attendance_authority_unresolved',physical_dispatch:false});
     }
   });
