@@ -34,6 +34,24 @@ export function patchAttendanceTsupConfig(source) {
     },
   }],`);
 }
+// Keep the exact pinned observation points; require real crypto and diagnose absence.
+export function patchAttendanceAccountObservation(source) {
+  if (source.includes('nexiAttendance.observePublicAccount(')) throw new Error('Attendance account observation already installed');
+  const observer = `    const nexiObserveAccount = (provenance) => {
+        void nexiAttendance.observePublicAccount(config, authState.creds, nexiAttendance.verifyPublicAccountSignature,
+            details => proto.ADVDeviceIdentity.decode(details).deviceType === proto.ADVEncryptionType.HOSTED
+                ? WA_ADV_HOSTED_ACCOUNT_SIG_PREFIX : WA_ADV_ACCOUNT_SIG_PREFIX, provenance);
+    };\n`;
+  source = once(source, '    // device paired for the first time', observer + '    // device paired for the first time');
+  // creds.update may not mutate the original object synchronously. Verify a
+  // bounded merged public view after pinned pairing verified account signature.
+  source = once(source, "            ev.emit('creds.update', updatedCreds);", `            ev.emit('creds.update', updatedCreds);
+            void nexiAttendance.observePublicAccount(config, { ...creds, ...updatedCreds }, nexiAttendance.verifyPublicAccountSignature,
+                details => proto.ADVDeviceIdentity.decode(details).deviceType === proto.ADVEncryptionType.HOSTED
+                    ? WA_ADV_HOSTED_ACCOUNT_SIG_PREFIX : WA_ADV_ACCOUNT_SIG_PREFIX, 'verified_pairing');`);
+  return once(source, "    ws.on('CB:success', async (node) => {\n        try {",
+    "    ws.on('CB:success', async (node) => {\n        try {\n            nexiObserveAccount('verified_restored_account');");
+}
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
 const root = process.argv[2] || '/evolution';
 const changes = [];
@@ -164,22 +182,7 @@ patch('node_modules/baileys/lib/Socket/socket.js', source => {
             return sendRawMessage(data);
         },
         sendNode,`);
-  const observer = `    const nexiObserveAccount = (provenance) => {
-        const attestation = nexiAttendance.publicAttestation(authState.creds, Curve.verify,
-            details => proto.ADVDeviceIdentity.decode(details).deviceType === proto.ADVEncryptionType.HOSTED
-                ? WA_ADV_HOSTED_ACCOUNT_SIG_PREFIX : WA_ADV_ACCOUNT_SIG_PREFIX, provenance);
-        void nexiAttendance.sessionObserved(config, attestation);
-    };\n`;
-  source = once(source, '    // device paired for the first time', observer + '    // device paired for the first time');
-  // creds.update may not mutate the original object synchronously. Verify a
-  // bounded merged public view after pinned pairing verified account signature.
-  source = once(source, "            ev.emit('creds.update', updatedCreds);", `            ev.emit('creds.update', updatedCreds);
-            const nexiPairedAccount = nexiAttendance.publicAttestation({ ...creds, ...updatedCreds }, Curve.verify,
-                details => proto.ADVDeviceIdentity.decode(details).deviceType === proto.ADVEncryptionType.HOSTED
-                    ? WA_ADV_HOSTED_ACCOUNT_SIG_PREFIX : WA_ADV_ACCOUNT_SIG_PREFIX, 'verified_pairing');
-            void nexiAttendance.sessionObserved(config, nexiPairedAccount);`);
-  return once(source, "    ws.on('CB:success', async (node) => {\n        try {",
-    "    ws.on('CB:success', async (node) => {\n        try {\n            nexiObserveAccount('verified_restored_account');");
+  return patchAttendanceAccountObservation(source);
 });
 patch('src/api/integrations/chatbot/chatwoot/services/chatwoot.service.ts', source => {
   source = once(source, '  public async receiveWebhook(instance: InstanceDto, body: any) {',

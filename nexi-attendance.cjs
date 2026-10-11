@@ -145,6 +145,17 @@ function writerProbeTrace(envelope) {
           emit('attendance.writer_probe.isolation_checks', safe);
         } catch { /* Omit unavailable diagnostics; never affect isolation. */ }
       },
+      attestationChecks(read) {
+        try {
+          const value = read();
+          const safe = Object.fromEntries(Object.entries(value).filter(([key, item]) =>
+            (key === 'status' && ATTESTATION_STATUSES.has(item)) ||
+            (key === 'trigger' && ATTESTATION_TRIGGERS.has(item)) ||
+            (['registration_present', 'credentials_object_matches', 'attestation_present', 'attestation_session_matches'].includes(key) &&
+              typeof item === 'boolean')));
+          emit('attendance.writer_probe.attestation', safe);
+        } catch { /* Diagnostic state cannot authorize a writer. */ }
+      },
       failure(error) {
         emit('attendance.writer_probe.rejected', { last_stage: lastStage, failure_stage: phase, category: writerProbeFailure(error) });
       },
@@ -370,21 +381,62 @@ async function refreshContext(source, session, fetchImpl = fetch, socketOwner = 
 
 // No private key, creds object, registration secret or Signal state leaves this
 // function. Verification is re-run for restored account public material.
-function publicAttestation(credentials, verify, prefixes, provenance = 'verified_restored_account', observedAt = Date.now()) {
+function verifyPublicAccountSignature(key, bytes, signature) {
+  // rc13 Curve.verify ignores libsignal's boolean result. Require the actual
+  // primitive's positive result; the Signal public key version byte is 0x05.
+  return require('libsignal/src/curve.js').verifySignature(Buffer.concat([Buffer.from([5]), key]), bytes, signature) === true;
+}
+function publicAttestation(credentials, verify, prefixes, provenance = 'verified_restored_account', observedAt = Date.now(), diagnose) {
+  const report = status => { try { diagnose?.(status); } catch { /* Diagnostics confer no authority. */ } };
+  const absent = status => { report(status); return null; };
   const account = credentials?.account;
   const session = identity.sessionFingerprint(credentials), pn = jid(credentials?.me?.id), lid = jid(credentials?.me?.lid);
-  if (!session || !PN.test(pn || '') || (lid && !LID.test(lid)) || !account ||
-      !(account.accountSignatureKey instanceof Uint8Array) || account.accountSignatureKey.length !== 32 ||
-      !(account.accountSignature instanceof Uint8Array) || account.accountSignature.length !== 64 ||
-      !(account.details instanceof Uint8Array) || account.details.length > 1024 || !account.details.length) return null;
-  const prefix = prefixes(account.details);
+  if (!session) return absent('session_material_unavailable');
+  if (!PN.test(pn || '') || (lid && !LID.test(lid))) return absent('account_identity_invalid');
+  if (!account) return absent('account_material_unavailable');
+  if (!(account.accountSignatureKey instanceof Uint8Array) || account.accountSignatureKey.length !== 32)
+    return absent('account_signature_key_invalid');
+  if (!(account.accountSignature instanceof Uint8Array) || account.accountSignature.length !== 64)
+    return absent('account_signature_invalid');
+  if (!(account.details instanceof Uint8Array) || account.details.length > 1024 || !account.details.length)
+    return absent('account_details_invalid');
+  let prefix;
+  try { prefix = prefixes(account.details); }
+  catch (error) { report('account_details_decode_failed'); throw error; }
   const bytes = Buffer.concat([prefix, account.details, credentials.signedIdentityKey.public]);
-  if (!verify(account.accountSignatureKey, bytes, account.accountSignature)) return null;
+  let verified;
+  try { verified = verify(account.accountSignatureKey, bytes, account.accountSignature); }
+  catch (error) { report('signature_verifier_failed'); throw error; }
+  if (verified !== true) return absent('signature_rejected');
+  report('verified');
   return Object.freeze({ observation_id: randomUUID(), session_identity: session, canonical_pn: pn, canonical_lid: lid || null,
     public_material_digest: digest({ public_key: Buffer.from(account.accountSignatureKey).toString('base64'),
       signature: Buffer.from(account.accountSignature).toString('base64'), details: Buffer.from(account.details).toString('base64') }),
     registration_digest: digest({ registration_id: credentials.registrationId, session_identity: session }),
     provenance, observed_at: observedAt });
+}
+const ATTESTATION_STATUSES = new Set(['not_observed', 'session_material_unavailable', 'account_identity_invalid',
+  'account_material_unavailable', 'account_signature_key_invalid', 'account_signature_invalid', 'account_details_invalid',
+  'account_details_decode_failed', 'signature_verifier_failed', 'signature_rejected', 'verified', 'unexpected_failure']);
+const ATTESTATION_TRIGGERS = new Set(['verified_pairing', 'verified_restored_account']);
+function attestationDiagnostic(config, status, trigger) {
+  if (!ATTESTATION_STATUSES.has(status) || !ATTESTATION_TRIGGERS.has(trigger)) return;
+  const registration = configs.get(config);
+  if (registration) registration.attestationDiagnostic = { status, trigger };
+  // No account identifiers, session fingerprints, keys, signature, creds or raw errors.
+  try { console.warn(JSON.stringify({ event: 'attendance.attestation.observation', status, trigger,
+    registration_present: !!registration })); } catch { /* Diagnostics cannot change lifecycle. */ }
+}
+function observePublicAccount(config, credentials, verify, prefixes, provenance) {
+  let status = 'unexpected_failure';
+  try {
+    const attestation = publicAttestation(credentials, verify, prefixes, provenance, Date.now(), value => { status = value; });
+    attestationDiagnostic(config, status, provenance);
+    return sessionObserved(config, attestation);
+  } catch (error) {
+    attestationDiagnostic(config, status === 'verified' ? 'unexpected_failure' : status, provenance);
+    throw error; // Preserve the existing pinned hook's failure handling.
+  }
 }
 async function enqueue(tx, source, context, event, material, sourceKey) {
   const data = eventPayload(event, { ...common(context), ...material });
@@ -986,6 +1038,11 @@ function writerIsolation(source, context, writerProbe = null) {
     !(checks.attestation_provenance_valid = ['verified_pairing','verified_restored_account'].includes(registration.attestation.provenance));
   writerProbe?.isolationChecks(() => ({ ...checks,
     ...(registration ? { attestation_present: !!registration.attestation } : {}) }));
+  writerProbe?.attestationChecks?.(() => ({ status: registration?.attestationDiagnostic?.status || 'not_observed',
+    trigger: registration?.attestationDiagnostic?.trigger, registration_present: !!registration,
+    ...(registration ? { credentials_object_matches: registration.credentials === source.service?.client?.authState?.creds,
+      attestation_present: !!registration.attestation,
+      attestation_session_matches: registration.attestation?.session_identity === session } : {}) }));
   if (rejected) fail('nexi_attendance_writer_isolation_unproved');
   // Install the fresh managed context in the lexical gate before attesting
   // isolation. Old/native customer writers remain denied by assertNode.
@@ -1199,7 +1256,8 @@ function decodeCanonicalClaims(encoded) {
   if (!Buffer.from(text, 'utf8').equals(buffer)) fail('nexi_attendance_noncanonical_material');
   return canonicalJson.parse(text);
 }
-module.exports = { canonical, digest, eventPayload, settings, publicAttestation, normalizeReceipt, normalization, numericNormalization,
+module.exports = { canonical, digest, eventPayload, settings, publicAttestation, observePublicAccount, verifyPublicAccountSignature,
+  normalizeReceipt, normalization, numericNormalization,
   configure, sessionObserved, capture, refreshContext, classification, draft, prepare, closeCollision,
   foundationCapability, bindStanza, assertNode, externalRaw, retryMessage, legacyAllowed, legacyForInstance, ReceiptWorker,
   drain, installRoutes, requestMaterial, common, prepareClaims, rawNodeForInstance, rawNodeForSocket, trackSocket, writerIsolation, writerProbeTrace,

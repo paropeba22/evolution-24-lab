@@ -253,6 +253,139 @@ test('verified public attestation excludes credentials and private keys; number 
   assert.equal(newer.canonical_pn, observation.canonical_pn); assert.notEqual(newer.session_identity, observation.session_identity);
   assert.equal(observation.session_identity, identity.sessionFingerprint(creds));
 });
+
+test('attestation diagnostics distinguish missing material, signature rejection and verifier errors without changing outcomes', () => {
+  const cases = [
+    ['session_material_unavailable', c => { delete c.signedIdentityKey; }],
+    ['account_identity_invalid', c => { c.me.id = 'invalid'; }],
+    ['account_material_unavailable', c => { delete c.account; }],
+    ['account_signature_key_invalid', c => { c.account.accountSignatureKey = Buffer.alloc(31); }],
+    ['account_signature_invalid', c => { c.account.accountSignature = Buffer.alloc(63); }],
+    ['account_details_invalid', c => { c.account.details = Buffer.alloc(0); }],
+  ];
+  for (const [expected, change] of cases) {
+    const c = credentials(), statuses = []; change(c);
+    assert.equal(a.publicAttestation(c, () => { assert.fail('verifier must not run'); }, () => Buffer.from([6, 0]),
+      'verified_restored_account', 1, value => statuses.push(value)), null);
+    assert.deepEqual(statuses, [expected]);
+  }
+  for (const expected of ['account_details_decode_failed', 'signature_verifier_failed', 'signature_rejected', 'verified']) {
+    const statuses = [], error = new Error('DO_NOT_EXPOSE');
+    const verify = () => { if (expected === 'signature_verifier_failed') throw error; return expected !== 'signature_rejected'; };
+    const prefixes = () => { if (expected === 'account_details_decode_failed') throw error; return Buffer.from([6, 0]); };
+    const run = () => a.publicAttestation(credentials(), verify, prefixes, 'verified_pairing', 1, value => statuses.push(value));
+    if (expected.endsWith('_failed')) assert.throws(run, value => value === error);
+    else assert.equal(!!run(), expected === 'verified');
+    assert.deepEqual(statuses, [expected]);
+  }
+  assert.ok(a.publicAttestation(credentials(), () => true, () => Buffer.from([6, 0]), 'verified_pairing', 1,
+    () => { throw Error('diagnostic failure'); }));
+});
+
+test('real Signal account signature remains required and rejects changed identity, details and signature', () => {
+  // Use the production primitive; no real account, connection or pairing.
+  const curve = require('libsignal/src/curve.js'), accountKey = curve.generateKeyPair(), deviceKey = curve.generateKeyPair();
+  const c = credentials(), prefix = Buffer.from([6, 0]);
+  c.signedIdentityKey.public = Buffer.from(deviceKey.pubKey.subarray(1));
+  c.account.accountSignatureKey = Buffer.from(accountKey.pubKey.subarray(1));
+  c.account.accountSignature = curve.calculateSignature(accountKey.privKey,
+    Buffer.concat([prefix, c.account.details, c.signedIdentityKey.public]));
+  const verify = a.verifyPublicAccountSignature;
+  assert.ok(a.publicAttestation(c, verify, () => prefix));
+  for (const change of [v => { v.account.accountSignature[0] ^= 1; }, v => { v.account.details[0] ^= 1; },
+    v => { v.signedIdentityKey.public[0] ^= 1; }, v => { v.account.accountSignatureKey[0] ^= 1; }]) {
+    const changed = { ...c, signedIdentityKey: { public: Buffer.from(c.signedIdentityKey.public) },
+      account: Object.fromEntries(Object.entries(c.account).map(([key, value]) => [key, Buffer.from(value)])) };
+    change(changed); const statuses = [];
+    assert.equal(a.publicAttestation(changed, verify, () => prefix, 'verified_restored_account', 1,
+      value => statuses.push(value)), null);
+    assert.deepEqual(statuses, ['signature_rejected']);
+  }
+  for (const truthy of [1, 'true', {}]) assert.equal(a.publicAttestation(c, () => truthy, () => prefix), null);
+});
+
+test('socket attestation diagnostics follow inherited config, never transfer to replacement or authorize missing evidence', async () => {
+  const f = fixture(), creds = credentials(), config = { auth: { creds } }, completed = { ...config };
+  f.repo.webhook.rows.length = 0; // In-memory legacy classification: no HTTP or database service.
+  const service = { ...f.source, client: { authState: { creds } } }; f.source.service = service;
+  const logs = [], previous = console.warn; console.warn = value => logs.push(JSON.parse(value));
+  const trace = () => a.writerProbeTrace({ claims: Buffer.from(JSON.stringify({ action: 'writer_probe' })).toString('base64url') });
+  const probe = () => a.writerIsolation(f.source, f.c, trace());
+  try {
+    await a.configure(service, config); a.inheritConfig(config, completed); a.trackSocket(service.client, config);
+    assert.throws(probe, /writer_isolation_unproved/);
+    assert.equal(logs.findLast(v => v.event === 'attendance.writer_probe.attestation').status, 'not_observed');
+    await a.observePublicAccount(completed, { ...creds, account: undefined }, () => true, () => Buffer.from([6, 0]), 'verified_restored_account');
+    assert.throws(probe, /writer_isolation_unproved/);
+    assert.equal(logs.findLast(v => v.event === 'attendance.writer_probe.attestation').status, 'account_material_unavailable');
+    await a.observePublicAccount({}, creds, () => true, () => Buffer.from([6, 0]), 'verified_restored_account');
+    assert.equal(logs.findLast(v => v.event === 'attendance.attestation.observation').registration_present, false);
+    assert.throws(probe, /writer_isolation_unproved/);
+    await a.observePublicAccount(completed, creds, () => false, () => Buffer.from([6, 0]), 'verified_restored_account');
+    assert.throws(probe, /writer_isolation_unproved/);
+    assert.throws(() => a.observePublicAccount(completed, creds, () => { throw Error('DO_NOT_EXPOSE'); },
+      () => Buffer.from([6, 0]), 'verified_restored_account'), /DO_NOT_EXPOSE/);
+    assert.throws(probe, /writer_isolation_unproved/);
+    assert.equal(logs.findLast(v => v.event === 'attendance.writer_probe.attestation').status, 'signature_verifier_failed');
+    await a.observePublicAccount(completed, creds, () => true, () => Buffer.from([6, 0]), 'verified_pairing');
+    assert.equal(probe(), true);
+    assert.equal(logs.findLast(v => v.event === 'attendance.writer_probe.attestation').credentials_object_matches, true);
+    const newer = { ...creds, me: { ...creds.me, lid: '100002@lid' } }; service.client.authState.creds = newer;
+    const current = { ...f.c, session_identity: identity.sessionFingerprint(newer) };
+    assert.throws(() => a.writerIsolation(f.source, current, trace()), /writer_isolation_unproved/);
+    const stale = logs.findLast(v => v.event === 'attendance.writer_probe.attestation');
+    assert.equal(stale.status, 'verified'); assert.equal(stale.attestation_present, true);
+    assert.equal(stale.attestation_session_matches, false); assert.equal(stale.credentials_object_matches, false);
+    const replacementConfig = { auth: { creds: newer } };
+    await a.configure(service, replacementConfig); service.client = { authState: { creds: newer } };
+    a.trackSocket(service.client, replacementConfig);
+    assert.throws(() => a.writerIsolation(f.source, current, trace()), /writer_isolation_unproved/);
+    const replaced = logs.findLast(v => v.event === 'attendance.writer_probe.attestation');
+    assert.equal(replaced.status, 'not_observed'); assert.equal(replaced.attestation_present, false);
+    for (const value of logs) {
+      assert.doesNotMatch(JSON.stringify(value), /DO_NOT_EXPOSE|5511999999999|100001@lid|session_identity|public_material_digest|registration_digest|accountSignature/);
+      assert.ok(Object.keys(value).every(key => ['event', 'status', 'trigger', 'registration_present', 'operation', 'correlation',
+        'credentials_object_matches', 'attestation_present', 'attestation_session_matches', 'registration_instance_id_matches',
+        'registration_instance_name_matches', 'context_current_session', 'context_channel_active', 'context_session_matches',
+        'attestation_provenance_valid'].includes(key)));
+    }
+    console.warn = () => { throw Error('diagnostics failed'); };
+    await a.observePublicAccount(replacementConfig, newer, () => true, () => Buffer.from([6, 0]), 'verified_restored_account');
+    assert.equal(a.writerIsolation(f.source, current, trace()), true);
+  } finally { console.warn = previous; }
+});
+
+test('pinned observation patch keeps pairing merged credentials and restored verification point; anchor drift fails closed', async () => {
+  const { patchAttendanceAccountObservation: patch } = await import('./patch-attendance-source.mjs');
+  const source = `    // device paired for the first time
+    ws.on('pair', () => {
+            ev.emit('creds.update', updatedCreds);
+    });
+    ws.on('CB:success', async (node) => {
+        try {
+            ev.emit('creds.update', { me: { ...authState.creds.me, lid: node.attrs.lid } });
+        } catch (error) { throw error; }
+    });`;
+  const result = patch(source), hooks = new Map(), calls = [], originalCreds = credentials(), updatedCreds = { me: { ...originalCreds.me, lid: '100002@lid' } };
+  const config = { auth: { creds: originalCreds } }, verify = () => true;
+  new Function('ws', 'ev', 'nexiAttendance', 'config', 'authState', 'creds', 'updatedCreds', 'Curve', 'proto',
+    'WA_ADV_HOSTED_ACCOUNT_SIG_PREFIX', 'WA_ADV_ACCOUNT_SIG_PREFIX', result)(
+    { on: (event, fn) => hooks.set(event, fn) }, { emit: (...args) => calls.push(args) },
+    { observePublicAccount: (...args) => calls.push(['observe', ...args]), verifyPublicAccountSignature: verify }, config, { creds: originalCreds },
+    originalCreds, updatedCreds, { verify }, { ADVDeviceIdentity: { decode: () => ({ deviceType: 0 }) }, ADVEncryptionType: { HOSTED: 1 } },
+    Buffer.from([6, 5]), Buffer.from([6, 0]));
+  hooks.get('pair')();
+  assert.equal(calls[0][0], 'creds.update');
+  assert.equal(calls[1][1], config); assert.equal(calls[1][2].me, updatedCreds.me);
+  assert.equal(calls[1][2].account, originalCreds.account); assert.equal(calls[1][3], verify);
+  assert.equal(calls[1][5], 'verified_pairing');
+  await hooks.get('CB:success')({ attrs: { lid: '100003@lid' } });
+  assert.equal(calls[2][0], 'observe'); assert.equal(calls[2][2], originalCreds);
+  assert.equal(calls[2][5], 'verified_restored_account'); assert.equal(calls[3][0], 'creds.update');
+  assert.throws(() => patch(source.replace('// device paired for the first time', '// drift')), /expected 1, found 0/);
+  assert.throws(() => patch(source + '\n' + source), /expected 1, found 2/);
+  assert.throws(() => patch(result), /already installed/);
+});
 test('raw receipt semantics, direction and Groups isolation never invent positive acknowledgement', () => {
   const f = fixture(), key = { remoteJid: '5511888888888@s.whatsapp.net', fromMe: true };
   for (const [type, status] of [[undefined, 'DELIVERY_ACK'], ['sender', 'SERVER_ACK'], ['read', 'READ'], ['read-self', 'READ'], ['played', 'PLAYED'], ['retry', 'UNKNOWN'], [null, 'UNKNOWN'], ['', 'UNKNOWN'], ['new', 'UNKNOWN']])

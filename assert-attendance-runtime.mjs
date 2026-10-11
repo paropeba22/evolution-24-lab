@@ -86,7 +86,7 @@ const runtimeFiles = {
   'Socket/socket.js': [['const nexiFrame = nexiAttendance.snapshotFrame(config, frame);', 1],
     ['await nexiAttendance.assertNode(config, nexiFrame);', 1], ['const buff = encodeBinaryNode(nexiFrame);', 1],
     ['nexiAttendance.externalRaw(config);', 1],
-    ['nexiAttendance.publicAttestation(', 2], ['nexiAttendance.sessionObserved(', 2]],
+    ['nexiAttendance.observePublicAccount(', 2], ['nexiAttendance.verifyPublicAccountSignature,', 2]],
   'Socket/messages-recv.js': [['await nexiAttendance.capture(config, attrs, key, ids);', 1],
     ['await nexiAttendance.captureBadAck(config, attrs, key);', 1],
     ['await nexiAttendance.retryMessage(config, { ...key, id }, msg);', 1]],
