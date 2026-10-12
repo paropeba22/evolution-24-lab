@@ -170,11 +170,10 @@ function response(source, requestClaims, materialValue, now = Date.now()) {
 }
 async function dispatchStart(source, preparationId, consumptionId, stanza) {
   const groups = require('./nexi-groups.cjs'), owner = groups.lifecycleCapture(source.service);
-  const session = identity.sessionFingerprint(source.service?.client?.authState?.creds);
-  const current = await attendance().refreshContext(source, session, fetch, owner.token);
+  const snapshot = await attendance().captureContextSnapshot(source, owner), current = snapshot.context;
   if (!UUID.test(owner.token || '') || !groups.lifecycleCurrent(owner) || !current?.physical_dispatch)
     fail('nexi_attendance_dispatch_fenced');
-  return source.prismaRepository.$transaction(async tx => {
+  const result = await source.prismaRepository.$transaction(async tx => {
     await storageGuard(tx);
     // Serialize with socket replacement across processes. A stale process
     // cannot dispatch using only its own in-memory lifecycle snapshot.
@@ -196,15 +195,24 @@ async function dispatchStart(source, preparationId, consumptionId, stanza) {
     if (row.state !== 'dispatch_ready_but_disabled' || now>=m.release.deadline || now>=m.grant.expires_at ||
         current.writer_epoch !== row.authority.writer_epoch || current.binding_generation !== row.authority.binding_generation ||
         current.session_identity !== row.sessionIdentity || current.managed_channel_id !== row.authority.managed_channel_id ||
+        !['account_id', 'inbox_id', 'instance_lineage_id', 'sender_account_lineage_id', 'sender_attestation_id']
+          .every(key => current[key] === row.authority[key]) ||
         !row.releaseConsumedAt || row.outcomeUnknown || stanza?.attrs?.id !== row.externalId || stanza?.attrs?.to !== row.recipient ||
         identity.sessionFingerprint(source.service?.client?.authState?.creds) !== row.sessionIdentity ||
         source.service.instanceId !== source.instanceId || source.service.instance.name !== source.instance.name ||
         !source.service.client?.ws?.isOpen || !require('./nexi-groups.cjs').lifecycleCurrent(owner))
       fail('nexi_attendance_dispatch_fenced');
+    // The same socket/authority used by the transport must be installed in
+    // capture before its one-way dispatch CAS. No APP call spans this lock.
+    attendance().writerIsolation(source, current);
+    attendance().installCaptureContext(snapshot);
     const changed = await db.updateMany({ where:{id:row.id,revision:row.revision,state:'dispatch_ready_but_disabled',
       consumptionId,dispatchStartedAt:null}, data:{state:'dispatch_started',dispatchStartedAt:new Date(now),outcomeUnknown:true,revision:{increment:1}} });
     return { started:changed.count===1, outcome_unknown:true };
   }, { maxWait:3000, timeout:10000 });
+  // A concurrent socket/context change after CAS is unknown, never retryable.
+  if (result.started && !attendance().captureContextCurrent(snapshot, true)) fail('nexi_attendance_capture_context_superseded');
+  return result;
 }
 async function transportReturned(source, preparationId, consumptionId, succeeded) {
   // A method return/error is separate evidence, never SERVER_ACK/not-sent.
@@ -245,9 +253,9 @@ function installRoute(router, monitor, guard, repository) {
           fail('nexi_attendance_writer_unavailable');
         probe?.stage('instance_socket_verified');
         probe?.attempt('context_request_setup');
-        const context=await attendance().refreshContext(source,m.session_identity,fetch,owner.token,probe);
+        const snapshot=await attendance().captureContextSnapshot(source,owner,probe), context=snapshot.context;
         probe?.attempt('binding_validation');
-        if (context.managed_channel_id!==m.managed_channel_id || context.barrier_state!=='fencing')
+        if (context.managed_channel_id!==m.managed_channel_id || context.session_identity!==m.session_identity || context.barrier_state!=='fencing')
           fail('nexi_attendance_writer_binding_conflict');
         probe?.stage('binding_fencing_validated');
         probe?.attempt('storage_guard');
@@ -265,17 +273,19 @@ function installRoute(router, monitor, guard, repository) {
           probe?.isolationChecks(() => checks);
           if (rejected) fail('nexi_attendance_writer_isolation_unproved');
           attendance().writerIsolation(source,context,probe);
+          attendance().installCaptureContext(snapshot);
         });
         // This separate rejection can occur while the transaction completes.
         const lifecycleCurrent=groups.lifecycleCurrent(owner);
         probe?.isolationChecks(() => ({lifecycle_current_after_transaction:!!lifecycleCurrent}));
-        if (!lifecycleCurrent) fail('nexi_attendance_writer_isolation_unproved');
+        if (!lifecycleCurrent || !attendance().captureContextCurrent(snapshot,true)) fail('nexi_attendance_writer_isolation_unproved');
         probe?.stage('writer_isolation_proved');
         probe?.attempt('response_production');
         const proof=response(source,value,{request_digest:canonical.digest(m),writer_version:WRITER_VERSION,
           storage_guarded:true,physical_dispatch:true,session_identity:m.session_identity,isolated_writer:'nexi-app',
           socket_owner:owner.token,verified_account_identity:true,account_id:context.account_id,inbox_id:context.inbox_id,
-          writer_epoch:context.writer_epoch,binding_generation:context.binding_generation});
+          writer_epoch:context.writer_epoch,binding_generation:context.binding_generation,
+          receipt_context:Object.fromEntries(['instance_lineage_id','sender_account_lineage_id','sender_attestation_id'].map(key=>[key,context[key]]))});
         probe?.stage('proof_response_produced');
         return res.json(proof);
       }

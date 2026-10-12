@@ -650,7 +650,7 @@ async function configure(service, config) {
   // callbacks of the old socket, and never assign APP attempt ownership here.
   const source = { prismaRepository: service.prismaRepository, instanceId: service.instanceId,
     instance: { name: service.instance.name }, logger: config.logger };
-  const registration = { source, context: null, ambiguous: false, credentials: config.auth?.creds };
+  const registration = { source, context: null, ambiguous: false, credentials: config.auth?.creds, contextRevision: 0 };
   configs.set(config, registration);
   try {
     const kind = await classification(source);
@@ -666,8 +666,8 @@ async function configure(service, config) {
             historical.fingerprint === digest(historical.payload) &&
             historical.payload.instance_id === source.instanceId && historical.payload.session_identity === session)
           registration.context = historical.payload; // receipt provenance only; never current send authority
-        registration.context = await refreshContext(source, session);
-        registration.ambiguous = false;
+        const snapshot = await registrationContext(registration, session);
+        installCaptureContext(snapshot);
       }
     }
   } catch { registration.ambiguous = true; log(source, 'attendance.classification_failed', { instance_id: source.instanceId }); }
@@ -683,12 +683,58 @@ async function sessionObserved(config, attestation) {
     if (await classification(registration.source) === 'legacy') return;
     // Pairing may change credentials in this exact socket. Obtain a fresh
     // authenticated context; never substitute a replacement socket's session.
-    const context = await refreshContext(registration.source, attestation.session_identity);
+    const snapshot = await registrationContext(registration, attestation.session_identity);
+    const context = snapshot.context;
     if (!context) return;
-    registration.context = context;
-    registration.ambiguous = false;
+    if (identity.sessionFingerprint(registration.credentials) !== attestation.session_identity) return;
+    // Session proof must progress even when a concurrent writer refresh wins
+    // installation. Its authenticated observation does not authorize dispatch.
     await observe(registration.source, context, attestation);
+    try { installCaptureContext(snapshot); }
+    catch (error) {
+      if (!['nexi_attendance_capture_context_superseded', 'nexi_attendance_capture_context_regression'].includes(error.code)) throw error;
+    }
   } catch { void trip(registration.source, 'session_observation_unresolved'); }
+}
+async function registrationContext(registration, session, source = registration.source, owner = null, probe = null) {
+  // Every asynchronous installer shares this socket-local sequence. An older
+  // response cannot replace a context installed by a later request.
+  const revision = ++registration.contextRevision;
+  const context = await refreshContext(source, session, fetch, owner?.token || null, probe);
+  return { registration, revision, context, owner };
+}
+async function captureContextSnapshot(source, owner, probe = null) {
+  const registration = configs.get(sockets.get(owner?.socket));
+  if (!registration || registration.source.instanceId !== source.instanceId ||
+      registration.source.instance.name !== source.instance.name || !require('./nexi-groups.cjs').lifecycleCurrent(owner))
+    fail('nexi_attendance_capture_socket_mismatch');
+  return registrationContext(registration, identity.sessionFingerprint(registration.credentials), source, owner, probe);
+}
+function captureContextCurrent(snapshot, installed = false) {
+  const { registration, revision, context, owner } = snapshot;
+  return registration.contextRevision === revision && context &&
+    context.instance_id === registration.source.instanceId && context.instance === registration.source.instance.name &&
+    context.session_identity === identity.sessionFingerprint(registration.credentials) &&
+    (!owner || require('./nexi-groups.cjs').lifecycleCurrent(owner) && configs.get(sockets.get(owner.socket)) === registration) &&
+    (!installed || registration.context === context);
+}
+function installCaptureContext(snapshot) {
+  if (!captureContextCurrent(snapshot)) fail('nexi_attendance_capture_context_superseded');
+  const { registration, context } = snapshot, previous = registration.context;
+  if (previous?.session_identity === context.session_identity) {
+    const stages = ['unresolved', 'staged', 'fencing', 'active', 'pause_requested', 'paused', 'retired'];
+    if (!['account_id', 'inbox_id', 'managed_channel_id'].every(key => previous[key] === context[key]) ||
+        context.writer_epoch < previous.writer_epoch || context.binding_generation < previous.binding_generation ||
+        context.writer_epoch === previous.writer_epoch &&
+          (stages.indexOf(context.barrier_state) < stages.indexOf(previous.barrier_state) ||
+           ['instance_lineage_id', 'sender_account_lineage_id', 'sender_attestation_id'].some(key =>
+             previous[key] != null && previous[key] !== context[key])))
+      fail('nexi_attendance_capture_context_regression');
+  }
+  // capture() dereferences this exact shared registration at receipt arrival.
+  // Already queued receipts retain their original immutable evidence/context.
+  registration.context = Object.freeze(context);
+  registration.ambiguous = false;
 }
 function validateIntent(context, intent) {
   canonicalVersion(context?.canonical_version);
@@ -1023,7 +1069,7 @@ async function assertNode(config, stanza) {
   }
   if (registration.ambiguous) fail('nexi_attendance_classification_unresolved');
   // A cached pre-activation context cannot authorize an independent writer.
-  registration.context = await refreshContext(source, identity.sessionFingerprint(config.auth?.creds));
+  installCaptureContext(await registrationContext(registration, identity.sessionFingerprint(config.auth?.creds)));
   if (registration.context?.isolation_cutover) fail('nexi_attendance_legacy_bypass_denied');
 }
 function externalRaw(config) {
@@ -1058,11 +1104,10 @@ function writerIsolation(source, context, writerProbe = null) {
     ...(registration ? { credentials_object_matches: registration.credentials === source.service?.client?.authState?.creds,
       attestation_present: !!registration.attestation,
       attestation_session_matches: registration.attestation?.session_identity === session } : {}) }));
-  if (rejected) fail('nexi_attendance_writer_isolation_unproved');
-  // Install the fresh managed context in the lexical gate before attesting
-  // isolation. Old/native customer writers remain denied by assertNode.
-  registration.context = context;
-  registration.ambiguous = false;
+  if (rejected || !['instance_lineage_id', 'sender_account_lineage_id', 'sender_attestation_id']
+    .every(key => UUID.test(context[key] || ''))) fail('nexi_attendance_writer_isolation_unproved');
+  // Verification alone cannot install an arbitrary context. The production
+  // caller installs its guarded request snapshot before CAS/proof response.
   return true;
 }
 function rawNodeForSocket(socket, node) {
@@ -1276,6 +1321,7 @@ module.exports = { canonical, digest, eventPayload, settings, publicAttestation,
   configure, sessionObserved, capture, refreshContext, classification, draft, prepare, closeCollision,
   foundationCapability, bindStanza, assertNode, externalRaw, retryMessage, legacyAllowed, legacyForInstance, ReceiptWorker,
   drain, installRoutes, requestMaterial, common, prepareClaims, rawNodeForInstance, rawNodeForSocket, trackSocket, writerIsolation, writerProbeTrace,
+  captureContextSnapshot, captureContextCurrent, installCaptureContext,
   append, enqueue, inheritConfig, boundedMariaDb, recoverPreparation, semanticPurpose, markInternalControl,
   normalizeBadAck, captureBadAck, canonicalBytes, CANONICAL_VERSION, ID_PREFIX,
   beginRelay, encodingInput, patchEncoding, encodeMessage, snapshotFrame, signEnvelope, verifyEnvelope, releasedGrantCapability, boundary, envelopeSecret };
