@@ -7,6 +7,42 @@ export function once(source, anchor, replacement) {
   if (count !== 1) throw new Error(`Attendance pinned anchor: expected 1, found ${count}: ${anchor.slice(0, 96)}`);
   return source.replace(anchor, () => replacement);
 }
+export function patchAttendanceInboundBatch(source) {
+  const start = source.indexOf("    'messages.upsert': async (");
+  const end = source.indexOf("    'messages.update': async (", start);
+  if (start < 0 || end <= start) throw new Error('Attendance inbound batch boundary changed');
+  let section = source.slice(start, end);
+  const loop = '        for (const received of messages) {\n';
+  const tail = `        }
+      } catch (error) {
+        this.logger.error(error);
+      }
+    },
+
+`;
+  // This is applied after the pinned financial/identity and Groups patches.
+  // Keep every per-message filter/capability inside the same iteration. An
+  // unrelated persistence/cache failure must not consume the remaining batch.
+  section = once(section, loop, loop + '          try {\n');
+  section = once(section, tail, `          } catch (error) {
+            if (!this.instance.name.startsWith('nexi-wa-')) throw error;
+            this.logger.warn(JSON.stringify({ event: 'nexi_inbound_item_failed', instance_id: this.instanceId,
+              external_message_id: typeof received?.key?.id === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(received.key.id)
+                ? received.key.id : null }));
+          }
+` + tail);
+  // These upstream media skips are after the Chatwoot persistence/ACK path.
+  // Neither an exception nor a media skip retries any attempted message/send.
+  for (const anchor of [
+    "                    // Skip video upload by returning early from this block\n                    return;",
+    "                      this.logger.verbose('No valid media to upload (messageContextInfo only), skipping MinIO');\n                      return;",
+  ]) {
+    section = once(section, anchor, anchor.replace('return;',
+      "if (this.instance.name.startsWith('nexi-wa-')) continue;\n" +
+      (anchor.includes('// Skip video') ? '                    ' : '                      ') + 'return;'));
+  }
+  return source.slice(0, start) + section + source.slice(end);
+}
 export function patchAttendanceSendNode(source) {
   source = once(source, '    const sendNode = (frame) => {',
     `    const sendNode = async (frame) => {
@@ -88,6 +124,7 @@ patch('src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts', sourc
       config => makeWASocket(config), nexiConnectOwner);
     ${helper}.trackSocket(nexiCreatedSocket, nexiAttendanceConfig);`;
   source = once(source, before, replacement);
+  source = patchAttendanceInboundBatch(source);
   return once(source, "  public async baileysSendNode(stanza: any) {\n    console.log('stanza', JSON.stringify(stanza));",
     `  public async baileysSendNode(stanza: any) {
     await ${helper}.rawNodeForInstance(this.prismaRepository, { instanceName: this.instance.name }, stanza);`);
