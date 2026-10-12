@@ -5,6 +5,8 @@ const { createHash } = require('node:crypto');
 // alone can manufacture it. Only the patched CB:message decrypt path marks it.
 const observations = new WeakMap();
 const routing = new WeakMap();
+const profileCaches = new WeakMap();
+const PROFILE_TTL = 6 * 60 * 60 * 1000;
 const PN = /^[1-9]\d{7,14}@s\.whatsapp\.net$/;
 // Device suffix removal is a deterministic parse of the authenticated raw
 // stanza, not a cache alias, regional number guess or PN/LID equivalence.
@@ -45,8 +47,55 @@ function observeDecrypted(message, node, credentials, history) {
   // Only a digest of the public session identity leaves this process.
   const session = sessionFingerprint(credentials);
   if (!session) return;
+  // Baileys' pinned decoder maps stanza.attrs.notify to pushName. Capture at
+  // this authenticated boundary, before normalization/caches can replace it.
+  const name = typeof a.notify === 'string' ? a.notify.trim() : '';
+  const publicName = name && name.length <= 128 && Buffer.byteLength(name) <= 512 &&
+    !/[\u0000-\u001f\u007f-\u009f]/.test(name) ? name : null;
   observations.set(message, Object.freeze({ version: 1, origin: 'baileys.cb_message.decrypt',
-    external_message_id: a.id, pn_jid: pn, lid_jid: lid, session_identity: session }));
+    external_message_id: a.id, pn_jid: pn, lid_jid: lid, session_identity: session,
+    contact_profile: Object.freeze({ public_name: publicName, name_origin: publicName ? 'baileys.stanza.notify' : null,
+      avatar_url: null, avatar_origin: null, avatar_checked_at: null }) }));
+}
+
+function avatarUrl(value) {
+  if (typeof value !== 'string' || Buffer.byteLength(value) > 2048) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && url.hostname.endsWith('.whatsapp.net') &&
+      !url.username && !url.password && !url.hash && (!url.port || url.port === '443') ? value : null;
+  } catch { return null; }
+}
+
+async function contactProfile(service, observation) {
+  if (!observation || !service.instance.name.startsWith('nexi-wa-') || !service.localChatwoot?.enabled ||
+      sessionFingerprint(service.instance.authState?.state?.creds) !== observation.session_identity) return observation;
+  let cache = profileCaches.get(service);
+  if (!cache) {
+    cache = { entries: new Map(), nextQueryAt: 0, pending: false };
+    profileCaches.set(service, cache);
+  }
+  const key = `${service.instanceId}:${observation.session_identity}:${observation.pn_jid}`;
+  const now = Date.now();
+  let profile = cache.entries.get(key);
+  if (!profile || now - profile.avatar_checked_at >= PROFILE_TTL) {
+    if (cache.pending || now < cache.nextQueryAt || typeof service.client?.profilePictureUrl !== 'function') return observation;
+    cache.pending = true;
+    cache.nextQueryAt = now + 1000;
+    // One exact PN query on the current authenticated socket. No number
+    // resolver, contact import, generic cache, scheduler or retry is involved.
+    const query = Promise.resolve().then(() => service.client.profilePictureUrl(observation.pn_jid, 'image'))
+      .catch(() => null).finally(() => { cache.pending = false; });
+    let timer;
+    const result = await Promise.race([query, new Promise(resolve => { timer = setTimeout(() => resolve(null), 2000); })]);
+    clearTimeout(timer);
+    if (sessionFingerprint(service.instance.authState?.state?.creds) !== observation.session_identity) return observation;
+    profile = { avatar_url: avatarUrl(result), avatar_origin: 'baileys.profilePictureUrl', avatar_checked_at: now };
+    cache.entries.delete(key);
+    if (cache.entries.size >= 512) cache.entries.delete(cache.entries.keys().next().value);
+    cache.entries.set(key, profile); // Unavailable/private pictures get the same bounded negative cache.
+  }
+  return Object.freeze({ ...observation, contact_profile: Object.freeze({ ...observation.contact_profile, ...profile }) });
 }
 
 function take(message, type, requestId) {
@@ -96,4 +145,4 @@ async function managedObservation(service, observation, acknowledgement, fetchIm
   throw new Error('nexi_identity_unavailable');
 }
 
-module.exports = { observeDecrypted, take, bind, associationFor, managedObservation, sessionFingerprint };
+module.exports = { observeDecrypted, take, bind, associationFor, managedObservation, sessionFingerprint, contactProfile };

@@ -187,13 +187,14 @@ patch('src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts', (inpu
           // Outgoing CTA echoes may arrive asynchronously with the full secret.
           // The send path already owns persistence and Rails owns CW history.
           if (received.key?.fromMe && ${helper}.isManagedCta(this.instance.name, received.message)) continue;
-          const trustedObservation = require('/evolution/nexi-identity.cjs').take(received, type, requestId);`,
+          let trustedObservation = require('/evolution/nexi-identity.cjs').take(received, type, requestId);`,
     'managed CTA asynchronous echo redaction');
   source = replaceOnce(source, '          const messageRaw = this.prepareMessage(received) as any;',
     `          const messageRaw = this.prepareMessage(received) as any;
           let trustedAssociation: any = null;
           if (this.instance.name.startsWith('nexi-wa-') && trustedObservation && this.localChatwoot?.enabled) {
             try {
+              trustedObservation = await require('/evolution/nexi-identity.cjs').contactProfile(this, trustedObservation);
               trustedAssociation = await require('/evolution/nexi-identity.cjs').managedObservation(this, trustedObservation);
               require('/evolution/nexi-identity.cjs').bind(messageRaw, trustedAssociation);
             } catch {

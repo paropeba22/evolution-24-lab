@@ -341,6 +341,8 @@ function prepareEvent(headers, body, instanceName, instanceId) {
 function identityPayload(data) {
   const keys = ['version', 'origin', 'external_message_id', 'pn_jid', 'lid_jid', 'session_identity', 'account_id', 'inbox_id'];
   const result = Object.fromEntries(keys.map(key => [key, data?.[key]]));
+  if (data?.contact_profile) result.contact_profile = Object.fromEntries(
+    ['public_name', 'name_origin', 'avatar_url', 'avatar_origin', 'avatar_checked_at'].map(key => [key, data.contact_profile[key]]));
   if (data?.ack) result.ack = Object.fromEntries(['message_id', 'conversation_id', 'conversation_display_id',
     'contact_id', 'contact_inbox_id', 'inbox_id', 'account_id', 'association_id', 'generation'].map(key => [key, data.ack[key]]));
   return result;
