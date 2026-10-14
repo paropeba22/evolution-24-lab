@@ -221,7 +221,9 @@ async function transportReturned(source, preparationId, consumptionId, succeeded
     const db=tx.nexiAttendancePreparation, row=await db.findUnique({where:{id:preparationId}});
     if (!row?.dispatchStartedAt || row.consumptionId!==consumptionId) fail('nexi_attendance_transport_return_unstarted');
     if (row.transportReturn) return row;
-    await db.updateMany({where:{id:row.id,revision:row.revision,state:'dispatch_started',transportReturn:null},
+    // Json? filters reject bare null. The read above and revision/state CAS
+    // already fence a concurrent return without a provider-specific JSON filter.
+    await db.updateMany({where:{id:row.id,revision:row.revision,state:'dispatch_started'},
       data:{state:succeeded?'transport_returned':'outcome_unknown',transportReturn:{boundary_returned:true,succeeded:!!succeeded},
         outcomeUnknown:true,revision:{increment:1}}});
     return db.findUnique({where:{id:row.id}});
