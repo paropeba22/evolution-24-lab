@@ -38,9 +38,6 @@ export function patchAttendanceInboundBatch(source) {
     `          const existingChat = await ${timed}(nexiInboundSpan, 'chat_lookup', () => this.prismaRepository.chat.findFirst({`);
   section = once(section, '            select: { id: true, name: true },\n          });',
     '            select: { id: true, name: true },\n          }));');
-  section = once(section, '              trustedObservation = await require(\'/evolution/nexi-identity.cjs\').contactProfile(this, trustedObservation);',
-    `              trustedObservation = await ${timed}(nexiInboundSpan, 'identity_profile',
-                () => require('/evolution/nexi-identity.cjs').contactProfile(this, trustedObservation));`);
   section = once(section, '              trustedAssociation = await require(\'/evolution/nexi-identity.cjs\').managedObservation(this, trustedObservation);',
     `              trustedAssociation = await ${timed}(nexiInboundSpan, 'identity_observation',
                 () => require('/evolution/nexi-identity.cjs').managedObservation(this, trustedObservation));`);
@@ -54,8 +51,8 @@ export function patchAttendanceInboundBatch(source) {
                       { ...trustedAssociation, message_id: chatwootSentMessage.id }));`);
   section = once(section, '            const msg = await this.prismaRepository.message.create({ data: messageData });',
     `            const msg = await ${timed}(nexiInboundSpan, 'message_persist', () => this.prismaRepository.message.create({ data: messageData }));`);
-  section = once(section, '            profilePicUrl: (await this.profilePicture(received.key.remoteJid)).profilePictureUrl,',
-    `            profilePicUrl: (await ${timed}(nexiInboundSpan, 'profile_picture', () => this.profilePicture(received.key.remoteJid))).profilePictureUrl,`);
+  section = once(section, '              : (await this.profilePicture(received.key.remoteJid)).profilePictureUrl,',
+    `              : (await ${timed}(nexiInboundSpan, 'profile_picture', () => this.profilePicture(received.key.remoteJid))).profilePictureUrl,`);
   section = once(section, '          await chatbotController.emit({',
     `          await ${timed}(nexiInboundSpan, 'chatbot_emit', () => chatbotController.emit({`);
   section = once(section, '            pushName: messageRaw.pushName,\n          });',

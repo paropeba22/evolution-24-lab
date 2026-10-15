@@ -40,6 +40,8 @@ const internalControls = new WeakMap();
 const encodings = new WeakMap();
 const scope = new AsyncLocalStorage();
 const workers = new Map();
+const outboxDrainers = new WeakMap();
+const OUTBOX_WAKE_CAPACITY = 256;
 const healthWrites = new Map();
 const inboundSpans = new WeakMap();
 const inboundArrivals = new WeakMap();
@@ -1211,6 +1213,7 @@ async function prepare(source, row, requestImpl = request) {
     if (!row.frozenAt || !row.reservationId || content !== row.contentDigest || row.preparationDigest !== digest({
       content_digest: content, authority_digest: row.authorityDigest, preparation_id: row.id,
       nonce: row.preparationNonce, revision: row.preparationRevision })) fail('nexi_attendance_frozen_digest_conflict');
+    wakeOutbox(source);
     return row;
   }
   if (!['draft', 'reserved'].includes(row.state) || row.dispatchStartedAt || row.admissionId || row.releaseId)
@@ -1268,6 +1271,9 @@ async function prepare(source, row, requestImpl = request) {
       observed_at: +current.frozenAt }, digest(['preparation', row.id]));
     return current;
   });
+  // $transaction has resolved: both the frozen preparation and its persistent
+  // event are committed. The wake is only a hint; it carries no dispatch grant.
+  wakeOutbox(source);
   log(source, 'attendance.preparation.frozen', { preparation_id: row.id, attempt_id: row.attemptId });
   return prepared;
 }
@@ -1651,7 +1657,37 @@ async function recoverPreparation(source, row) {
     log(source, 'attendance.reservation.unresolved', { preparation_id: row.id });
   }
 }
+function installOutboxDrainer(repository) {
+  if (outboxDrainers.has(repository)) return;
+  outboxDrainers.set(repository, { ready: new Map(), running: false });
+}
+function wakeOutbox(source) {
+  const state = outboxDrainers.get(source.prismaRepository);
+  if (!state) return; // Startup/restart is covered by the persisted-work poll.
+  // One queued hint per instance, with a bounded process-local hint set. A
+  // saturated hint set never changes or discards a persistent outbox row.
+  if (!state.ready.has(source.instanceId) && state.ready.size >= OUTBOX_WAKE_CAPACITY) return;
+  state.ready.set(source.instanceId, { prismaRepository: source.prismaRepository,
+    instanceId: source.instanceId, instance: { name: source.instance.name } });
+  if (state.running) return;
+  state.running = true;
+  const immediate = setImmediate(async () => {
+    try {
+      while (state.ready.size) {
+        const [instanceId, next] = state.ready.entries().next().value;
+        state.ready.delete(instanceId);
+        // All wake and poll requests share this single consumer per repository.
+        // A busy instance rejoins at the tail; each turn retains drain's batch
+        // bound, oldest-due selection, HTTP deadline, lease/CAS and backoff.
+        try { await drain(next); }
+        catch { receiptTrace(next, 'outbox_drain', { reason: 'drain_failed' }); }
+      }
+    } finally { state.running = false; }
+  });
+  immediate.unref?.();
+}
 function installRoutes(router, monitor, guard, repository) {
+  installOutboxDrainer(repository);
   require('./nexi-attendance-authority.cjs').installRoute(router,monitor,guard,repository);
   // No preparation endpoint accepts arbitrary browser/API intent. Later APP
   // workers call authenticated contracts; exported primitives cannot dispatch.
@@ -1710,9 +1746,8 @@ function installRoutes(router, monitor, guard, repository) {
       // Include unloaded/deleted instances. Outbox has no cascading Instance FK.
       const pending = await repository.nexiAttendanceEventOutbox.findMany({ where: { state: 'pending', nextAttemptAt: { lte: new Date() } },
         select: { instanceId: true, instanceName: true }, distinct: ['instanceId'], take: 20 });
-      for (const entry of pending) await drain({ prismaRepository: repository, instanceId: entry.instanceId,
-        instance: { name: entry.instanceName } }).catch(() => receiptTrace({ instanceId: entry.instanceId },
-        'outbox_drain', { reason: 'drain_failed' }));
+      for (const entry of pending) wakeOutbox({ prismaRepository: repository, instanceId: entry.instanceId,
+        instance: { name: entry.instanceName } });
       const unfinished = await repository.nexiAttendancePreparation.findMany({ where: {
         nextRecoveryAt: { lte: new Date() }, recoveryAttempts: { lt: MAX_ATTEMPTS }, OR: [
         { state: { in: ['draft', 'reserved'] } }, { state: 'definitively_not_sent', closureReason: 'collision_fenced', successorId: null }] },

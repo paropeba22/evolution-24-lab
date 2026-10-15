@@ -194,7 +194,8 @@ patch('src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts', (inpu
           let trustedAssociation: any = null;
           if (this.instance.name.startsWith('nexi-wa-') && trustedObservation && this.localChatwoot?.enabled) {
             try {
-              trustedObservation = await require('/evolution/nexi-identity.cjs').contactProfile(this, trustedObservation);
+              // The authenticated stanza already supplies the optional public name.
+              // A profile-photo query is not part of inbound authorization.
               trustedAssociation = await require('/evolution/nexi-identity.cjs').managedObservation(this, trustedObservation);
               require('/evolution/nexi-identity.cjs').bind(messageRaw, trustedAssociation);
             } catch {
@@ -216,6 +217,13 @@ patch('src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts', (inpu
               ? { id: trustedAssociation.message_id, inbox_id: trustedAssociation.inbox_id,
                   conversation_id: trustedAssociation.conversation_display_id }
               : await this.chatwootService.eventWhatsapp(`, 'duplicate inbound does not repeat CW history');
+  source = replaceOnce(source,
+    '            profilePicUrl: (await this.profilePicture(received.key.remoteJid)).profilePictureUrl,',
+    `            // Preserve an existing presentation photo without a socket query.
+            profilePicUrl: require('/evolution/nexi-identity.cjs').managedDirectMessage(this, received)
+              ? contact?.profilePicUrl
+              : (await this.profilePicture(received.key.remoteJid)).profilePictureUrl,`,
+    'managed DM profile uses persisted presentation data');
   return source;
 });
 
