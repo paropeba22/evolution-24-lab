@@ -46,8 +46,78 @@ const inboundQueues = new WeakMap();
 const inboundThrottle = new Map();
 const receiptThrottle = new Map();
 const receiptCounts = new Map();
+const diagnosticOwners = new WeakMap();
+const DIAGNOSTIC_THROTTLE_CAPACITY = 1024;
+const DIAGNOSTIC_COUNT_CAPACITY = 512;
+const DIAGNOSTIC_THROTTLE_TTL_MS = 300000;
+const DIAGNOSTIC_COUNT_TTL_MS = 900000;
+// Shared process-wide budgets: no instance/ID can increase the aggregate cap.
+const TRACE_WINDOW_MS = 60000;
+const traceBudgets = {
+  sampled: { limit: 120, remaining: 120, resetAt: 0 },
+  slow: { limit: 60, remaining: 60, resetAt: 0 },
+  failed: { limit: 60, remaining: 60, resetAt: 0 },
+};
 const INBOUND_SLOW_MS = 1000;
 
+function pruneDiagnostics(map, now) {
+  // Writes reinsert at the tail with a fixed TTL; reads never extend expiry.
+  for (const [key, value] of map) {
+    if (value.expiresAt > now) break;
+    map.delete(key);
+  }
+}
+function putDiagnostic(map, key, value, capacity, ttl, now) {
+  pruneDiagnostics(map, now);
+  map.delete(key);
+  if (map.size >= capacity) map.delete(map.keys().next().value);
+  map.set(key, { ...value, expiresAt: now + ttl });
+}
+function clearInstanceDiagnostics(service) {
+  try {
+    const owner = diagnosticOwners.get(service);
+    if (owner) owner.active = false;
+    const instanceId = diagnosticInstance({ instanceId: owner?.instanceId || service?.instanceId });
+    for (const map of [inboundThrottle, receiptThrottle, receiptCounts]) {
+      for (const [key, value] of map) if (value.instanceId === instanceId) map.delete(key);
+    }
+  } catch { /* Cleanup is diagnostic only; never interfere with lifecycle. */ }
+}
+function diagnosticInstance(source) {
+  return typeof source?.instanceId === 'string' && UUID.test(source.instanceId) ? source.instanceId : 'unknown';
+}
+function admitTrace(map, source, stage, values) {
+  if (source?.diagnosticOwner?.active === false) return null;
+  // Only bounded internal labels enter a diagnostic key, never payload IDs.
+  if (typeof stage !== 'string' || !/^[a-z_]{1,64}$/.test(stage)) return null;
+  const reason = typeof values.reason === 'string' && /^[a-z_]{1,64}$/.test(values.reason) ? values.reason : '';
+  const lane = values.result === 'sampled' ? 'sampled' : (values.result === 'failed' ||
+    reason && !['append_waiting', 'append_duplicate_race'].includes(reason)) ? 'failed' : 'slow';
+  const now = performance.now(), instanceId = diagnosticInstance(source);
+  const key = `${instanceId}:${stage}:${lane}:${reason}`;
+  pruneDiagnostics(map, now);
+  let previous = map.get(key);
+  const interval = lane === 'slow' ? 30000 : 1000;
+  const budget = traceBudgets[lane];
+  if (now >= budget.resetAt) {
+    budget.remaining = budget.limit;
+    budget.resetAt = now + TRACE_WINDOW_MS;
+  }
+  if ((previous && now - previous.at < interval) || budget.remaining <= 0) {
+    if (!previous) {
+      putDiagnostic(map, key, { instanceId, at: -Infinity, suppressed: 0 },
+        DIAGNOSTIC_THROTTLE_CAPACITY, DIAGNOSTIC_THROTTLE_TTL_MS, now);
+      previous = map.get(key);
+    }
+    previous.suppressed = Math.min(Number.MAX_SAFE_INTEGER, previous.suppressed + 1);
+    return null;
+  }
+  budget.remaining--; // Reserve before logging; failures cannot bypass the cap.
+  const suppressed = previous?.suppressed || 0;
+  putDiagnostic(map, key, { instanceId, at: now, suppressed: 0 },
+    DIAGNOSTIC_THROTTLE_CAPACITY, DIAGNOSTIC_THROTTLE_TTL_MS, now);
+  return { suppressed };
+}
 function inboundReference(source, id) {
   try {
     if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,512}$/.test(id)) return null;
@@ -56,12 +126,9 @@ function inboundReference(source, id) {
 }
 function inboundTrace(source, stage, values = {}) {
   try {
-    const throttleKey = `${source?.instanceId || 'unknown'}:${stage}:${values.result || 'unknown'}`;
-    const throttle = inboundThrottle.get(throttleKey) || { at: 0, suppressed: 0 };
+    const throttle = admitTrace(inboundThrottle, source, stage, values);
+    if (!throttle) return;
     const now = Date.now();
-    if (values.result !== 'sampled' && now - throttle.at < (values.result === 'failed' ? 1000 : 30000)) {
-      throttle.suppressed++; inboundThrottle.set(throttleKey, throttle); return;
-    }
     const effective = process.env.NEXI_RUNTIME_REVISION || '';
     const safe = { event: 'attendance.inbound_trace', stage, timestamp: new Date(now).toISOString(),
       marker: 's2-inbound-observability-v1', runtime_revision: /^[0-9a-f]{40}$/i.test(effective) ? effective : 'unknown' };
@@ -78,17 +145,13 @@ function inboundTrace(source, stage, values = {}) {
     if (values.result === 'sampled' && source?.logger?.info) source.logger.info(safe);
     else if (source?.logger?.warn) source.logger.warn(safe);
     else console.warn(JSON.stringify(safe));
-    if (values.result !== 'sampled') inboundThrottle.set(throttleKey, { at: now, suppressed: 0 });
   } catch { /* diagnostics never influence dispatch or inbound persistence */ }
 }
 function receiptTrace(source, stage, values = {}) {
   try {
-    const key = `${source?.instanceId || 'unknown'}:${stage}:${values.reason || 'slow'}`;
-    const previous = receiptThrottle.get(key) || { at: 0, suppressed: 0 };
+    const previous = admitTrace(receiptThrottle, source, stage, values);
+    if (!previous) return;
     const now = Date.now();
-    if (values.result !== 'sampled' && now - previous.at < 30000) {
-      previous.suppressed++; receiptThrottle.set(key, previous); return;
-    }
     const effective = process.env.NEXI_RUNTIME_REVISION || '';
     const data = { event: 'attendance.receipt_trace', stage, timestamp: new Date(now).toISOString(),
       marker: 's2-receipt-observability-v1', runtime_revision: /^[0-9a-f]{40}$/i.test(effective) ? effective : 'unknown' };
@@ -110,13 +173,31 @@ function receiptTrace(source, stage, values = {}) {
     if (values.result === 'sampled' && source?.logger?.info) source.logger.info(data);
     else if (source?.logger?.warn) source.logger.warn(data);
     else console.warn(JSON.stringify(data));
-    if (values.result !== 'sampled') receiptThrottle.set(key, { at: now, suppressed: 0 });
   } catch { /* diagnostics cannot affect receipt evidence */ }
+}
+function inboundFailure(service, span) {
+  try {
+    const source = span?.source || { instanceId: service.instanceId, diagnosticOwner: diagnosticOwners.get(service) };
+    const throttle = admitTrace(inboundThrottle, source, 'item_failed', { result: 'failed' });
+    if (!throttle) return;
+    const data = { event: 'nexi_inbound_item_failed' };
+    if (UUID.test(source.instanceId || '')) data.instance_id = source.instanceId;
+    if (typeof span?.ref === 'string' && /^[0-9a-f]{24}$/.test(span.ref)) data.ref = span.ref;
+    if (throttle.suppressed) data.suppressed_count = throttle.suppressed;
+    service.logger?.warn(JSON.stringify(data));
+  } catch { /* A failing logger cannot abort the remaining WhatsApp batch. */ }
 }
 function countReceipt(source, stage) {
   try {
-    const key = `${source.instanceId}:${stage}`, count = (receiptCounts.get(key) || 0) + 1;
-    receiptCounts.set(key, count);
+    if (source?.diagnosticOwner?.active === false || !['pre_buffer_observed', 'append_committed'].includes(stage)) return;
+    const now = performance.now(), instanceId = diagnosticInstance(source), key = `${instanceId}:${stage}`;
+    pruneDiagnostics(receiptCounts, now);
+    let entry = receiptCounts.get(key);
+    if (!entry) {
+      putDiagnostic(receiptCounts, key, { instanceId, count: 0 }, DIAGNOSTIC_COUNT_CAPACITY, DIAGNOSTIC_COUNT_TTL_MS, now);
+      entry = receiptCounts.get(key);
+    }
+    const count = entry.count = Math.min(Number.MAX_SAFE_INTEGER, entry.count + 1);
     if (count % 100 === 0) receiptTrace(source, `${stage}_count`, { count });
   } catch { /* diagnostic only */ }
 }
@@ -164,7 +245,8 @@ function queueEnqueued(service, events) {
     const spans = Array.isArray(messages) ? messages.map(msg => inboundSpans.get(msg))
       .filter(span => span?.source.instanceId === service.instanceId) : [];
     const at = Date.now(), tick = performance.now();
-    const source = spans[0]?.source || { instanceId: service.instanceId, logger: service.logger };
+    const source = spans[0]?.source || { instanceId: service.instanceId, logger: service.logger,
+      diagnosticOwner: diagnosticOwners.get(service) };
     const category = events?.['messaging-history.set'] ? 'history' : messages ? 'upsert' : 'other';
     const batchRef = randomUUID(), sampled = parseInt(batchRef.slice(0, 2), 16) < 4;
     for (const span of spans) {
@@ -781,12 +863,13 @@ async function append(source, context, item, limits) {
 class ReceiptWorker {
   constructor(source, limits, appendImpl = append) {
     this.source = source; this.limits = limits; this.appendImpl = appendImpl;
+    this.diagnosticSource = source;
     this.queue = []; this.bytes = 0; this.active = 0; this.activeBytes = 0;
     this.recovery = new Map(); this.recoveryBytes = 0; this.unhealthy = false;
   }
   gap(reason, item, context) {
     this.unhealthy = true;
-    receiptTrace(this.source, 'append_gap', { reason,
+    receiptTrace(this.diagnosticSource, 'append_gap', { reason,
       ref: item?.evidence?.external_id ? inboundReference(this.source, item.evidence.external_id) : null });
     if (item && !this.recovery.has(item.sourceKey) && this.recovery.size < this.limits.recoveryItems &&
         this.recoveryBytes + item.size <= this.limits.recoveryBytes) {
@@ -815,26 +898,27 @@ class ReceiptWorker {
       const job = this.queue.shift(); this.bytes -= job.item.size;
       if (job.expired) { clearTimeout(job.timer); continue; }
       this.active++; this.activeBytes += job.item.size;
+      const diagnosticSource = this.diagnosticSource;
       const queueAge = Math.round(performance.now() - job.queuedTick), appendTick = performance.now();
-      if (queueAge >= INBOUND_SLOW_MS) receiptTrace(this.source, 'append_started', { queue_age_ms: queueAge });
-      const timer = setTimeout(() => receiptTrace(this.source, 'append_wait', { reason: 'append_waiting',
+      if (queueAge >= INBOUND_SLOW_MS) receiptTrace(diagnosticSource, 'append_started', { queue_age_ms: queueAge });
+      const timer = setTimeout(() => receiptTrace(diagnosticSource, 'append_wait', { reason: 'append_waiting',
         duration_ms: Math.round(performance.now() - appendTick) }), INBOUND_SLOW_MS);
       timer.unref?.();
       Promise.resolve().then(() => this.appendImpl(this.source, job.context, job.item, this.limits)).then(row => {
         job.resolve(true);
-        countReceipt(this.source, 'append_committed');
+        countReceipt(diagnosticSource, 'append_committed');
         const ref = inboundReference(this.source, job.item.evidence?.external_id);
         if (ref && parseInt(ref.slice(0, 2), 16) < 4)
-          receiptTrace(this.source, 'append_committed', { ref, journal_id: row?.id, result: 'sampled' });
+          receiptTrace(diagnosticSource, 'append_committed', { ref, journal_id: row?.id, result: 'sampled' });
         const duration = Math.round(performance.now() - appendTick);
-        if (duration >= INBOUND_SLOW_MS) receiptTrace(this.source, 'append_ended', { duration_ms: duration, queue_age_ms: queueAge });
+        if (duration >= INBOUND_SLOW_MS) receiptTrace(diagnosticSource, 'append_ended', { duration_ms: duration, queue_age_ms: queueAge });
         if (job.item.evidence?.protocol_metadata?.origin === 'baileys.handleBadAck.pre_buffer')
           log(this.source, 'attendance.bad_ack.captured', { journal_id: row?.id });
       }, error => {
         // A competing append may have committed the same persistent identity.
         // Leave finite recovery to retry/readback, never a WhatsApp send.
         this.gap(error.code === 'P2002' ? 'append_duplicate_race' : 'append_failed', job.item, job.context); job.resolve(false);
-        receiptTrace(this.source, 'append_ended', { reason: 'append_failed',
+        receiptTrace(diagnosticSource, 'append_ended', { reason: 'append_failed',
           duration_ms: Math.round(performance.now() - appendTick), queue_age_ms: queueAge });
       }).finally(() => {
         clearTimeout(timer); clearTimeout(job.timer); this.active--; this.activeBytes -= job.item.size; this.pump();
@@ -911,6 +995,14 @@ async function configure(service, config) {
   // callbacks of the old socket, and never assign APP attempt ownership here.
   const source = { prismaRepository: service.prismaRepository, instanceId: service.instanceId,
     instance: { name: service.instance.name }, logger: config.logger };
+  try {
+    clearInstanceDiagnostics(service);
+    const owner = { instanceId: service.instanceId, active: true };
+    diagnosticOwners.set(service, owner);
+    source.diagnosticOwner = owner;
+    const worker = workers.get(service.instanceId);
+    if (worker) worker.diagnosticSource = source; // Never replace the append/recovery source.
+  } catch { /* Diagnostic ownership never changes socket configuration. */ }
   const registration = { source, context: null, ambiguous: false, credentials: config.auth?.creds, contextRevision: 0 };
   configs.set(config, registration);
   try {
@@ -1605,7 +1697,7 @@ function decodeCanonicalClaims(encoded) {
 }
 module.exports = { canonical, digest, eventPayload, settings, publicAttestation, observePublicAccount, verifyPublicAccountSignature,
   normalizeReceipt, normalization, numericNormalization, observeInbound, enqueueInbound, queueEnqueued, queueStarted, queueEnded,
-  beginInbound, failInbound, endInbound, timedInbound,
+  beginInbound, failInbound, endInbound, timedInbound, inboundFailure, clearInstanceDiagnostics,
   configure, sessionObserved, capture, refreshContext, classification, draft, prepare, closeCollision,
   foundationCapability, bindStanza, assertNode, externalRaw, retryMessage, legacyAllowed, legacyForInstance, ReceiptWorker,
   drain, installRoutes, requestMaterial, common, prepareClaims, rawNodeForInstance, rawNodeForSocket, trackSocket, writerIsolation, writerProbeTrace,

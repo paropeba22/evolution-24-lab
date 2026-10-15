@@ -245,3 +245,96 @@ observações amostradas incompletas; awaits internos sem span próprio ainda
 aparecem somente no span pai; revisão OVH desconhecida; source correto não
 recupera receipts que nunca foram emitidos/persistidos. Não está pronto para
 deploy sem revisão e validação autorizadas em missão posterior.
+# S2-R1 — correção dos bloqueios de observabilidade
+
+Esta revisão corretiva descende de
+`dea1ae902ee75395acc060390b8e620ad8c35271`. A autorização R1 permite push
+somente da candidata após conferência estática, sem promover canônicas ou
+executar deploy. As restrições históricas da análise S2 abaixo permanecem
+registradas como contexto daquela etapa.
+
+## Orçamento de emissão
+
+A seleção determinística 1/64 por ref HMAC/UUID só torna um evento elegível;
+`sampled` agora passa pelo mesmo controle antes de qualquer emissão.
+`inboundTrace`, `receiptTrace` e o log `nexi_inbound_item_failed` compartilham
+três reservas por processo: **120 sampled, 60 slow, 60 failed por janela
+monotônica de 60 segundos**. `failed` inclui falhas explícitas e razões de
+receipt, exceto `append_waiting`/`append_duplicate_race`, classificadas como slow.
+Os demais avisos/contadores usam slow. Tráfego saudável não consome a reserva
+de problemas, e lentidão não consome a reserva de falhas.
+
+As três janelas têm início na primeira tentativa após sua expiração. O teto
+combinado é 240 por conjunto de janelas; para qualquer intervalo móvel de
+60 segundos, o teto conservador é 480 por processo (duas janelas de cada
+categoria). Mais processos multiplicam o limite. Repetição de um ID, novas
+instâncias, evicção, TTL e limpeza não reiniciam essas reservas globais.
+O saldo é debitado e o estado gravado antes do logger; logger com erro não
+permite repetição irrestrita nem fallback recursivo.
+
+Há também intervalo mínimo por instância/estágio/categoria/razão: 1 s para
+sampled/falha e 30 s para slow. A evicção pode antecipar uma nova emissão dessa
+chave, mas nunca ultrapassar o orçamento global. O estado das reservas contém
+somente três objetos de tamanho fixo e números; nenhum ID de mensagem.
+
+## Memória, expiração e ciclo de vida
+
+| Map diagnóstico | Capacidade global | TTL monotônico | Evicção |
+| --- | ---: | ---: | --- |
+| `inboundThrottle` | 1.024 entradas | 300.000 ms (5 min) | FIFO da última gravação |
+| `receiptThrottle` | 1.024 entradas | 300.000 ms (5 min) | FIFO da última gravação |
+| `receiptCounts` | 512 entradas | 900.000 ms (15 min) | FIFO da criação |
+
+Limite combinado: **2.560 entradas**, inclusive se uma única instância ocupar
+toda a capacidade. Chaves têm UUID validado (ou `unknown`), estágio e razão
+limitados a 64 caracteres e categoria fixa. Os valores contêm somente escalares
+de tamanho limitado; os contadores saturam em `Number.MAX_SAFE_INTEGER`.
+Não se retêm mensagens, payloads, sockets ou credenciais nesses Maps.
+
+Toda leitura/escrita remove oportunisticamente o prefixo expirado do Map
+correspondente. Gravações reinserem no final com TTL fixo; leituras, supressões
+e incrementos não renovam TTL. Antes de inserir no limite, remove-se a entrada
+mais antiga. A ordem de expiração acompanha a ordem de inserção porque cada
+Map tem TTL único e usa relógio monotônico. Se ficar ocioso, pode reter entradas
+expiradas até a próxima operação/limpeza, sempre dentro da capacidade.
+Contadores e `suppressed_count` são diagnósticos aproximados: podem reiniciar
+por expiração, evicção ou ciclo de vida.
+
+`clearInstanceDiagnostics` remove as entradas dos três Maps para a instância.
+É chamado na reconfiguração, no callback existente de connection close,
+cancelamento manual, cleanup e descarte por `retirePending`. Todas as chamadas
+de cleanup são isoladas por try/catch, após os guards de ciclo de vida existentes.
+Um owner diagnóstico em WeakMap é invalidado, impedindo que callbacks/spans
+antigos reconstruam o estado. A reconfiguração cria um novo owner; o worker
+reutilizado recebe somente uma nova `diagnosticSource`, preservando sua source
+funcional de append/recuperação. Appends em voo capturam o owner anterior e
+seus traces são omitidos após encerramento. A memória de ownership é fraca,
+sem registro global forte de serviços nem novos timers/listeners.
+
+Outbox durável pode continuar trabalhando após fechar/remover o socket; seus
+traces sem owner de socket continuam elegíveis e sujeitos aos mesmos tetos,
+TTL e evicção. Cleanup nunca apaga journal/outbox ou modifica trabalho pendente.
+
+## Conferência estática e limitações
+
+Revisão textual dos caminhos de ID repetido, alta cardinalidade, logger com
+erro, expiração, limite cheio, troca e encerramento. As operações normais são
+constantes; prune é amortizado e limitado à capacidade, e cleanup examina no
+máximo 2.560 entradas. Nenhum novo await, consulta, IO ou agendamento no
+controle. Sem mudança em filtros, locks, CAS/fencing, WriterBarrier, grants,
+TTL de autorização, HMAC, PN/LID, dedupe, receipts, outcome_unknown ou ordenação.
+Só timestamps monotônicos diagnósticos têm TTL novo. Marcadores S2, fases,
+backlog/durações, UUIDs e referências HMAC opacas permanecem disponíveis.
+O log de falha por item mantém o nome e a sanitização e agora não pode abortar
+o restante do lote se o logger lançar exceção.
+
+O orçamento não garante justiça por instância/razão ou um trace completo.
+Sampled, problemas e falhas podem ser omitidos, além de supressões por TTL,
+evicção e owner encerrado. Ausência de log não prova ausência de receipt.
+Este orçamento cobre os traces inbound/receipt e falha por item corrigidos;
+não redefine logs existentes de autoridade, prepared outbox ou outros módulos.
+Logging continua síncrono e depende do custo do logger existente.
+Sem testes, parser, lint, build ou execução dos patchers: composição executável
+dos anchors, desempenho real e integração permanecem para validação posterior
+autorizada. Nenhum acesso à produção, deploy, envio ou reprocessamento.
+

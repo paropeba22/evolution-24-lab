@@ -28,8 +28,7 @@ export function patchAttendanceInboundBatch(source) {
   section = once(section, tail, `          } catch (error) {
             require('/evolution/nexi-attendance.cjs').failInbound(nexiInboundSpan);
             if (!this.instance.name.startsWith('nexi-wa-')) throw error;
-            this.logger.warn(JSON.stringify({ event: 'nexi_inbound_item_failed', instance_id: this.instanceId,
-              ref: nexiInboundSpan?.ref || null }));
+            require('/evolution/nexi-attendance.cjs').inboundFailure(this, nexiInboundSpan);
           } finally {
             require('/evolution/nexi-attendance.cjs').endInbound(nexiInboundSpan);
           }
@@ -255,6 +254,9 @@ patch('src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts', sourc
   source = once(source, before, replacement);
   source = patchAttendanceInboundBatch(source);
   source = patchAttendanceEventQueue(source);
+  source = once(source, "    if (connection === 'close') {",
+    `    if (connection === 'close') {
+      try { ${helper}.clearInstanceDiagnostics(this); } catch { /* Diagnostic cleanup only. */ }`);
   return once(source, "  public async baileysSendNode(stanza: any) {\n    console.log('stanza', JSON.stringify(stanza));",
     `  public async baileysSendNode(stanza: any) {
     await ${helper}.rawNodeForInstance(this.prismaRepository, { instanceName: this.instance.name }, stanza);`);

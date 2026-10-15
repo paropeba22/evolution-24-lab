@@ -63,6 +63,7 @@ async function persistLifecycle(context, args, repository = context.service.pris
 }
 function cancelLifecycle(context) {
   lifecycleCheck(context);
+  try { require('./nexi-attendance.cjs').clearInstanceDiagnostics(context.service); } catch { /* Diagnostic cleanup only. */ }
   if (!context.owner) return;
   context.owner.connectEpoch = (context.owner.connectEpoch || 0) + 1;
   context.owner.manual = true;
@@ -178,6 +179,7 @@ async function operationAwait(context, work) {
 }
 async function cleanupLifecycle(context, work) {
   lifecycleCheck(context);
+  try { require('./nexi-attendance.cjs').clearInstanceDiagnostics(context.service); } catch { /* Diagnostic cleanup only. */ }
   return context.service.prismaRepository.$transaction(async tx => {
     await persistLifecycle(context, { data: { nexiGroupsSocketOwner: context.token } }, tx);
     if (context.owner.manual) await lifecycleAwait(context, () => tx.instance.updateMany({
@@ -196,6 +198,7 @@ function trackRecovery(monitor, service, name) {
 }
 function retirePending(service, owner) {
   const socket = admissionSockets.get(service) === owner && service.client === owner.socket ? owner.socket : undefined;
+  try { require('./nexi-attendance.cjs').clearInstanceDiagnostics(service); } catch { /* Diagnostic cleanup only. */ }
   owner.retired = true;
   owner.pendingTokens?.clear();
   const entry = monitorEntries.get(service);
