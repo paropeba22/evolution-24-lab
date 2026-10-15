@@ -23,14 +23,44 @@ export function patchAttendanceInboundBatch(source) {
   // This is applied after the pinned financial/identity and Groups patches.
   // Keep every per-message filter/capability inside the same iteration. An
   // unrelated persistence/cache failure must not consume the remaining batch.
-  section = once(section, loop, loop + '          try {\n');
+  section = once(section, loop, loop +
+    `          const nexiInboundSpan = require('/evolution/nexi-attendance.cjs').beginInbound(this, received);\n          try {\n`);
   section = once(section, tail, `          } catch (error) {
+            require('/evolution/nexi-attendance.cjs').failInbound(nexiInboundSpan);
             if (!this.instance.name.startsWith('nexi-wa-')) throw error;
             this.logger.warn(JSON.stringify({ event: 'nexi_inbound_item_failed', instance_id: this.instanceId,
-              external_message_id: typeof received?.key?.id === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(received.key.id)
-                ? received.key.id : null }));
+              ref: nexiInboundSpan?.ref || null }));
+          } finally {
+            require('/evolution/nexi-attendance.cjs').endInbound(nexiInboundSpan);
           }
 ` + tail);
+  const timed = "require('/evolution/nexi-attendance.cjs').timedInbound";
+  section = once(section, '          const existingChat = await this.prismaRepository.chat.findFirst({',
+    `          const existingChat = await ${timed}(nexiInboundSpan, 'chat_lookup', () => this.prismaRepository.chat.findFirst({`);
+  section = once(section, '            select: { id: true, name: true },\n          });',
+    '            select: { id: true, name: true },\n          }));');
+  section = once(section, '              trustedObservation = await require(\'/evolution/nexi-identity.cjs\').contactProfile(this, trustedObservation);',
+    `              trustedObservation = await ${timed}(nexiInboundSpan, 'identity_profile',
+                () => require('/evolution/nexi-identity.cjs').contactProfile(this, trustedObservation));`);
+  section = once(section, '              trustedAssociation = await require(\'/evolution/nexi-identity.cjs\').managedObservation(this, trustedObservation);',
+    `              trustedAssociation = await ${timed}(nexiInboundSpan, 'identity_observation',
+                () => require('/evolution/nexi-identity.cjs').managedObservation(this, trustedObservation));`);
+  section = once(section, '              : await this.chatwootService.eventWhatsapp(',
+    `              : await ${timed}(nexiInboundSpan, 'chatwoot_http', () => this.chatwootService.eventWhatsapp(`);
+  section = once(section, '              messageRaw,\n            );', '              messageRaw,\n            ));');
+  section = once(section, `                  await require('/evolution/nexi-identity.cjs').managedObservation(this, trustedObservation,
+                    { ...trustedAssociation, message_id: chatwootSentMessage.id });`,
+    `                  await ${timed}(nexiInboundSpan, 'identity_correlation',
+                    () => require('/evolution/nexi-identity.cjs').managedObservation(this, trustedObservation,
+                      { ...trustedAssociation, message_id: chatwootSentMessage.id }));`);
+  section = once(section, '            const msg = await this.prismaRepository.message.create({ data: messageData });',
+    `            const msg = await ${timed}(nexiInboundSpan, 'message_persist', () => this.prismaRepository.message.create({ data: messageData }));`);
+  section = once(section, '            profilePicUrl: (await this.profilePicture(received.key.remoteJid)).profilePictureUrl,',
+    `            profilePicUrl: (await ${timed}(nexiInboundSpan, 'profile_picture', () => this.profilePicture(received.key.remoteJid))).profilePictureUrl,`);
+  section = once(section, '          await chatbotController.emit({',
+    `          await ${timed}(nexiInboundSpan, 'chatbot_emit', () => chatbotController.emit({`);
+  section = once(section, '            pushName: messageRaw.pushName,\n          });',
+    '            pushName: messageRaw.pushName,\n          }));');
   // These upstream media skips are after the Chatwoot persistence/ACK path.
   // Neither an exception nor a media skip retries any attempted message/send.
   for (const anchor of [
@@ -42,6 +72,52 @@ export function patchAttendanceInboundBatch(source) {
       (anchor.includes('// Skip video') ? '                    ' : '                      ') + 'return;'));
   }
   return source.slice(0, start) + section + source.slice(end);
+}
+export function patchAttendanceEventQueue(source) {
+  source = once(source, `    this.client.ev.process(async (events) => {
+      if (!require('/evolution/nexi-groups.cjs').lifecycleCurrent(nexiEventOwner)) return;
+      this.eventProcessingQueue = this.eventProcessingQueue.then(async () => {
+        try {`,
+    `    this.client.ev.process(async (events) => {
+      if (!require('/evolution/nexi-groups.cjs').lifecycleCurrent(nexiEventOwner)) return;
+      require('/evolution/nexi-attendance.cjs').queueEnqueued(this, events);
+      this.eventProcessingQueue = this.eventProcessingQueue.then(async () => {
+        const nexiQueueSpan = require('/evolution/nexi-attendance.cjs').queueStarted(this, events);
+        let nexiQueueFailed = false;
+        try {`);
+  source = once(source,
+    "            events = await require('/evolution/nexi-groups.cjs').interceptEvents(this, events);",
+    `            events = await require('/evolution/nexi-attendance.cjs').timedInbound(nexiQueueSpan,
+              'groups_intercept', () => require('/evolution/nexi-groups.cjs').interceptEvents(this, events));`);
+  source = once(source,
+    "            const settings = await require('/evolution/nexi-groups.cjs').lifecycleAwait(nexiEventOwner, () => this.findSettings());",
+    `            const settings = await require('/evolution/nexi-attendance.cjs').timedInbound(nexiQueueSpan,
+              'settings_lookup', () => require('/evolution/nexi-groups.cjs').lifecycleAwait(nexiEventOwner, () => this.findSettings()));`);
+  source = once(source, "              await this.messageHandle['messaging-history.set'](payload);",
+    `              await require('/evolution/nexi-attendance.cjs').timedInbound(nexiQueueSpan,
+                'history_handler', () => this.messageHandle['messaging-history.set'](payload));`);
+  source = once(source, "              await this.messageHandle['messages.upsert'](payload, settings);",
+    `              await require('/evolution/nexi-attendance.cjs').timedInbound(nexiQueueSpan,
+                'upsert_handler', () => this.messageHandle['messages.upsert'](payload, settings));`);
+  return once(source, `        } catch (error) {
+          this.logger.error(error);
+        }
+      });
+    });
+  }
+
+  private historySyncNotification`,
+    `        } catch (error) {
+          nexiQueueFailed = true;
+          this.logger.error(error);
+        } finally {
+          require('/evolution/nexi-attendance.cjs').queueEnded(nexiQueueSpan, nexiQueueFailed);
+        }
+      });
+    });
+  }
+
+  private historySyncNotification`);
 }
 export function patchAttendanceSendNode(source) {
   source = once(source, '    const sendNode = (frame) => {',
@@ -178,6 +254,7 @@ patch('src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts', sourc
     ${helper}.trackSocket(nexiCreatedSocket, nexiAttendanceConfig);`;
   source = once(source, before, replacement);
   source = patchAttendanceInboundBatch(source);
+  source = patchAttendanceEventQueue(source);
   return once(source, "  public async baileysSendNode(stanza: any) {\n    console.log('stanza', JSON.stringify(stanza));",
     `  public async baileysSendNode(stanza: any) {
     await ${helper}.rawNodeForInstance(this.prismaRepository, { instanceName: this.instance.name }, stanza);`);
@@ -198,8 +275,15 @@ patch('node_modules/baileys/lib/Socket/messages-recv.js', source => {
     `        if (attrs.error) {
             await nexiAttendance.captureBadAck(config, attrs, key);
             const isReachoutTimelocked = attrs.error === String(NACK_REASONS.SenderReachoutTimelocked);`);
+  source = once(source, "                await upsertMessage(msg, node.attrs.offline ? 'append' : 'notify');",
+    "                nexiAttendance.observeInbound(config, msg);\n                await upsertMessage(msg, node.attrs.offline ? 'append' : 'notify');");
   return once(source, '            msgs.push(msg);',
     '            msg = await nexiAttendance.retryMessage(config, { ...key, id }, msg);\n            msgs.push(msg);');
+});
+patch('node_modules/baileys/lib/Socket/chats.js', source => {
+  source = "import nexiAttendance from '/evolution/nexi-attendance.cjs';\n" + source;
+  return once(source, "        ev.emit('messages.upsert', { messages: [msg], type });",
+    "        nexiAttendance.enqueueInbound(config, msg);\n        ev.emit('messages.upsert', { messages: [msg], type });");
 });
 patch('node_modules/baileys/lib/Socket/messages-send.js', source => {
   source = "import nexiAttendance from '/evolution/nexi-attendance.cjs';\nimport Long from 'long';\n" + source;

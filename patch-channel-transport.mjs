@@ -225,16 +225,6 @@ const anchorPatches = [
     },
   },
   {
-    label: 'local event log redaction',
-    pattern: String.raw`let ${capture('log')}=\{local:\`\$\{${capture('origin')}\}\.sendData-Webhook\`,url:${capture('url')},\.\.\.${capture('payload')}\};this\.logger\.log\(${reference('log')}\)\}try\{if\(${capture('instance')}\?\.enabled&&${capture('regex')}\.test\(${reference('instance')}\.url\)\)`,
-    transform: (m, g) => m.replace(`...${g.payload}`, () => `...${helper}.redactEventForLog(${g.payload})`),
-  },
-  {
-    label: 'global event log redaction',
-    pattern: String.raw`let ${capture('log')}=\{local:\`\$\{${capture('origin')}\}\.sendData-Webhook-Global\`,url:${capture('url')},\.\.\.${capture('payload')}\};this\.logger\.log\(${reference('log')}\)\}try\{if\(${capture('regex')}\.test\(${reference('url')}\)\)`,
-    transform: (m, g) => m.replace(`...${g.payload}`, () => `...${helper}.redactEventForLog(${g.payload})`),
-  },
-  {
     label: 'QR terminal log',
     // The accepted source overlay fences this synchronous terminal callback.
     // Accept only the historical callback or that exact lifecycle predicate;

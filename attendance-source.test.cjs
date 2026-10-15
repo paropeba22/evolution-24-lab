@@ -16,7 +16,7 @@ const files = ['src/api/integrations/channel/whatsapp/whatsapp.baileys.service.t
   'src/api/integrations/chatbot/chatwoot/services/chatwoot.service.ts',
   'src/api/integrations/chatbot/chatwoot/utils/chatwoot-import-helper.ts', 'src/api/routes/index.router.ts',
   'src/api/repository/repository.service.ts', 'tsup.config.ts',
-  ...['index', 'socket', 'messages-send', 'messages-recv'].map(name => `node_modules/baileys/lib/Socket/${name}.js`),
+  ...['index', 'socket', 'messages-send', 'messages-recv', 'chats'].map(name => `node_modules/baileys/lib/Socket/${name}.js`),
   ...['mysql', 'postgresql', 'psql_bouncer'].map(provider => `prisma/${provider}-schema.prisma`)];
 
 test('MariaDB scoped metadata loader executes check-node while preserving unrelated JSON/YML assets', async () => {

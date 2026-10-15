@@ -4,6 +4,7 @@
 // APP-signed canonical envelopes; no actor/account/identity policy lives here.
 const identity = require('./nexi-identity.cjs');
 const canonical = require('./nexi-canonical-json.cjs');
+const { performance } = require('node:perf_hooks');
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const HASH = /^[0-9a-f]{64}$/;
 const KEYS = ['version', 'protocol_version', 'canonical_version', 'audience', 'provider', 'instance', 'instance_id',
@@ -16,6 +17,17 @@ const RELEASE_KEYS = ['release_id','request_id','request_digest','grant_id','gra
   'preparation_id','preparation_digest','deadline','decision','grant_state'];
 function attendance() { return require('./nexi-attendance.cjs'); }
 function fail(code) { throw Object.assign(new Error(code), { code }); }
+function authorityTiming(source, phase, preparationId, started, result) {
+  try {
+    const effective = process.env.NEXI_RUNTIME_REVISION || '';
+    const data = { event: 'attendance.authority_timing', phase, result, timestamp: new Date().toISOString(),
+      marker: 's2-authority-observability-v1', runtime_revision: /^[0-9a-f]{40}$/i.test(effective) ? effective : 'unknown',
+      duration_ms: Math.round(performance.now() - started) };
+    if (UUID.test(source?.instanceId || '')) data.instance_id = source.instanceId;
+    if (UUID.test(preparationId || '')) data.preparation_id = preparationId;
+    if (source?.logger?.info) source.logger.info(data); else console.info(JSON.stringify(data));
+  } catch { /* timing cannot alter authority or CAS */ }
+}
 function exact(value, keys) { return value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).sort().join(',') === [...keys].sort().join(','); }
 const WRITER_VERSION = 2;
 function physicalDispatchEnabled(source, row) {
@@ -100,8 +112,13 @@ function replay(row, m) {
 async function consumption(source, authorityClaims) {
   const m = material(authorityClaims.material);
   if (authorityClaims.request_id !== m.consumption_id) fail('nexi_attendance_consumption_identity_conflict');
-  return source.prismaRepository.$transaction(async tx => {
+  const started = performance.now();
+  try {
+    const committed = await source.prismaRepository.$transaction(async tx => {
+    authorityTiming(source, `${authorityClaims.action}.transaction_acquired`, m.grant.preparation_id, started, 'returned');
+    const guardStarted = performance.now();
     await storageGuard(tx);
+    authorityTiming(source, `${authorityClaims.action}.storage_guard`, m.grant.preparation_id, guardStarted, 'returned');
     const db = tx.nexiAttendancePreparation;
     let row = await db.findUnique({ where:{ id:m.grant.preparation_id } });
     if (!row) fail('nexi_attendance_consumption_preparation_unresolved');
@@ -126,7 +143,13 @@ async function consumption(source, authorityClaims) {
     row = await db.findUnique({ where:{id:row.id} });
     if (changed.count !== 1) { if (!row?.consumptionId) fail('nexi_attendance_consumption_conflict'); replay(row,m); }
     return result(row,m);
-  }, { maxWait:3000, timeout:10000 });
+    }, { maxWait:3000, timeout:10000 });
+    authorityTiming(source, `${authorityClaims.action}.transaction_returned`, m.grant.preparation_id, started, 'returned');
+    return committed;
+  } catch (error) {
+    authorityTiming(source, `${authorityClaims.action}.transaction_returned`, m.grant.preparation_id, started, 'failed');
+    throw error;
+  }
 }
 async function preparationReadback(source, value) {
   const m = value.material;

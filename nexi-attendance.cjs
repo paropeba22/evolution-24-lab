@@ -2,6 +2,7 @@
 
 const { createHash, createHmac, randomUUID, randomBytes, timingSafeEqual } = require('node:crypto');
 const { AsyncLocalStorage } = require('node:async_hooks');
+const { performance } = require('node:perf_hooks');
 const identity = require('./nexi-identity.cjs');
 const canonicalJson = require('./nexi-canonical-json.cjs');
 const snapshots = require('./nexi-attendance-snapshot.cjs');
@@ -40,6 +41,233 @@ const encodings = new WeakMap();
 const scope = new AsyncLocalStorage();
 const workers = new Map();
 const healthWrites = new Map();
+const inboundSpans = new WeakMap();
+const inboundQueues = new WeakMap();
+const inboundThrottle = new Map();
+const receiptThrottle = new Map();
+const receiptCounts = new Map();
+const INBOUND_SLOW_MS = 1000;
+
+function inboundReference(source, id) {
+  try {
+    if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,512}$/.test(id)) return null;
+    return createHmac('sha256', envelopeSecret(source)).update(`inbound-message:v1:${id}`).digest('hex').slice(0, 24);
+  } catch { return null; } // Missing diagnostic material must never stop capture/append/drain.
+}
+function inboundTrace(source, stage, values = {}) {
+  try {
+    const throttleKey = `${source?.instanceId || 'unknown'}:${stage}:${values.result || 'unknown'}`;
+    const throttle = inboundThrottle.get(throttleKey) || { at: 0, suppressed: 0 };
+    const now = Date.now();
+    if (values.result !== 'sampled' && now - throttle.at < (values.result === 'failed' ? 1000 : 30000)) {
+      throttle.suppressed++; inboundThrottle.set(throttleKey, throttle); return;
+    }
+    const effective = process.env.NEXI_RUNTIME_REVISION || '';
+    const safe = { event: 'attendance.inbound_trace', stage, timestamp: new Date(now).toISOString(),
+      marker: 's2-inbound-observability-v1', runtime_revision: /^[0-9a-f]{40}$/i.test(effective) ? effective : 'unknown' };
+    if (source?.instanceId && UUID.test(source.instanceId)) safe.instance_id = source.instanceId;
+    if (typeof values.ref === 'string' && /^[0-9a-f]{24}$/.test(values.ref)) safe.ref = values.ref;
+    if (typeof values.batch_ref === 'string' && UUID.test(values.batch_ref)) safe.batch_ref = values.batch_ref;
+    for (const key of ['observed_at_ms', 'buffered_at_ms', 'enqueued_at_ms', 'queue_age_ms', 'buffer_age_ms',
+      'pre_item_ms', 'duration_ms', 'observed_to_end_ms']) {
+      if (Number.isSafeInteger(values[key]) && values[key] >= 0) safe[key] = values[key];
+    }
+    if (['failed', 'slow', 'still_waiting', 'missing_observation', 'sampled'].includes(values.result)) safe.result = values.result;
+    if (['history', 'upsert', 'other'].includes(values.category)) safe.category = values.category;
+    if (throttle.suppressed) safe.suppressed_count = throttle.suppressed;
+    if (values.result === 'sampled' && source?.logger?.info) source.logger.info(safe);
+    else if (source?.logger?.warn) source.logger.warn(safe);
+    else console.warn(JSON.stringify(safe));
+    if (values.result !== 'sampled') inboundThrottle.set(throttleKey, { at: now, suppressed: 0 });
+  } catch { /* diagnostics never influence dispatch or inbound persistence */ }
+}
+function receiptTrace(source, stage, values = {}) {
+  try {
+    const key = `${source?.instanceId || 'unknown'}:${stage}:${values.reason || 'slow'}`;
+    const previous = receiptThrottle.get(key) || { at: 0, suppressed: 0 };
+    const now = Date.now();
+    if (values.result !== 'sampled' && now - previous.at < 30000) {
+      previous.suppressed++; receiptThrottle.set(key, previous); return;
+    }
+    const effective = process.env.NEXI_RUNTIME_REVISION || '';
+    const data = { event: 'attendance.receipt_trace', stage, timestamp: new Date(now).toISOString(),
+      marker: 's2-receipt-observability-v1', runtime_revision: /^[0-9a-f]{40}$/i.test(effective) ? effective : 'unknown' };
+    if (UUID.test(source?.instanceId || '')) data.instance_id = source.instanceId;
+    if (UUID.test(values.event_id || '')) data.event_id = values.event_id;
+    if (UUID.test(values.journal_id || '')) data.journal_id = values.journal_id;
+    if (typeof values.ref === 'string' && /^[0-9a-f]{24}$/.test(values.ref)) data.ref = values.ref;
+    if (['registration_missing', 'context_unavailable', 'normalization_empty', 'normalization_failed',
+      'append_failed', 'append_duplicate_race', 'append_deadline', 'append_waiting', 'queue_saturated', 'receipt_packet_limit',
+      'unsupported_address', 'receipt_repository_unavailable', 'receipt_limits_unconfigured',
+      'request_failed', 'json_unreadable', 'http_rejected', 'ack_unproved', 'ack_persist_failed',
+      'unsupported_mark_failed', 'drain_failed'].includes(values.reason))
+      data.reason = values.reason;
+    for (const name of ['duration_ms', 'queue_age_ms']) if (Number.isSafeInteger(values[name]) && values[name] >= 0)
+      data[name] = values[name];
+    if (Number.isSafeInteger(values.count) && values.count >= 0) data.count = values.count;
+    if (values.result === 'sampled') data.result = 'sampled';
+    if (previous.suppressed) data.suppressed_count = previous.suppressed;
+    if (values.result === 'sampled' && source?.logger?.info) source.logger.info(data);
+    else if (source?.logger?.warn) source.logger.warn(data);
+    else console.warn(JSON.stringify(data));
+    if (values.result !== 'sampled') receiptThrottle.set(key, { at: now, suppressed: 0 });
+  } catch { /* diagnostics cannot affect receipt evidence */ }
+}
+function countReceipt(source, stage) {
+  try {
+    const key = `${source.instanceId}:${stage}`, count = (receiptCounts.get(key) || 0) + 1;
+    receiptCounts.set(key, count);
+    if (count % 100 === 0) receiptTrace(source, `${stage}_count`, { count });
+  } catch { /* diagnostic only */ }
+}
+function preparedOutboxTrace(source, row, phase, started = null, outcome = null) {
+  try {
+    if (row.eventType !== 'attendance.transport.prepared') return;
+    const revision = process.env.NEXI_RUNTIME_REVISION || '';
+    const data = { event: 'attendance.prepared_outbox', phase, timestamp: new Date().toISOString(),
+      runtime_revision: /^[0-9a-f]{40}$/i.test(revision) ? revision : 'unknown', outcome,
+      outbox_age_ms: Math.max(0, Date.now() - +new Date(row.createdAt)) };
+    if (UUID.test(source.instanceId || '')) data.instance_id = source.instanceId;
+    if (UUID.test(row.id || '')) data.event_id = row.id;
+    if (UUID.test(row.body?.data?.preparation_id || '')) data.preparation_id = row.body.data.preparation_id;
+    if (started !== null) data.duration_ms = Math.round(performance.now() - started);
+    console.info(JSON.stringify(data));
+  } catch { /* Outbox diagnostics never affect delivery, lease or ACK. */ }
+}
+function observeInbound(config, msg) {
+  try {
+    const registration = configs.get(config);
+    if (!registration?.context || !msg || typeof msg !== 'object') return;
+    const source = registration.source;
+    const ref = inboundReference(source, msg.key?.id);
+    if (ref) {
+      const observedAt = Date.now(), sampled = parseInt(ref.slice(0, 2), 16) < 4;
+      inboundSpans.set(msg, { source, ref, observedAt, observedTick: performance.now(), sampled,
+        bufferedAt: null, bufferedTick: null, enqueuedAt: null, enqueuedTick: null,
+        queueStartedAt: null, queueStartTick: null });
+      if (sampled) inboundTrace(source, 'baileys_observed', { ref, observed_at_ms: observedAt, result: 'sampled' });
+    }
+  } catch { /* observation is diagnostic only */ }
+}
+function enqueueInbound(config, msg) {
+  try {
+    const span = inboundSpans.get(msg);
+    if (span && configs.get(config)?.source?.instanceId === span.source.instanceId) {
+      span.bufferedAt = Date.now(); span.bufferedTick = performance.now();
+    }
+  } catch { /* diagnostic only */ }
+}
+function queueEnqueued(service, events) {
+  try {
+    if (!service?.instance?.name?.startsWith('nexi-wa-')) return;
+    const messages = events?.['messages.upsert']?.messages;
+    const spans = Array.isArray(messages) ? messages.map(msg => inboundSpans.get(msg))
+      .filter(span => span?.source.instanceId === service.instanceId) : [];
+    const at = Date.now(), tick = performance.now();
+    const source = spans[0]?.source || { instanceId: service.instanceId, logger: service.logger };
+    const category = events?.['messaging-history.set'] ? 'history' : messages ? 'upsert' : 'other';
+    const batchRef = randomUUID(), sampled = parseInt(batchRef.slice(0, 2), 16) < 4;
+    for (const span of spans) {
+      span.enqueuedAt = at; span.enqueuedTick = tick; span.batchRef = batchRef; span.category = category;
+    }
+    const batch = { source, batchRef, spans, enqueuedAt: at, enqueuedTick: tick, category, sampled };
+    batch.pendingTimer = setTimeout(() => inboundTrace(source, 'queue_pending', { batch_ref: batchRef,
+      queue_age_ms: Math.round(performance.now() - tick), category, result: 'still_waiting' }), INBOUND_SLOW_MS);
+    batch.pendingTimer.unref?.();
+    inboundQueues.set(events, batch);
+    if (sampled) inboundTrace(source, 'queue_enqueued', { batch_ref: batchRef, enqueued_at_ms: at,
+      category, result: 'sampled' });
+    for (const span of spans) if (span.sampled) inboundTrace(span.source, 'queue_enqueued', { ref: span.ref, batch_ref: batchRef,
+      observed_at_ms: span.observedAt, buffered_at_ms: span.bufferedAt, enqueued_at_ms: at,
+      buffer_age_ms: span.bufferedTick ? Math.round(tick - span.bufferedTick) : null, result: 'sampled' });
+  } catch { /* diagnostic only */ }
+}
+function queueStarted(service, events) {
+  try {
+    const batch = inboundQueues.get(events);
+    if (!batch || batch.source.instanceId !== service.instanceId) return null;
+    clearTimeout(batch.pendingTimer);
+    const now = Date.now();
+    batch.startedAt = now; batch.startTick = performance.now();
+    for (const span of batch.spans) { span.queueStartedAt = now; span.queueStartTick = batch.startTick; }
+    const age = Math.round(batch.startTick - batch.enqueuedTick);
+    if (batch.sampled) inboundTrace(batch.source, 'queue_started', { batch_ref: batch.batchRef,
+      queue_age_ms: age, category: batch.category, result: 'sampled' });
+    for (const span of batch.spans) if (span.sampled) inboundTrace(span.source, 'queue_started', { ref: span.ref, batch_ref: batch.batchRef,
+      queue_age_ms: age, result: 'sampled' });
+    if (age >= INBOUND_SLOW_MS) inboundTrace(batch.source, 'queue_started', { batch_ref: batch.batchRef,
+      enqueued_at_ms: batch.enqueuedAt, queue_age_ms: age, category: batch.category, result: 'slow' });
+    batch.timer = setTimeout(() => inboundTrace(batch.source, 'queue_wait', { batch_ref: batch.batchRef,
+      duration_ms: Math.round(performance.now() - batch.startTick), category: batch.category,
+      result: 'still_waiting' }), INBOUND_SLOW_MS);
+    batch.timer.unref?.();
+    return batch;
+  } catch { return null; }
+}
+function queueEnded(batch, failed = false) {
+  if (!batch) return;
+  clearTimeout(batch.timer);
+  const duration = Math.round(performance.now() - batch.startTick);
+  if (batch.sampled) inboundTrace(batch.source, 'queue_ended', { batch_ref: batch.batchRef,
+    duration_ms: duration, category: batch.category, result: 'sampled' });
+  for (const span of batch.spans) if (span.sampled) inboundTrace(span.source, 'queue_ended', { ref: span.ref, batch_ref: batch.batchRef,
+    duration_ms: duration, result: 'sampled' });
+  if (failed || duration >= INBOUND_SLOW_MS) inboundTrace(batch.source, 'queue_ended', { batch_ref: batch.batchRef,
+    duration_ms: duration, category: batch.category, result: failed ? 'failed' : 'slow' });
+}
+function beginInbound(service, msg) {
+  try {
+    const span = inboundSpans.get(msg);
+    if (!span || span.source.instanceId !== service.instanceId) return null;
+    const startedAt = Date.now(), startTick = performance.now();
+    const queueAge = span.queueStartTick && span.enqueuedTick ? Math.round(span.queueStartTick - span.enqueuedTick) : null;
+    const bufferAge = span.enqueuedTick && span.bufferedTick ? Math.round(span.enqueuedTick - span.bufferedTick) : null;
+    const preItem = span.queueStartTick ? Math.round(startTick - span.queueStartTick) : null;
+    if (span.sampled) inboundTrace(span.source, 'handler_started', { ref: span.ref, batch_ref: span.batchRef, pre_item_ms: preItem,
+      result: 'sampled' });
+    if ([queueAge, bufferAge, preItem].some(value => value !== null && value >= INBOUND_SLOW_MS))
+      inboundTrace(span.source, 'handler_started', { ref: span.ref, batch_ref: span.batchRef, observed_at_ms: span.observedAt,
+        buffered_at_ms: span.bufferedAt, enqueued_at_ms: span.enqueuedAt, queue_age_ms: queueAge,
+        buffer_age_ms: bufferAge, pre_item_ms: preItem, result: 'slow' });
+    const running = { ...span, startedAt, startTick, queueAge, bufferAge, preItem, failed: false };
+    running.timer = setTimeout(() => inboundTrace(span.source, 'handler_wait', { ref: span.ref, batch_ref: span.batchRef,
+      duration_ms: Math.round(performance.now() - startTick), result: 'still_waiting' }), INBOUND_SLOW_MS);
+    running.timer.unref?.();
+    return running;
+  } catch { return null; }
+}
+function failInbound(span) { if (span) span.failed = true; }
+function endInbound(span) {
+  if (!span) return;
+  clearTimeout(span.timer);
+  const duration = Math.round(performance.now() - span.startTick), total = Math.round(performance.now() - span.observedTick);
+  if (span.sampled) inboundTrace(span.source, 'handler_ended', { ref: span.ref, batch_ref: span.batchRef,
+    duration_ms: duration, observed_to_end_ms: total, result: 'sampled' });
+  if (span.failed || duration >= INBOUND_SLOW_MS || total >= INBOUND_SLOW_MS)
+    inboundTrace(span.source, 'handler_ended', { ref: span.ref, batch_ref: span.batchRef, observed_at_ms: span.observedAt,
+      buffered_at_ms: span.bufferedAt, enqueued_at_ms: span.enqueuedAt, queue_age_ms: span.queueAge,
+      buffer_age_ms: span.bufferAge, pre_item_ms: span.preItem, duration_ms: duration,
+      observed_to_end_ms: total, result: span.failed ? 'failed' : 'slow' });
+}
+async function timedInbound(span, stage, work) {
+  if (!span) return work();
+  const tick = performance.now();
+  const timer = setTimeout(() => inboundTrace(span.source, stage, { ref: span.ref,
+    batch_ref: span.batchRef, category: span.category,
+    duration_ms: Math.round(performance.now() - tick), result: 'still_waiting' }), INBOUND_SLOW_MS);
+  timer.unref?.();
+  try {
+    const result = await work();
+    const duration = Math.round(performance.now() - tick);
+    if (duration >= INBOUND_SLOW_MS) inboundTrace(span.source, stage, { ref: span.ref,
+      batch_ref: span.batchRef, category: span.category, duration_ms: duration, result: 'slow' });
+    return result;
+  } catch (error) {
+    inboundTrace(span.source, stage, { ref: span.ref, batch_ref: span.batchRef, category: span.category,
+      duration_ms: Math.round(performance.now() - tick), result: 'failed' });
+    throw error;
+  } finally { clearTimeout(timer); }
+}
 
 function fail(code) { const error = new Error(code); error.code = code; throw error; }
 function envelopeSecret(source) {
@@ -558,6 +786,8 @@ class ReceiptWorker {
   }
   gap(reason, item, context) {
     this.unhealthy = true;
+    receiptTrace(this.source, 'append_gap', { reason,
+      ref: item?.evidence?.external_id ? inboundReference(this.source, item.evidence.external_id) : null });
     if (item && !this.recovery.has(item.sourceKey) && this.recovery.size < this.limits.recoveryItems &&
         this.recoveryBytes + item.size <= this.limits.recoveryBytes) {
       this.recovery.set(item.sourceKey, { item, context }); this.recoveryBytes += item.size;
@@ -573,7 +803,7 @@ class ReceiptWorker {
       this.gap('queue_saturated', item, context); return Promise.resolve(false);
     }
     return new Promise(resolve => {
-      const job = { context, item, resolve, expired: false };
+      const job = { context, item, resolve, expired: false, queuedTick: performance.now() };
       job.timer = setTimeout(() => {
         job.expired = true; this.gap('append_deadline', item, context); resolve(false);
       }, this.limits.deadlineMs);
@@ -585,16 +815,29 @@ class ReceiptWorker {
       const job = this.queue.shift(); this.bytes -= job.item.size;
       if (job.expired) { clearTimeout(job.timer); continue; }
       this.active++; this.activeBytes += job.item.size;
+      const queueAge = Math.round(performance.now() - job.queuedTick), appendTick = performance.now();
+      if (queueAge >= INBOUND_SLOW_MS) receiptTrace(this.source, 'append_started', { queue_age_ms: queueAge });
+      const timer = setTimeout(() => receiptTrace(this.source, 'append_wait', { reason: 'append_waiting',
+        duration_ms: Math.round(performance.now() - appendTick) }), INBOUND_SLOW_MS);
+      timer.unref?.();
       Promise.resolve().then(() => this.appendImpl(this.source, job.context, job.item, this.limits)).then(row => {
-        job.resolve(true); log(this.source, 'attendance.receipt.appended', { instance_id: this.source.instanceId });
+        job.resolve(true);
+        countReceipt(this.source, 'append_committed');
+        const ref = inboundReference(this.source, job.item.evidence?.external_id);
+        if (ref && parseInt(ref.slice(0, 2), 16) < 4)
+          receiptTrace(this.source, 'append_committed', { ref, journal_id: row?.id, result: 'sampled' });
+        const duration = Math.round(performance.now() - appendTick);
+        if (duration >= INBOUND_SLOW_MS) receiptTrace(this.source, 'append_ended', { duration_ms: duration, queue_age_ms: queueAge });
         if (job.item.evidence?.protocol_metadata?.origin === 'baileys.handleBadAck.pre_buffer')
           log(this.source, 'attendance.bad_ack.captured', { journal_id: row?.id });
       }, error => {
         // A competing append may have committed the same persistent identity.
         // Leave finite recovery to retry/readback, never a WhatsApp send.
         this.gap(error.code === 'P2002' ? 'append_duplicate_race' : 'append_failed', job.item, job.context); job.resolve(false);
+        receiptTrace(this.source, 'append_ended', { reason: 'append_failed',
+          duration_ms: Math.round(performance.now() - appendTick), queue_age_ms: queueAge });
       }).finally(() => {
-        clearTimeout(job.timer); this.active--; this.activeBytes -= job.item.size; this.pump();
+        clearTimeout(timer); clearTimeout(job.timer); this.active--; this.activeBytes -= job.item.size; this.pump();
       });
       // A timed-out DB promise still occupies its slot until settlement. It
       // cannot create an unbounded tail of unresolved append operations.
@@ -611,24 +854,42 @@ class ReceiptWorker {
 }
 async function capture(config, attrs, key, ids, normalize = normalizeReceipt) {
   const registration = configs.get(config);
-  if (!registration) return;
+  if (!registration) { receiptTrace({}, 'pre_buffer', { reason: 'registration_missing' }); return; }
   const { source, context } = registration;
-  if (![PN, LID].some(pattern => pattern.test(jid(key?.remoteJid) || ''))) return;
+  if (![PN, LID].some(pattern => pattern.test(jid(key?.remoteJid) || ''))) {
+    receiptTrace(source, 'pre_buffer', { reason: 'unsupported_address' }); return;
+  }
   if (!context) {
     if (registration.ambiguous) {
       log(source, 'attendance.receipt.classification_failed', { instance_id: source.instanceId });
       void trip(source, 'receipt_classification_unresolved');
     }
+    receiptTrace(source, 'pre_buffer', { reason: 'context_unavailable' });
     return;
   }
-  if (!source.receiptRepository) { void trip(source, 'receipt_repository_unavailable'); return; }
+  if (!source.receiptRepository) {
+    receiptTrace(source, 'pre_buffer', { reason: 'receipt_repository_unavailable' });
+    void trip(source, 'receipt_repository_unavailable'); return;
+  }
   let worker = workers.get(source.instanceId);
   if (!worker) {
     try { worker = new ReceiptWorker(source, settings()); workers.set(source.instanceId, worker); }
-    catch { void trip(source, 'receipt_limits_unconfigured'); return; }
+    catch {
+      receiptTrace(source, 'pre_buffer', { reason: 'receipt_limits_unconfigured' });
+      void trip(source, 'receipt_limits_unconfigured'); return;
+    }
   }
-  const evidence = normalize(context, attrs, key, ids);
+  let evidence;
+  try { evidence = normalize(context, attrs, key, ids); }
+  catch (error) { receiptTrace(source, 'pre_buffer', { reason: 'normalization_failed' }); throw error; }
   if (ids.length > 128) worker.gap('receipt_packet_limit');
+  if (ids.length && !evidence.length) receiptTrace(source, 'pre_buffer', { reason: 'normalization_empty' });
+  for (const item of evidence) {
+    countReceipt(source, 'pre_buffer_observed');
+    const ref = inboundReference(source, item.evidence.external_id);
+    if (ref && parseInt(ref.slice(0, 2), 16) < 4)
+      receiptTrace(source, 'pre_buffer_observed', { ref, result: 'sampled' });
+  }
   await Promise.all(evidence.map(item => worker.submit(context, item)));
 }
 async function captureBadAck(config, attrs, key) {
@@ -1176,6 +1437,8 @@ async function drain(source, fetchImpl = fetch, limit = 20) {
     const row = await db.findFirst({ where: eligible, orderBy: { createdAt: 'asc' } });
     if (!row) return;
     row.body = canonical(row.body);
+    const receiptRef = row.eventType === 'attendance.receipt.observed'
+      ? inboundReference(source, row.body.data?.external_id) : null;
     if (row.canonicalVersion !== CANONICAL_VERSION || row.body.data?.canonical_version !== CANONICAL_VERSION ||
         row.version !== 1 || !FIELDS[row.eventType] || digest(row.body) !== row.fingerprint) {
       if (row.canonicalVersion !== CANONICAL_VERSION || row.body.data?.canonical_version !== CANONICAL_VERSION)
@@ -1186,7 +1449,12 @@ async function drain(source, fetchImpl = fetch, limit = 20) {
     const claimed = await db.updateMany({ where: { id: row.id, ...eligible }, data: {
       leaseToken: token, leaseUntil: new Date(Date.now() + 30000), attempts: { increment: 1 } } });
     if (claimed.count !== 1) continue;
-    let settled = false;
+    let settled = false, deliveryReason = 'request_failed', deliveryOutcome = 'unresolved';
+    const deliveryTick = performance.now();
+    preparedOutboxTrace(source, row, 'delivery_started');
+    const waiting = setTimeout(() => receiptTrace(source, 'outbox_wait', { event_id: row.id,
+      duration_ms: Math.round(performance.now() - deliveryTick) }), INBOUND_SLOW_MS);
+    waiting.unref?.();
     try {
       const transport = require('./nexi-transport.cjs');
       const prepared = transport.prepareEvent(destination.headers, row.body, row.instanceName, row.instanceId);
@@ -1194,19 +1462,37 @@ async function drain(source, fetchImpl = fetch, limit = 20) {
       const response = await fetchImpl(destination.url, { method: 'POST', redirect: 'error',
         headers: transport.freshEventHeaders(prepared.headers, row.body), body: canonicalBytes(row.body),
         signal: AbortSignal.timeout(10000) });
+      deliveryReason = response.ok ? 'json_unreadable' : 'http_rejected';
       const ack = response.ok ? await response.json() : null;
+      if (response.ok) deliveryReason = 'ack_unproved';
       if (ack?.ack === 'persisted' && ack.event_id === row.id && ack.fingerprint === row.fingerprint && ack.version === 1) {
-        await db.updateMany({ where: { id: row.id, state: 'pending', leaseToken: token }, data: {
+        deliveryReason = 'ack_persist_failed';
+        const acknowledged = await db.updateMany({ where: { id: row.id, state: 'pending', leaseToken: token }, data: {
           state: 'acknowledged', acknowledgedAt: new Date(), leaseToken: null, leaseUntil: null } });
         settled = true;
+        deliveryReason = null;
+        deliveryOutcome = acknowledged.count === 1 ? 'ack_persisted' : 'ack_cas_not_won';
       }
       // Unsupported APP schema is retained with immutable UUID/body. It can be
       // explicitly re-enabled after compatible APP deployment; never dropped.
       if ([400, 404, 422].includes(response.status)) {
+        deliveryReason = 'unsupported_mark_failed';
         await db.updateMany({ where: { id: row.id, state: 'pending', leaseToken: token },
           data: { state: 'unsupported', leaseToken: null, leaseUntil: null } }); settled = true;
+        deliveryReason = null;
+        deliveryOutcome = 'unsupported_response';
       }
     } catch { /* response loss leaves the same durable event pending */ }
+    finally { clearTimeout(waiting); }
+    preparedOutboxTrace(source, row, 'delivery_ended', deliveryTick, deliveryReason || deliveryOutcome);
+    if (deliveryReason) receiptTrace(source, 'outbox_delivery', { event_id: row.id, ref: receiptRef, reason: deliveryReason,
+      duration_ms: Math.round(performance.now() - deliveryTick) });
+    else if (performance.now() - deliveryTick >= INBOUND_SLOW_MS)
+      receiptTrace(source, 'outbox_delivery', { event_id: row.id, ref: receiptRef,
+        duration_ms: Math.round(performance.now() - deliveryTick) });
+    else if (receiptRef && parseInt(receiptRef.slice(0, 2), 16) < 4)
+      receiptTrace(source, `outbox_${deliveryOutcome}`, { event_id: row.id, ref: receiptRef,
+        journal_id: row.body.data?.journal_id, result: 'sampled' });
     if (!settled) {
       await db.updateMany({ where: { id: row.id, state: 'pending', leaseToken: token }, data: {
         state: row.attempts + 1 >= MAX_ATTEMPTS ? 'quarantined' : 'pending', leaseToken: null, leaseUntil: null,
@@ -1287,7 +1573,8 @@ function installRoutes(router, monitor, guard, repository) {
       const pending = await repository.nexiAttendanceEventOutbox.findMany({ where: { state: 'pending', nextAttemptAt: { lte: new Date() } },
         select: { instanceId: true, instanceName: true }, distinct: ['instanceId'], take: 20 });
       for (const entry of pending) await drain({ prismaRepository: repository, instanceId: entry.instanceId,
-        instance: { name: entry.instanceName } }).catch(() => {});
+        instance: { name: entry.instanceName } }).catch(() => receiptTrace({ instanceId: entry.instanceId },
+        'outbox_drain', { reason: 'drain_failed' }));
       const unfinished = await repository.nexiAttendancePreparation.findMany({ where: {
         nextRecoveryAt: { lte: new Date() }, recoveryAttempts: { lt: MAX_ATTEMPTS }, OR: [
         { state: { in: ['draft', 'reserved'] } }, { state: 'definitively_not_sent', closureReason: 'collision_fenced', successorId: null }] },
@@ -1317,7 +1604,8 @@ function decodeCanonicalClaims(encoded) {
   return canonicalJson.parse(text);
 }
 module.exports = { canonical, digest, eventPayload, settings, publicAttestation, observePublicAccount, verifyPublicAccountSignature,
-  normalizeReceipt, normalization, numericNormalization,
+  normalizeReceipt, normalization, numericNormalization, observeInbound, enqueueInbound, queueEnqueued, queueStarted, queueEnded,
+  beginInbound, failInbound, endInbound, timedInbound,
   configure, sessionObserved, capture, refreshContext, classification, draft, prepare, closeCollision,
   foundationCapability, bindStanza, assertNode, externalRaw, retryMessage, legacyAllowed, legacyForInstance, ReceiptWorker,
   drain, installRoutes, requestMaterial, common, prepareClaims, rawNodeForInstance, rawNodeForSocket, trackSocket, writerIsolation, writerProbeTrace,

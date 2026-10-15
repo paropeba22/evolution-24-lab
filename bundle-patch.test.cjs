@@ -253,10 +253,8 @@ test('remaining anchors bind renamed identifiers and fail closed', async (t) => 
       `let e=await this.clientCw(t);if(!e)return this.logger.warn("client not found"),null;if(await this.cache.has(A)){let c=await this.cache.get(A);if(${h}.inboxMatches(c,this.provider,t.instanceName))return c;await this.cache.delete(A)}`, 'cache.get(A)', 'cache.get(wrong)'],
     ['stable Inbox ID resolution', 'async getInbox(t){let n=s.payload.find(a=>a.name===this.getClientCwConfig().nameInbox);return n?(this.cache.set(A,n),n):(this.logger.warn("inbox not found"),null)}async next(){}',
       `async getInbox(t){let n=${h}.resolveConfiguredInbox(s.payload,this.provider,t.instanceName);return n?(this.cache.set(A,n),n):(this.logger.warn("inbox not found"),null)}async next(){}`, 'a.name', 'wrong.name'],
-    ['local event log redaction', 'let M={local:`${e}.sendData-Webhook`,url:D,...f};this.logger.log(M)}try{if(u?.enabled&&S.test(u.url))',
-      `let M={local:\`\${e}.sendData-Webhook\`,url:D,...${h}.redactEventForLog(f)};this.logger.log(M)}try{if(u?.enabled&&S.test(u.url))`, 'logger.log(M)', 'logger.log(wrong)'],
-    ['global event log redaction', 'let U={local:`${e}.sendData-Webhook-Global`,url:D,...f};this.logger.log(U)}try{if(S.test(D))',
-      `let U={local:\`\${e}.sendData-Webhook-Global\`,url:D,...${h}.redactEventForLog(f)};this.logger.log(U)}try{if(S.test(D))`, 'S.test(D)', 'S.test(wrong)'],
+    // Webhook log redaction now precedes bundling in patch-webhook-safe-logs.mjs;
+    // these former minified transforms are no longer production patch targets.
     ['QR terminal log', '_o.default.generate(A,{small:!0},r=>this.logger.log(`\n{ instance: ${this.instance.name} pairingCode: ${this.instance.qrcode.pairingCode}, qrcodeCount: ${this.instance.qrcode.count} }\n`+r))',
       'this.logger.info({message:"QR generated",instanceName:this.instance.name,qrcodeCount:this.instance.qrcode.count})', '`+r)', '`+wrong)'],
     ['missing chatwoot client failure', 'if(await new Promise(g=>setTimeout(g,500)),!await this.clientCw(t))return this.logger.warn("client not found"),null;',

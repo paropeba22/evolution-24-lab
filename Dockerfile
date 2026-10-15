@@ -35,7 +35,7 @@ COPY fixtures/baileys-send-node-rc13.json /evolution/fixtures/baileys-send-node-
 COPY fixtures/attendance-canonical-json-v1.json /evolution/fixtures/attendance-canonical-json-v1.json
 COPY Dockerfile /evolution/Dockerfile
 COPY nexi-transport.cjs /evolution/nexi-transport.cjs
-COPY patch-trusted-baileys.mjs patch-managed-retry.mjs nexi-identity.cjs /evolution/
+COPY patch-trusted-baileys.mjs patch-managed-retry.mjs patch-webhook-safe-logs.mjs nexi-identity.cjs /evolution/
 COPY patch-groups-source.mjs nexi-groups.cjs groups-wave1.test.cjs /evolution/
 COPY groups-postgresql.integration.test.cjs /evolution/
 COPY attendance-database.integration.test.cjs /evolution/
@@ -64,6 +64,7 @@ RUN node /tmp/patch-prisma-binding.mjs
 RUN node /tmp/patch-financial-delivery-source.mjs /evolution --snapshot
 RUN node /evolution/patch-trusted-baileys.mjs /evolution --snapshot
 RUN node /evolution/patch-managed-retry.mjs /evolution --snapshot
+RUN node /evolution/patch-webhook-safe-logs.mjs /evolution
 RUN node /evolution/patch-groups-source.mjs /evolution --snapshot
 RUN node /evolution/patch-attendance-source.mjs /evolution --snapshot
 
