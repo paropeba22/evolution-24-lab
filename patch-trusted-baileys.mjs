@@ -12,6 +12,23 @@ if (createHash('sha256').update(bufferSource).digest('hex') !== '09da9a892668084
 if (createHash('sha256').update(source).digest('hex') !== '850445e6f9e076b1beb98034cbc5cf79562dfda26a44f5a874a84e3609bfd710') {
   throw new Error('Baileys 7.0.0-rc13 decrypt source changed');
 }
+// rc13 scans every pending upsert on every emit, even without a type change.
+// Cache only the first key on this buffer generation. Normal message keys are
+// non-integer strings: insertion preserves the head; deletion invalidates it.
+// Read the live entry's type so replacement/update semantics remain unchanged.
+const bufferAnchor = `                const existingUpserts = Object.values(data.messageUpserts);
+                if (existingUpserts.length > 0) {
+                    const bufferedType = existingUpserts[0].type;
+                    if (bufferedType !== type) {`;
+if (bufferSource.split(bufferAnchor).length !== 2) throw new Error('Baileys inbound buffer head anchor changed');
+const bufferPatched = bufferSource.replace(bufferAnchor,
+  `                if (!Object.prototype.hasOwnProperty.call(data.messageUpserts, data.nexiMessageUpsertHead)) {
+                    data.nexiMessageUpsertHead = Object.keys(data.messageUpserts)[0];
+                }
+                if (data.nexiMessageUpsertHead !== undefined) {
+                    const bufferedType = data.messageUpserts[data.nexiMessageUpsertHead].type;
+                    if (bufferedType !== type) {
+                        const existingUpserts = Object.values(data.messageUpserts);`);
 const anchor = '                cleanMessage(msg, authState.creds.me.id, authState.creds.me.lid);\n                await upsertMessage(msg, node.attrs.offline ? \'append\' : \'notify\');';
 if (source.split(anchor).length !== 2) throw new Error('Baileys inbound anchor changed');
 const echoAnchor = '                if (msg.key?.remoteJid && msg.key?.id && msg.message && messageRetryManager) {';
@@ -57,5 +74,6 @@ if (process.argv.includes('--snapshot')) {
   fs.writeFileSync(path.join(root, '.identity-upstream/tsup.config.ts'), tsupSource);
 }
 fs.writeFileSync(file, patched);
+fs.writeFileSync(path.join(root, 'node_modules/baileys/lib/Utils/event-buffer.js'), bufferPatched);
 fs.writeFileSync(sendFile, sendPatched);
 fs.writeFileSync(tsupFile, tsupPatched);
