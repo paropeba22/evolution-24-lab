@@ -1,0 +1,44 @@
+// Ingress evidence is never physical writer authority. No cascading Instance FK.
+model NexiIngressScope {
+  id String @id @db.VarChar(64)
+  revision Int @default(0)
+  nextSequence BigInt @default(0)
+  pending Int @default(0)
+}
+
+model NexiIngressLane {
+  id String @id @db.VarChar(64)
+  scopeId String @db.VarChar(64)
+  instanceId String @db.VarChar(100)
+  sessionIdentity String @db.VarChar(64)
+  pending Int @default(0)
+  leaseToken String? @db.VarChar(36)
+  leaseUntil DateTime?
+  nextAttemptAt DateTime @default(now())
+  servedAt DateTime @default(now())
+  @@index([instanceId, nextAttemptAt, servedAt])
+}
+
+model NexiIngressJournal {
+  id String @id @db.VarChar(36)
+  dedupKey String @unique @db.VarChar(64)
+  scopeId String @db.VarChar(64)
+  laneId String @db.VarChar(64)
+  instanceId String @db.VarChar(100)
+  sessionIdentity String @db.VarChar(64)
+  sequence BigInt
+  envelope Json JSON_TYPE
+  payload String LARGE_TEXT
+  state String @default("pending") @db.VarChar(32)
+  checkpoint String @default("persisted") @db.VarChar(32)
+  association Json? JSON_TYPE
+  acknowledgement Json? JSON_TYPE
+  controls Json? JSON_TYPE
+  attempts Int @default(0)
+  lastError String? @db.VarChar(64)
+  continuationStartedAt DateTime?
+  completedAt DateTime?
+  createdAt DateTime @default(now())
+  @@unique([laneId, sequence])
+  @@index([scopeId, state, completedAt])
+}

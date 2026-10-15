@@ -319,6 +319,8 @@ function prepareEvent(headers, body, instanceName, instanceId) {
       ? { qrcode: { instance: instanceName } }
       : body.event === 'connection.update'
         ? { state: body.data?.state }
+        : ['ingress.observed', 'ingress.reconcile', 'ingress.correlated'].includes(body.event)
+          ? { ...identityPayload(body.data), ingress: body.data?.ingress }
         : require('./nexi-attendance.cjs').eventPayload(body.event, body.data) || require('./nexi-groups.cjs').groupEventPayload(body.event, body.data) || (['identity.observed', 'identity.correlated'].includes(body.event)
           ? identityPayload(body.data)
           : {}),

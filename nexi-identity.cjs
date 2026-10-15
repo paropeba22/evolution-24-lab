@@ -74,6 +74,14 @@ function take(message, type, requestId) {
 function bind(body, association) { routing.set(body, Object.freeze(association)); }
 function associationFor(body) { return routing.get(body); }
 
+async function transferToIngress(message, persist) {
+  const observation = observations.get(message);
+  if (!observation || message.key?.id !== observation.external_message_id || message.key.fromMe !== false) return null;
+  // Only this live decoder-owned object can transfer provenance to a durable
+  // signed envelope. Never restore observations from JSON into the WeakMap.
+  return persist(observation);
+}
+
 async function managedObservation(service, observation, acknowledgement, fetchImpl = fetch) {
   const webhook = await service.prismaRepository.webhook.findUnique({ where: { instanceId: service.instanceId } });
   if (!webhook?.enabled || webhook.webhookByEvents || webhook.webhookBase64) throw new Error('nexi_identity_binding_unavailable');
@@ -109,4 +117,4 @@ async function managedObservation(service, observation, acknowledgement, fetchIm
   throw new Error('nexi_identity_unavailable');
 }
 
-module.exports = { observeDecrypted, take, bind, associationFor, managedObservation, sessionFingerprint, managedDirectMessage };
+module.exports = { observeDecrypted, take, bind, associationFor, transferToIngress, managedObservation, sessionFingerprint, managedDirectMessage };

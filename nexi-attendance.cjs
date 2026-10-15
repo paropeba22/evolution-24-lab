@@ -153,7 +153,7 @@ function inboundTrace(source, stage, values = {}) {
     if (Number.isSafeInteger(values.stanza_clock_delta_ms) && Math.abs(values.stanza_clock_delta_ms) <= 604800000)
       safe.stanza_clock_delta_ms = values.stanza_clock_delta_ms;
     if (['failed', 'slow', 'still_waiting', 'missing_observation', 'sampled'].includes(values.result)) safe.result = values.result;
-    if (['history', 'upsert', 'other'].includes(values.category)) safe.category = values.category;
+    if (['history', 'upsert', 'other', 'durable_ingress'].includes(values.category)) safe.category = values.category;
     if (throttle.suppressed) safe.suppressed_count = throttle.suppressed;
     if (values.result === 'sampled' && source?.logger?.info) source.logger.info(safe);
     else if (source?.logger?.warn) source.logger.warn(safe);
@@ -363,6 +363,26 @@ function beginInbound(service, msg) {
     running.timer.unref?.();
     return running;
   } catch { return null; }
+}
+function resumeIngressDiagnostics(service, msg, journalId, acceptedAt) {
+  try {
+    const now = Date.now(), tick = performance.now();
+    const source = { instanceId: service.instanceId, instance: { name: service.instance.name },
+      prismaRepository: service.prismaRepository, logger: service.logger, diagnosticOwner: diagnosticOwners.get(service) };
+    const ref = inboundReference(source, msg.key?.id);
+    if (!ref) return;
+    const accepted = Date.parse(acceptedAt), age = Math.max(0, now - accepted);
+    if (!Number.isSafeInteger(age)) return;
+    // Fresh monotonic handler duration; durable queue age uses persisted wall
+    // time. Never fabricate pre-restart receive/buffer monotonic timestamps.
+    const sampled = parseInt(ref.slice(0, 2), 16) < 4;
+    inboundSpans.set(msg, { source, ref, sampled, observedAt: now, observedTick: tick,
+      receivedAt: null, receiveToObserve: null, stanzaClockDelta: null, bufferedAt: null, bufferedTick: null,
+      enqueuedAt: accepted, enqueuedTick: tick - age, queueStartedAt: now, queueStartTick: tick,
+      batchRef: journalId, category: 'durable_ingress' });
+    if (sampled || age >= INBOUND_SLOW_MS) inboundTrace(source, 'journal_worker_started', {
+      ref, batch_ref: journalId, queue_age_ms: age, category: 'durable_ingress', result: age >= INBOUND_SLOW_MS ? 'slow' : 'sampled' });
+  } catch { /* Diagnostic handoff cannot authorize, block or retry ingress. */ }
 }
 function failInbound(span) { if (span) span.failed = true; }
 function endInbound(span) {
@@ -1037,6 +1057,7 @@ async function classification(source) {
 function inheritConfig(original, completed) {
   const registration = configs.get(original);
   if (registration) configs.set(completed, registration);
+  require('./nexi-ingress.cjs').inheritConfig(original, completed);
 }
 async function configure(service, config) {
   // Capture exact socket credentials/lifecycle. Never read replacement creds in
@@ -1072,6 +1093,7 @@ async function configure(service, config) {
       }
     }
   } catch { registration.ambiguous = true; log(source, 'attendance.classification_failed', { instance_id: source.instanceId }); }
+  require('./nexi-ingress.cjs').configure(service, config);
   return config;
 }
 async function sessionObserved(config, attestation) {
@@ -1487,6 +1509,7 @@ function externalRaw(config) {
 function trackSocket(socket, config) {
   if (!configs.has(config)) fail('nexi_attendance_raw_context_missing');
   sockets.set(socket, config);
+  require('./nexi-ingress.cjs').trackSocket(socket, config);
 }
 function writerIsolation(source, context, writerProbe = null) {
   const config = sockets.get(source.service?.client), registration = configs.get(config);
@@ -1778,7 +1801,7 @@ function decodeCanonicalClaims(encoded) {
 }
 module.exports = { canonical, digest, eventPayload, settings, publicAttestation, observePublicAccount, verifyPublicAccountSignature,
   normalizeReceipt, normalization, numericNormalization, receiveInbound, observeInbound, enqueueInbound, queueEnqueued, queueStarted, queueEnded,
-  beginInbound, failInbound, endInbound, timedInbound, inboundFailure, clearInstanceDiagnostics, allowDiagnosticTrace,
+  beginInbound, resumeIngressDiagnostics, failInbound, endInbound, timedInbound, inboundFailure, clearInstanceDiagnostics, allowDiagnosticTrace,
   configure, sessionObserved, capture, refreshContext, classification, draft, prepare, closeCollision,
   foundationCapability, bindStanza, assertNode, externalRaw, retryMessage, legacyAllowed, legacyForInstance, ReceiptWorker,
   drain, installRoutes, requestMaterial, common, prepareClaims, rawNodeForInstance, rawNodeForSocket, trackSocket, writerIsolation, writerProbeTrace,
