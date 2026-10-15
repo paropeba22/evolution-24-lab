@@ -52,6 +52,46 @@ export function patchAttendanceSendNode(source) {
     "            logger.trace({ xml: binaryNodeToString(nexiFrame), msg: 'xml send' });");
   return once(source, '        const buff = encodeBinaryNode(frame);', '        const buff = encodeBinaryNode(nexiFrame);');
 }
+export function patchAttendanceContactLookup(source) {
+  // clientCw returns ChatwootClient, not an Axios instance. Use the same
+  // account-scoped SDK request helper already used by findContact/mergeContacts.
+  source = once(source, `    const contact = (await (client as any).get('contacts/search', {
+      params: {
+        q: identifier,
+        sort: 'name',
+      },
+    })) as any;`, `    const contact = (await chatwootRequest(this.getClientCwConfig(), {
+      method: 'GET',
+      url: \`/api/v1/accounts/\${this.provider.accountId}/contacts/search\`,
+      query: {
+        q: identifier,
+        sort: 'name',
+      },
+    })) as any;`);
+  return once(source, `    const contactByAttr = (await (client as any).post('contacts/filter', {
+      payload: [
+        {
+          attribute_key: 'identifier',
+          filter_operator: 'equal_to',
+          values: [identifier],
+          query_operator: null,
+        },
+      ],
+    })) as any;`, `    const contactByAttr = (await chatwootRequest(this.getClientCwConfig(), {
+      method: 'POST',
+      url: \`/api/v1/accounts/\${this.provider.accountId}/contacts/filter\`,
+      body: {
+        payload: [
+          {
+            attribute_key: 'identifier',
+            filter_operator: 'equal_to',
+            values: [identifier],
+            query_operator: null,
+          },
+        ],
+      },
+    })) as any;`);
+}
 export function patchAttendanceTsupConfig(source) {
   source = once(source, "import { cpSync } from 'node:fs';", "import { cpSync, readFileSync } from 'node:fs';");
   source = once(source, "external: ['/evolution/nexi-groups.cjs', 'baileys',",
@@ -222,6 +262,7 @@ patch('node_modules/baileys/lib/Socket/socket.js', source => {
   return patchAttendanceAccountObservation(source);
 });
 patch('src/api/integrations/chatbot/chatwoot/services/chatwoot.service.ts', source => {
+  source = patchAttendanceContactLookup(source);
   source = once(source, '  public async receiveWebhook(instance: InstanceDto, body: any) {',
     `  public async receiveWebhook(instance: InstanceDto, body: any) {
     if (body?.message_type === 'outgoing' && body?.conversation?.meta?.sender?.identifier !== '123456' &&
