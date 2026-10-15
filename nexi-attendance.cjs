@@ -86,6 +86,19 @@ function clearInstanceDiagnostics(service) {
 function diagnosticInstance(source) {
   return typeof source?.instanceId === 'string' && UUID.test(source.instanceId) ? source.instanceId : 'unknown';
 }
+function allowDiagnosticTrace(lane, now = performance.now()) {
+  try {
+    if (!['sampled', 'slow', 'failed'].includes(lane)) return false;
+    const budget = traceBudgets[lane];
+    if (now >= budget.resetAt) {
+      budget.remaining = budget.limit;
+      budget.resetAt = now + TRACE_WINDOW_MS;
+    }
+    if (budget.remaining <= 0) return false;
+    budget.remaining--; // Shared reservation before any S2 trace logger runs.
+    return true;
+  } catch { return false; }
+}
 function admitTrace(map, source, stage, values) {
   if (source?.diagnosticOwner?.active === false) return null;
   // Only bounded internal labels enter a diagnostic key, never payload IDs.
@@ -98,12 +111,7 @@ function admitTrace(map, source, stage, values) {
   pruneDiagnostics(map, now);
   let previous = map.get(key);
   const interval = lane === 'slow' ? 30000 : 1000;
-  const budget = traceBudgets[lane];
-  if (now >= budget.resetAt) {
-    budget.remaining = budget.limit;
-    budget.resetAt = now + TRACE_WINDOW_MS;
-  }
-  if ((previous && now - previous.at < interval) || budget.remaining <= 0) {
+  if ((previous && now - previous.at < interval) || !allowDiagnosticTrace(lane, now)) {
     if (!previous) {
       putDiagnostic(map, key, { instanceId, at: -Infinity, suppressed: 0 },
         DIAGNOSTIC_THROTTLE_CAPACITY, DIAGNOSTIC_THROTTLE_TTL_MS, now);
@@ -112,7 +120,6 @@ function admitTrace(map, source, stage, values) {
     previous.suppressed = Math.min(Number.MAX_SAFE_INTEGER, previous.suppressed + 1);
     return null;
   }
-  budget.remaining--; // Reserve before logging; failures cannot bypass the cap.
   const suppressed = previous?.suppressed || 0;
   putDiagnostic(map, key, { instanceId, at: now, suppressed: 0 },
     DIAGNOSTIC_THROTTLE_CAPACITY, DIAGNOSTIC_THROTTLE_TTL_MS, now);
@@ -204,14 +211,19 @@ function countReceipt(source, stage) {
 function preparedOutboxTrace(source, row, phase, started = null, outcome = null) {
   try {
     if (row.eventType !== 'attendance.transport.prepared') return;
+    const duration = started === null ? 0 : Math.round(performance.now() - started);
+    const outboxAge = Math.max(0, Date.now() - +new Date(row.createdAt));
+    const lane = phase === 'delivery_ended' && outcome !== 'ack_persisted' ? 'failed' :
+      duration >= INBOUND_SLOW_MS || outboxAge >= INBOUND_SLOW_MS ? 'slow' : 'sampled';
+    if (!allowDiagnosticTrace(lane)) return;
     const revision = process.env.NEXI_RUNTIME_REVISION || '';
     const data = { event: 'attendance.prepared_outbox', phase, timestamp: new Date().toISOString(),
       runtime_revision: /^[0-9a-f]{40}$/i.test(revision) ? revision : 'unknown', outcome,
-      outbox_age_ms: Math.max(0, Date.now() - +new Date(row.createdAt)) };
+      outbox_age_ms: outboxAge };
     if (UUID.test(source.instanceId || '')) data.instance_id = source.instanceId;
     if (UUID.test(row.id || '')) data.event_id = row.id;
     if (UUID.test(row.body?.data?.preparation_id || '')) data.preparation_id = row.body.data.preparation_id;
-    if (started !== null) data.duration_ms = Math.round(performance.now() - started);
+    if (started !== null) data.duration_ms = duration;
     console.info(JSON.stringify(data));
   } catch { /* Outbox diagnostics never affect delivery, lease or ACK. */ }
 }
@@ -1697,7 +1709,7 @@ function decodeCanonicalClaims(encoded) {
 }
 module.exports = { canonical, digest, eventPayload, settings, publicAttestation, observePublicAccount, verifyPublicAccountSignature,
   normalizeReceipt, normalization, numericNormalization, observeInbound, enqueueInbound, queueEnqueued, queueStarted, queueEnded,
-  beginInbound, failInbound, endInbound, timedInbound, inboundFailure, clearInstanceDiagnostics,
+  beginInbound, failInbound, endInbound, timedInbound, inboundFailure, clearInstanceDiagnostics, allowDiagnosticTrace,
   configure, sessionObserved, capture, refreshContext, classification, draft, prepare, closeCollision,
   foundationCapability, bindStanza, assertNode, externalRaw, retryMessage, legacyAllowed, legacyForInstance, ReceiptWorker,
   drain, installRoutes, requestMaterial, common, prepareClaims, rawNodeForInstance, rawNodeForSocket, trackSocket, writerIsolation, writerProbeTrace,

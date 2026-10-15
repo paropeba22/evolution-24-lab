@@ -179,7 +179,8 @@ async function operationAwait(context, work) {
 }
 async function cleanupLifecycle(context, work) {
   lifecycleCheck(context);
-  try { require('./nexi-attendance.cjs').clearInstanceDiagnostics(context.service); } catch { /* Diagnostic cleanup only. */ }
+  // Also used by routine creds.update; diagnostic retirement belongs to
+  // terminal cancel/close/retire or socket reconfiguration, not this transaction.
   return context.service.prismaRepository.$transaction(async tx => {
     await persistLifecycle(context, { data: { nexiGroupsSocketOwner: context.token } }, tx);
     if (context.owner.manual) await lifecycleAwait(context, () => tx.instance.updateMany({

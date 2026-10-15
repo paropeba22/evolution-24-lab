@@ -338,3 +338,33 @@ Sem testes, parser, lint, build ou execução dos patchers: composição execut�
 dos anchors, desempenho real e integração permanecem para validação posterior
 autorizada. Nenhum acesso à produção, deploy, envio ou reprocessamento.
 
+## S2-R3 — três blockers da revisão R2
+
+Delta focalizado sobre `3eccc77ee93913affbf993ce5eedd6d6fca4e1ea`:
+
+- `cleanupLifecycle` volta a executar somente o comportamento funcional que
+  já compartilhava com `creds.update`. Não invalida mais o owner diagnóstico.
+  Os hooks terminais de cancelamento, close, `retirePending` e reconfiguração
+  permanecem, incluindo a rejeição de traces com owner diagnóstico encerrado.
+  Nenhuma alteração no journal, outbox, append ou recuperação de receipts.
+- `authorityTiming` e `preparedOutboxTrace` agora reservam saldo por
+  `allowDiagnosticTrace`, extraído do mesmo controle usado por inbound/receipts.
+  Permanecem exatamente três reservas por processo: 120 sampled, 60 slow e
+  60 failed, com janelas monotônicas de 60 s. Sem reservas adicionais ou novos
+  Maps. Capacidade, TTL, evicção e limpeza terminal dos três Maps não mudam.
+- Timing de autoridade usa failed em exceção, slow a partir de 1.000 ms e
+  sampled nos demais casos. Prepared outbox usa failed no término sem
+  `ack_persisted` (incluindo CAS não vencido/resposta não suportada), slow quando
+  duração ou idade do backlog atinge 1.000 ms, sampled nos demais casos.
+  A reserva antecede o logger, dentro do try/catch diagnóstico existente.
+
+Esta ampliação substitui a exclusão de authority/prepared outbox descrita em R1.
+Os nomes, fases, durações, IDs opacos e sanitização dos eventos são preservados.
+Logs operacionais/de segurança preexistentes permanecem fora deste controle.
+Conferência somente textual do delta: nenhum novo await, consulta, timer,
+handler ou decisão funcional. Sem testes, parser, lint, build ou produção.
+O orçamento pode omitir fases/correlações; mantém-se o teto conservador de
+480 emissões por intervalo móvel de 60 s por processo, considerando as bordas
+das três janelas. Composição executável e custo do logger aguardam validação
+posterior autorizada. Nenhuma promoção ou implantação nesta missão.
+

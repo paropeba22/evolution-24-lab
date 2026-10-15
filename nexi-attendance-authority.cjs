@@ -19,10 +19,13 @@ function attendance() { return require('./nexi-attendance.cjs'); }
 function fail(code) { throw Object.assign(new Error(code), { code }); }
 function authorityTiming(source, phase, preparationId, started, result) {
   try {
+    const duration = Math.round(performance.now() - started);
+    const lane = result === 'failed' ? 'failed' : duration >= 1000 ? 'slow' : 'sampled';
+    if (!attendance().allowDiagnosticTrace(lane)) return;
     const effective = process.env.NEXI_RUNTIME_REVISION || '';
     const data = { event: 'attendance.authority_timing', phase, result, timestamp: new Date().toISOString(),
       marker: 's2-authority-observability-v1', runtime_revision: /^[0-9a-f]{40}$/i.test(effective) ? effective : 'unknown',
-      duration_ms: Math.round(performance.now() - started) };
+      duration_ms: duration };
     if (UUID.test(source?.instanceId || '')) data.instance_id = source.instanceId;
     if (UUID.test(preparationId || '')) data.preparation_id = preparationId;
     if (source?.logger?.info) source.logger.info(data); else console.info(JSON.stringify(data));
