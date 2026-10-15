@@ -4,6 +4,7 @@ model NexiIngressScope {
   revision Int @default(0)
   nextSequence BigInt @default(0)
   pending Int @default(0)
+  secondaryPending Int @default(0)
 }
 
 model NexiIngressLane {
@@ -37,8 +38,50 @@ model NexiIngressJournal {
   attempts Int @default(0)
   lastError String? @db.VarChar(64)
   continuationStartedAt DateTime?
+  mainMaterializedAt DateTime?
+  payloadPrunedAt DateTime?
+  legacyControlKind String? @db.VarChar(32)
   completedAt DateTime?
   createdAt DateTime @default(now())
   @@unique([laneId, sequence])
   @@index([scopeId, state, completedAt])
+  @@index([instanceId, state, payloadPrunedAt, completedAt], map: "NexiIngressJournal_retention_idx")
+}
+
+// Separate causal lanes: secondary uncertainty never owns the primary lane.
+model NexiIngressEffectLane {
+  id String @id @db.VarChar(64)
+  instanceId String @db.VarChar(100)
+  kind String @db.VarChar(32)
+  pending Int @default(0)
+  leaseToken String? @db.VarChar(36)
+  leaseUntil DateTime?
+  nextAttemptAt DateTime @default(now())
+  servedAt DateTime @default(now())
+  blockedBy String? @db.VarChar(36)
+  blockedReason String? @db.VarChar(64)
+  @@index([instanceId, nextAttemptAt, servedAt])
+}
+
+model NexiIngressEffect {
+  id String @id @db.VarChar(36)
+  journalId String @db.VarChar(36)
+  laneId String @db.VarChar(64)
+  scopeId String @db.VarChar(64)
+  instanceId String @db.VarChar(100)
+  kind String @db.VarChar(32)
+  sequence BigInt
+  intent Json JSON_TYPE
+  intentDigest String @db.VarChar(64)
+  intentSignature String @db.VarChar(64)
+  state String @default("pending") @db.VarChar(32)
+  result Json? JSON_TYPE
+  attempts Int @default(0)
+  lastError String? @db.VarChar(64)
+  startedAt DateTime?
+  completedAt DateTime?
+  createdAt DateTime @default(now())
+  @@unique([journalId, kind])
+  @@unique([laneId, sequence])
+  @@index([instanceId, state, createdAt])
 }

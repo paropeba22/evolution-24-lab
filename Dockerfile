@@ -37,6 +37,7 @@ COPY Dockerfile /evolution/Dockerfile
 COPY nexi-transport.cjs /evolution/nexi-transport.cjs
 COPY patch-trusted-baileys.mjs patch-managed-retry.mjs patch-webhook-safe-logs.mjs nexi-identity.cjs /evolution/
 COPY patch-ingress-source.mjs ingress-models.prisma nexi-ingress.cjs /evolution/
+COPY patch-chatwoot-completion.mjs nexi-ingress-effects.cjs ingress-effects.ts.inc /evolution/
 COPY patch-groups-source.mjs nexi-groups.cjs groups-wave1.test.cjs /evolution/
 COPY groups-postgresql.integration.test.cjs /evolution/
 COPY attendance-database.integration.test.cjs /evolution/
@@ -61,6 +62,8 @@ COPY prisma/postgresql-migrations/20261010000000_attendance_physical_dispatch /e
 COPY prisma/mysql-migrations/20261010000000_attendance_physical_dispatch /evolution/prisma/mysql-migrations/20261010000000_attendance_physical_dispatch
 COPY prisma/postgresql-migrations/20261015000000_nexi_durable_ingress /evolution/prisma/postgresql-migrations/20261015000000_nexi_durable_ingress
 COPY prisma/mysql-migrations/20261015000000_nexi_durable_ingress /evolution/prisma/mysql-migrations/20261015000000_nexi_durable_ingress
+COPY prisma/postgresql-migrations/20261015000001_nexi_ingress_secondary /evolution/prisma/postgresql-migrations/20261015000001_nexi_ingress_secondary
+COPY prisma/mysql-migrations/20261015000001_nexi_ingress_secondary /evolution/prisma/mysql-migrations/20261015000001_nexi_ingress_secondary
 
 # The schema change must precede Prisma generation and tsup's bundled client.
 RUN node /tmp/patch-prisma-binding.mjs
@@ -70,6 +73,7 @@ RUN node /evolution/patch-managed-retry.mjs /evolution --snapshot
 RUN node /evolution/patch-webhook-safe-logs.mjs /evolution
 RUN node /evolution/patch-groups-source.mjs /evolution --snapshot
 RUN node /evolution/patch-attendance-source.mjs /evolution --snapshot
+RUN node /evolution/patch-chatwoot-completion.mjs /evolution
 RUN node /evolution/patch-ingress-source.mjs /evolution --snapshot
 
 # tsup bakes licensing definitions into each bundle. Empty args retain the
@@ -117,6 +121,10 @@ COPY --from=source-builder /evolution/nexi-transport.cjs /evolution/nexi-transpo
 COPY --from=source-builder /evolution/nexi-financial-transport.cjs /evolution/nexi-financial-transport.cjs
 COPY --from=source-builder /evolution/nexi-identity.cjs /evolution/nexi-identity.cjs
 COPY --from=source-builder /evolution/nexi-ingress.cjs /evolution/nexi-ingress.cjs
+COPY --from=source-builder /evolution/nexi-ingress-effects.cjs /evolution/nexi-ingress-effects.cjs
+# SDK is external in tsup. Ship the actual instrumented SDK and its pinned
+# nested Axios, rather than relying on the unmodified base-image dependency.
+COPY --from=source-builder /evolution/node_modules/@figuro/chatwoot-sdk /evolution/node_modules/@figuro/chatwoot-sdk
 COPY --from=source-builder /evolution/nexi-groups.cjs /evolution/nexi-groups.cjs
 COPY --from=source-builder /evolution/nexi-attendance.cjs /evolution/nexi-attendance.cjs
 COPY --from=source-builder /evolution/nexi-canonical-json.cjs /evolution/nexi-canonical-json.cjs

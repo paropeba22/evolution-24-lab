@@ -23,14 +23,15 @@ function key(name) {
   return createHmac('sha256', master).update(`ingress:v1:${name}`).digest();
 }
 function proof(claims) { return createHmac('sha256', key(claims.instance_name)).update(canonical.bytes(claims)).digest('hex'); }
-function verify(row) {
+function verify(row, metadataOnly = false) {
   const { claims, signature } = row.envelope || {};
   const expected = claims && proof(claims);
   if (!/^[a-f0-9]{64}$/.test(signature || '') || !expected ||
       !timingSafeEqual(Buffer.from(signature, 'hex'), Buffer.from(expected, 'hex')) ||
       claims.version !== 1 || claims.provider !== 'evolution' || claims.journal_id !== row.id ||
       claims.instance_id !== row.instanceId || claims.observation.session_identity !== row.sessionIdentity ||
-      claims.payload_digest !== hash(Buffer.from(row.payload, 'base64')) ||
+      (!(metadataOnly && row.state === 'succeeded' && row.payloadPrunedAt) &&
+        claims.payload_digest !== hash(Buffer.from(row.payload, 'base64'))) ||
       row.dedupKey !== canonical.digest(['evolution', claims.account_id, claims.inbox_id, row.instanceId,
         row.sessionIdentity, claims.observation.external_message_id]) ||
       row.scopeId !== canonical.digest(['evolution', claims.account_id, claims.inbox_id, row.instanceId]) ||
@@ -82,13 +83,14 @@ async function append(service, owner, observation, encoded) {
       const row = await repository.$transaction(async tx => {
         const previous = await tx.nexiIngressJournal.findUnique({ where: { dedupKey } });
         if (previous) {
-          const old = verify(previous);
-          const oldPayload = canonical.parse(Buffer.from(previous.payload, 'base64').toString('utf8'));
-          const incomingPayload = canonical.parse(bytes.toString('utf8'));
+          const old = verify(previous, true);
           // Delivery duplicates may carry different timestamps; authenticated
           // identity must remain exact. Never replace the original payload.
           if (old.observation.pn_jid !== observation.pn_jid || old.observation.lid_jid !== observation.lid_jid)
             fail('nexi_ingress_identity_conflict');
+          if (previous.payloadPrunedAt) return previous; // Complete dedup tombstone; never reconstruct effects.
+          const oldPayload = canonical.parse(Buffer.from(previous.payload, 'base64').toString('utf8'));
+          const incomingPayload = canonical.parse(bytes.toString('utf8'));
           if (oldPayload.content_digest !== incomingPayload.content_digest) fail('nexi_ingress_content_conflict');
           return previous;
         }
@@ -117,7 +119,8 @@ async function append(service, owner, observation, encoded) {
 async function capture(config, message, proto) {
   const registration = configs.get(config);
   if (!registration) {
-    if (config.nexiFinancialManaged) fail('nexi_ingress_configuration_missing');
+    if (config.nexiFinancialManaged) throw Object.assign(new Error('nexi_ingress_configuration_missing'),
+      { code: 'nexi_ingress_configuration_missing', nexiIngressAdmissionFailed: true });
     return;
   }
   if (!registration.service.instance.name.startsWith('nexi-wa-')) return;
@@ -141,6 +144,7 @@ async function capture(config, message, proto) {
     // Failure is visible; no memory-only queue substitutes for a commit.
     const owner = registration.owner;
     if (groups.lifecycleCurrent(owner)) owner.socket?.end?.(new Error('nexi_ingress_backpressure'));
+    error.nexiIngressAdmissionFailed = true;
     throw error;
   }
 }
@@ -149,11 +153,11 @@ function observation(service, message) {
   const ctx = current(service);
   return ctx?.message === message ? ctx.claims.observation : null;
 }
-function register(service, decode, process) {
+function register(service, decode, process, effects, policy) {
   if (!service.instance.name.startsWith('nexi-wa-')) return;
   const previous = registrations.get(service.instanceId);
   if (previous?.service === service && previous.socket === service.client) return;
-  registrations.set(service.instanceId, { service, socket: service.client, decode, process });
+  registrations.set(service.instanceId, { service, socket: service.client, decode, process, effects, policy });
   wake();
 }
 async function check(ctx) {
@@ -214,6 +218,7 @@ async function chatwoot(service, body, work) {
   // Always reconcile before any creation, even on the first worker attempt.
   // The APP atomically reserves and returns the exact persisted source result.
   const result = await request(ctx, 'ingress.reconcile');
+  if (ctx.expectedMessageId && result.message_id !== ctx.expectedMessageId) fail('nexi_ingress_confirmed_id_conflict');
   await checkpoint(ctx, { association: result });
   identity.bind(body, result);
   if (result.message_id) {
@@ -243,9 +248,37 @@ async function correlated(service, acknowledgement, work) {
   await checkpoint(ctx, { association: result, checkpoint: 'correlation_confirmed', state: 'pending' });
   return result;
 }
-async function beginContinuation(service) {
+async function materializePrimary(service, body) {
   const ctx = current(service);
-  if (ctx) await checkpoint(ctx, { continuationStartedAt: new Date(), checkpoint: 'continuation', state: 'result_uncertain' });
+  if (!ctx) return false;
+  if (ctx.row.checkpoint !== 'correlation_confirmed' || !ctx.row.association?.message_id ||
+      ctx.row.acknowledgement?.id !== ctx.row.association.message_id || body.chatwootMessageId !== ctx.row.association.message_id)
+    fail('nexi_ingress_primary_requirements_missing');
+  const { pollUpdates, ...data } = body;
+  const registration = registrations.get(service.instanceId);
+  const effects = require('./nexi-ingress-effects.cjs');
+  await check(ctx);
+  await service.prismaRepository.$transaction(async tx => {
+    // The same scope -> lane order as append/finish. Intent creation and the
+    // mandatory local Message are atomic; no secondary call occurs here.
+    await tx.nexiIngressScope.update({ where: { id: ctx.row.scopeId }, data: { revision: { increment: 1 } } });
+    const held = await tx.nexiIngressLane.updateMany({ where: { id: ctx.row.laneId, leaseToken: ctx.token,
+      leaseUntil: { gt: new Date() } }, data: { leaseUntil: new Date(Date.now() + LEASE_MS) } });
+    if (held.count !== 1) fail('nexi_ingress_lease_lost');
+    const fence = await tx.instance.updateMany({ where: { id: ctx.row.instanceId, nexiGroupsSocketOwner: ctx.owner.token },
+      data: { nexiGroupsSocketOwner: ctx.owner.token } });
+    if (fence.count !== 1) fail('nexi_ingress_session_fenced');
+    const message = await tx.message.upsert({ where: { id: ctx.row.id }, create: { ...data, id: ctx.row.id }, update: {} });
+    if (message.instanceId !== ctx.row.instanceId || message.chatwootMessageId !== ctx.row.association.message_id ||
+        message.key?.id !== ctx.claims.observation.external_message_id || message.key?.fromMe !== false)
+      fail('nexi_ingress_local_message_conflict');
+    await effects.plan(tx, ctx, registration.policy(), registration.effects);
+    await tx.nexiIngressJournal.update({ where: { id: ctx.row.id }, data: {
+      mainMaterializedAt: new Date(), checkpoint: 'main_materialized', state: 'pending', lastError: null } });
+  });
+  ctx.row.mainMaterializedAt = new Date();
+  ctx.row.checkpoint = 'main_materialized';
+  return true;
 }
 async function persistMessage(service, data, work) {
   const ctx = current(service);
@@ -258,6 +291,9 @@ async function persistMessage(service, data, work) {
 async function control(service, name, work) {
   const ctx = current(service);
   if (!ctx) return work();
+  // Existing receipt/history/presentation controls are optional effects. Their
+  // durable intents are created by materializePrimary, outside the main lane.
+  if (!ctx.secondary) return null;
   if (Object.prototype.hasOwnProperty.call(ctx.row.controls || {}, name)) return ctx.row.controls[name];
   await checkpoint(ctx, { checkpoint: name, state: 'outcome_unknown' });
   await check(ctx);
@@ -282,9 +318,21 @@ function setProvider(service, value) {
 }
 async function cancellable(work) {
   const operation = work();
-  if (!context.getStore()) return operation;
-  const timer = setTimeout(() => operation.cancel?.(), 15000);
-  try { return await operation; } finally { clearTimeout(timer); }
+  const ctx = context.getStore();
+  if (!ctx) return operation;
+  const tracked = typeof operation?.cancel === 'function' && typeof operation?.nexiTransportSettled?.then === 'function';
+  const timer = setTimeout(() => {
+    ctx.creationDeadlineElapsed = true;
+    log(ctx.service, 'ingress.creation_deadline', ctx.row, tracked ? 'abort_requested_result_uncertain' : 'awaiting_real_completion');
+    if (tracked) operation.cancel();
+  }, 15000);
+  try { return await operation; }
+  finally {
+    clearTimeout(timer);
+    // The SDK facade can reject before its executor settles. Do not return to
+    // reconciliation/release the worker slot until the real executor finishes.
+    if (tracked) await operation.nexiTransportSettled;
+  }
 }
 async function finish(ctx) {
   await check(ctx);
@@ -294,6 +342,9 @@ async function finish(ctx) {
     const lock = await tx.nexiIngressLane.updateMany({ where: { id: ctx.row.laneId, leaseToken: ctx.token,
       leaseUntil: { gt: new Date() } }, data: { leaseUntil: new Date(Date.now() + LEASE_MS) } });
     if (lock.count !== 1) fail('nexi_ingress_lease_lost');
+    const message = await tx.message.findUnique({ where: { id: ctx.row.id } });
+    if (!ctx.row.mainMaterializedAt || !message || message.instanceId !== ctx.row.instanceId ||
+        message.chatwootMessageId !== ctx.row.association?.message_id) fail('nexi_ingress_primary_requirements_missing');
     await tx.nexiIngressJournal.update({ where: { id: ctx.row.id },
       data: { state: 'succeeded', checkpoint: 'completed', completedAt: new Date(), lastError: null } });
     await tx.nexiIngressLane.update({ where: { id: ctx.row.laneId }, data: { pending: { decrement: 1 } } });
@@ -306,9 +357,13 @@ async function run(registration, lane, token) {
     row = await repository.nexiIngressJournal.findFirst({ where: { laneId: lane.id, state: { not: 'succeeded' } }, orderBy: { sequence: 'asc' } });
     if (!row) { delay = 60000; return; }
     const claims = verify(row), owner = groups.lifecycleCapture(service, registration.socket);
-    ctx = { service, row, claims, owner, token, providers: new Map(), lost: false };
+    ctx = { service, row, claims, owner, token, providers: new Map(), lost: false,
+      expectedMessageId: row.mainMaterializedAt || row.continuationStartedAt ? row.association?.message_id : null,
+      legacyControlUnknown: row.legacyControlKind || (row.state === 'outcome_unknown' &&
+        ['read_control', 'history_control', 'placeholder_control', 'chat_name_webhook'].includes(row.checkpoint) ? row.checkpoint : null) };
     await check(ctx);
-    if (row.state === 'outcome_unknown' || row.continuationStartedAt) {
+    if ((row.state === 'outcome_unknown' || row.continuationStartedAt) &&
+        !(row.continuationStartedAt && ctx.expectedMessageId) && !ctx.legacyControlUnknown && !row.mainMaterializedAt) {
       await checkpoint(ctx, { state: 'outcome_unknown', lastError: 'manual_reconciliation_required' });
       log(service, 'ingress.outcome_unknown', row, 'manual_reconciliation_required');
       delay = 300000; return;
@@ -322,19 +377,26 @@ async function run(registration, lane, token) {
         .finally(() => { ctx.renewing = false; });
     }, LEASE_MS / 3);
     timer.unref?.();
+    if (ctx.legacyControlUnknown && !row.legacyControlKind) await checkpoint(ctx, { legacyControlKind: ctx.legacyControlUnknown });
     await checkpoint(ctx, { attempts: row.attempts + 1 });
+    if (row.mainMaterializedAt) {
+      const confirmed = await request(ctx, 'ingress.reconcile');
+      if (confirmed.message_id !== ctx.expectedMessageId) fail('nexi_ingress_confirmed_id_conflict');
+      await finish(ctx);
+      return;
+    }
     const recovery = canonical.parse(Buffer.from(row.payload, 'base64').toString('utf8'));
     if (recovery.version !== 1 || typeof recovery.protobuf !== 'string' || !/^[a-f0-9]{64}$/.test(recovery.content_digest || '') || !recovery.transport_key ||
         Object.keys(recovery.transport_key).some(field => !['remoteJidAlt', 'addressingMode', 'participantAlt'].includes(field)))
       fail('nexi_ingress_payload_identity_invalid');
-    const message = registration.decode(Buffer.from(recovery.protobuf, 'base64'), owner.socket.authState.creds, recovery.transport_key);
+    const message = registration.decode(Buffer.from(recovery.protobuf, 'base64'), owner.socket.authState.creds, recovery.transport_key, recovery.content_digest);
     ctx.message = message;
     if (message.key?.id !== claims.observation.external_message_id || message.key.fromMe !== false ||
         ![claims.observation.pn_jid, claims.observation.lid_jid].includes(message.key.remoteJid))
       fail('nexi_ingress_payload_identity_invalid');
     require('./nexi-attendance.cjs').resumeIngressDiagnostics(service, message, row.id, claims.accepted_at);
     await context.run(ctx, () => registration.process(message));
-    if (!ctx.row.association?.message_id || !ctx.row.continuationStartedAt) fail('nexi_ingress_completion_missing');
+    if (!ctx.row.association?.message_id || !ctx.row.mainMaterializedAt) fail('nexi_ingress_completion_missing');
     await finish(ctx);
   } catch (error) {
     delay = Math.min(300000, 1000 * 2 ** Math.min(ctx?.row.attempts || 1, 8)) + Math.floor(Math.random() * 1000);
@@ -353,7 +415,7 @@ async function run(registration, lane, token) {
       } catch { /* Only the current lease owner may quarantine. */ }
     }
     if (ctx && !ctx.lost) {
-      const uncertain = ctx.row.continuationStartedAt || ctx.row.state === 'outcome_unknown';
+      const uncertain = !ctx.expectedMessageId && (ctx.row.continuationStartedAt || ctx.row.state === 'outcome_unknown');
       const fenced = /fenced|proof_invalid|identity_conflict/.test(error.code || '');
       try { await checkpoint(ctx, { state: uncertain || fenced ? 'outcome_unknown' :
         ctx.row.checkpoint === 'chatwoot_inflight' ? 'result_uncertain' : 'recoverable_failure',
@@ -405,19 +467,20 @@ function wake() {
   setImmediate(() => { scheduled = false; void pump().catch(() => {
     for (const { service } of registrations.values()) log(service, 'ingress.recovery_pending', null, 'storage_unavailable');
   }); });
+  require('./nexi-ingress-effects.cjs').wake();
 }
 const recovery = setInterval(wake, 5000); recovery.unref?.();
-// Payload/identity tombstones survive seven days after success. Unresolved
-// rows are never purged: capacity backpressure forces explicit resolution.
+// Raw payloads/results can be pruned after seven days and terminal secondary
+// work. Signed dedup/audit tombstones survive; active work keeps its payload.
 const retention = setInterval(() => {
   for (const { service } of registrations.values()) {
     const cutoff = new Date(Date.now() - 7 * 86400000);
-    void service.prismaRepository.nexiIngressJournal.deleteMany({
-      where: { instanceId: service.instanceId, state: 'succeeded', completedAt: { lt: cutoff } },
-    }).then(() => service.prismaRepository.nexiIngressLane.deleteMany({ where: { instanceId: service.instanceId,
+    void require('./nexi-ingress-effects.cjs').retain(service, cutoff)
+    .then(() => service.prismaRepository.nexiIngressLane.deleteMany({ where: { instanceId: service.instanceId,
       pending: 0, leaseToken: null, servedAt: { lt: cutoff } } }))
       .catch(() => log(service, 'ingress.retention_pending', null, 'storage_unavailable'));
   }
 }, 3600000); retention.unref?.();
 module.exports = { configure, inheritConfig, trackSocket, capture, skipSerial, observation, register, current, observed, chatwoot, correlated, socket,
-  beginContinuation, persistMessage, control, provider, setProvider, cancellable, inWorker: () => !!context.getStore() };
+  materializePrimary, persistMessage, control, provider, setProvider, cancellable, inWorker: () => !!context.getStore(),
+  secondaryRuntime: { registrations, context, verify, ownerCheck, log } };

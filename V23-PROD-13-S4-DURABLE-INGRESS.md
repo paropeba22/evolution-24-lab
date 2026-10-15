@@ -1,5 +1,9 @@
 # V23-PROD-13-S4 — durable ingress candidate
 
+Historical S4 description. [S4-R1 corrections](V23-PROD-13-S4-R1-CORRECTIONS.md)
+supersede its cancellation, continuation and retention behavior and document
+the held legacy integration contracts before any promotion.
+
 Evolution base: `3561c85b608d99b22c0c625395837a98c49a205f`.
 Compatible APP base: `232a3f635e8baaa03879f82a9c7c4eebdedebf37`.
 Candidate branch in both repositories: `candidate/v23-prod-13-s4-durable-ingress`.

@@ -5,6 +5,7 @@ import path from 'node:path';
 const root = process.argv[2] || '/evolution';
 const changes = [];
 const helper = "require('/evolution/nexi-ingress.cjs')";
+const effectCallbacks = fs.readFileSync(path.join(root, 'ingress-effects.ts.inc'), 'utf8');
 function once(source, anchor, replacement) {
   if (source.split(anchor).length !== 2) throw new Error(`Ingress pinned anchor changed: ${anchor.slice(0, 100)}`);
   return source.replace(anchor, () => replacement);
@@ -17,21 +18,44 @@ patch('node_modules/baileys/lib/Socket/messages-recv.js', source => {
   // Observe and commit after authenticated decryption, before the existing
   // delivery receipt. S2's event-buffer optimization remains byte-for-byte.
   source = once(source, '                nexiIdentity.observeDecrypted(msg, node, authState.creds, getHistoryMsg(msg.message));\n', '');
-  source = once(source, '                await decrypt();', `                await decrypt();
-                nexiIdentity.observeDecrypted(msg, node, authState.creds, getHistoryMsg(msg.message));
-                await nexiIngress.capture(config, msg, proto);`);
+  // Groups already replaced the original decrypt with two branches. Match the
+  // exact direct-message branch; a bare "await decrypt()" is ambiguous in S4.
+  source = once(source, `                } else {
+                    await decrypt();
+                }`, `                } else {
+                    await decrypt();
+                    nexiIdentity.observeDecrypted(msg, node, authState.creds, getHistoryMsg(msg.message));
+                    await nexiIngress.capture(config, msg, proto);
+                }`);
+  source = once(source, "            if (error?.code === 'NEXI_GROUPS_ADMISSION_SUSPENDED') {",
+    `            if (error?.nexiIngressAdmissionFailed) {
+                logger.warn('nexi_ingress_admission_failed');
+                return; // No success receipt or fallback ACK/NACK after failed durable admission.
+            }
+            if (error?.code === 'NEXI_GROUPS_ADMISSION_SUSPENDED') {`);
   return "import nexiIngress from '/evolution/nexi-ingress.cjs';\n" + source;
 });
 patch('src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts', source => {
   source = once(source, '  proto,', '  cleanMessage,\n  proto,');
   source = once(source, "    const nexiEventOwner = require('/evolution/nexi-groups.cjs').lifecycleCapture(this, nexiEventSocket);",
     `    const nexiEventOwner = require('/evolution/nexi-groups.cjs').lifecycleCapture(this, nexiEventSocket);
-    ${helper}.register(this, (bytes, creds, transportKey) => {
+    ${helper}.register(this, (bytes, creds, transportKey, contentDigest) => {
       const message = proto.WebMessageInfo.decode(bytes);
+      if (require('node:crypto').createHash('sha256').update(proto.Message.encode(message.message).finish()).digest('hex') !== contentDigest)
+        throw Object.assign(new Error('nexi_ingress_content_conflict'), { code: 'nexi_ingress_payload_identity_invalid' });
       Object.assign(message.key, transportKey);
       cleanMessage(message, creds.me.id, creds.me.lid);
       return message;
-    }, async message => this.messageHandle['messages.upsert']({ messages: [message], type: 'notify' }, await this.findSettings()));`);
+    }, async message => this.messageHandle['messages.upsert']({ messages: [message], type: 'notify' }, await this.findSettings()),
+    ${effectCallbacks}, () => ({
+      saveChats: !!this.configService.get<Database>('DATABASE').SAVE_DATA.CHATS,
+      saveContacts: !!this.configService.get<Database>('DATABASE').SAVE_DATA.CONTACTS,
+      transcription: !!this.configService.get<Openai>('OPENAI').ENABLED,
+      archive: !!this.configService.get<S3>('S3').ENABLE,
+      archiveVideo: !!this.configService.get<S3>('S3').SAVE_VIDEO,
+      readMessages: !!this.localSettings.readMessages,
+      chatwoot: !!this.localChatwoot?.enabled,
+    }));`);
   const start = source.indexOf("    'messages.upsert': async ("), end = source.indexOf("    'messages.update': async (", start);
   if (start < 0 || end <= start) throw new Error('Ingress handler boundary changed');
   let section = source.slice(start, end);
@@ -63,7 +87,8 @@ patch('src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts', sourc
     `                  if (${helper}.current(this)) throw new Error('nexi_ingress_correlation_pending');
                   this.logger.warn('nexi_identity_correlation_rejected');`);
   section = once(section, "          if (this.configService.get<Openai>('OPENAI').ENABLED && received?.message?.audioMessage) {",
-    `          await ${helper}.beginContinuation(this);
+    `          if (${helper}.current(this) && await require('/evolution/nexi-attendance.cjs').timedInbound(nexiInboundSpan,
+            'message_persist', () => ${helper}.materializePrimary(this, messageRaw))) continue;
           if (this.configService.get<Openai>('OPENAI').ENABLED && received?.message?.audioMessage) {`);
   section = once(section, "'message_persist', () => this.prismaRepository.message.create({ data: messageData }));",
     `'message_persist', () => ${helper}.persistMessage(this, messageData, () => this.prismaRepository.message.create({ data: messageData })));`);
@@ -85,10 +110,17 @@ patch('src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts', sourc
   section = once(section, '            this.sendDataWebhook(Events.CHATS_UPSERT, [{ ...existingChat, name: received.pushName }]);',
     `            await ${helper}.control(this, 'chat_name_webhook',
               () => this.sendDataWebhook(Events.CHATS_UPSERT, [{ ...existingChat, name: received.pushName }]));`);
+  section = once(section, '            existingChat &&', `            !${helper}.current(this) && existingChat &&`);
   // A recovered callback retains its exact captured socket. It cannot adopt a
   // replacement through the service's mutable client property after an await.
   section = section.replaceAll('this.client', `${helper}.socket(this)`);
   source = source.slice(0, start) + section + source.slice(end);
+  const mediaStart = source.indexOf('  public async getBase64FromMediaMessage(');
+  const mediaEnd = source.indexOf('  public async fetchPrivacySettings(', mediaStart);
+  if (mediaStart < 0 || mediaEnd <= mediaStart) throw new Error('Ingress media download boundary changed');
+  const mediaMethod = source.slice(mediaStart, mediaEnd);
+  if (!mediaMethod.includes('this.client.updateMediaMessage')) throw new Error('Ingress media reupload socket anchor changed');
+  source = source.slice(0, mediaStart) + mediaMethod.replaceAll('this.client', `${helper}.socket(this)`) + source.slice(mediaEnd);
   return source;
 });
 patch('src/api/integrations/chatbot/chatwoot/services/chatwoot.service.ts', source => {
