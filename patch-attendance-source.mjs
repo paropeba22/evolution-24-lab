@@ -278,7 +278,9 @@ patch('node_modules/baileys/lib/Socket/messages-recv.js', source => {
             await nexiAttendance.captureBadAck(config, attrs, key);
             const isReachoutTimelocked = attrs.error === String(NACK_REASONS.SenderReachoutTimelocked);`);
   source = once(source, "                await upsertMessage(msg, node.attrs.offline ? 'append' : 'notify');",
-    "                nexiAttendance.observeInbound(config, msg);\n                await upsertMessage(msg, node.attrs.offline ? 'append' : 'notify');");
+    "                nexiAttendance.observeInbound(config, msg, node);\n                await upsertMessage(msg, node.attrs.offline ? 'append' : 'notify');");
+  source = once(source, "    ws.on('CB:message', async (node) => {",
+    "    ws.on('CB:message', async (node) => {\n        nexiAttendance.receiveInbound(config, node);");
   return once(source, '            msgs.push(msg);',
     '            msg = await nexiAttendance.retryMessage(config, { ...key, id }, msg);\n            msgs.push(msg);');
 });

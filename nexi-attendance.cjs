@@ -42,6 +42,7 @@ const scope = new AsyncLocalStorage();
 const workers = new Map();
 const healthWrites = new Map();
 const inboundSpans = new WeakMap();
+const inboundArrivals = new WeakMap();
 const inboundQueues = new WeakMap();
 const inboundThrottle = new Map();
 const receiptThrottle = new Map();
@@ -142,10 +143,13 @@ function inboundTrace(source, stage, values = {}) {
     if (source?.instanceId && UUID.test(source.instanceId)) safe.instance_id = source.instanceId;
     if (typeof values.ref === 'string' && /^[0-9a-f]{24}$/.test(values.ref)) safe.ref = values.ref;
     if (typeof values.batch_ref === 'string' && UUID.test(values.batch_ref)) safe.batch_ref = values.batch_ref;
-    for (const key of ['observed_at_ms', 'buffered_at_ms', 'enqueued_at_ms', 'queue_age_ms', 'buffer_age_ms',
+    for (const key of ['received_at_ms', 'receive_to_observe_ms', 'observed_at_ms', 'buffered_at_ms', 'enqueued_at_ms', 'queue_age_ms', 'buffer_age_ms',
       'pre_item_ms', 'duration_ms', 'observed_to_end_ms']) {
       if (Number.isSafeInteger(values[key]) && values[key] >= 0) safe[key] = values[key];
     }
+    // Stanza time is a remote clock, never a measured queue duration.
+    if (Number.isSafeInteger(values.stanza_clock_delta_ms) && Math.abs(values.stanza_clock_delta_ms) <= 604800000)
+      safe.stanza_clock_delta_ms = values.stanza_clock_delta_ms;
     if (['failed', 'slow', 'still_waiting', 'missing_observation', 'sampled'].includes(values.result)) safe.result = values.result;
     if (['history', 'upsert', 'other'].includes(values.category)) safe.category = values.category;
     if (throttle.suppressed) safe.suppressed_count = throttle.suppressed;
@@ -227,18 +231,46 @@ function preparedOutboxTrace(source, row, phase, started = null, outcome = null)
     console.info(JSON.stringify(data));
   } catch { /* Outbox diagnostics never affect delivery, lease or ACK. */ }
 }
-function observeInbound(config, msg) {
+function receiveInbound(config, node) {
+  try {
+    const receivedAt = Date.now(), receivedTick = performance.now();
+    const registration = configs.get(config);
+    if (!registration?.context || registration.source.diagnosticOwner?.active === false || !node || typeof node !== 'object') return;
+    if (![PN, LID].some(pattern => pattern.test(jid(node.attrs?.from) || ''))) return;
+    const source = registration.source, ref = inboundReference(source, node.attrs?.id);
+    if (!ref) return;
+    const seconds = typeof node.attrs?.t === 'string' && /^\d{1,12}$/.test(node.attrs.t) ? Number(node.attrs.t) : null;
+    const delta = seconds === null ? null : receivedAt - seconds * 1000;
+    const stanzaClockDelta = Number.isSafeInteger(delta) && Math.abs(delta) <= 604800000 ? delta : null;
+    // The offline processor retains this exact node. Weak keys add no queue,
+    // timer or strong per-message retention; no packet/recipient is logged.
+    inboundArrivals.set(node, { receivedAt, receivedTick, ref, stanzaClockDelta });
+    if (parseInt(ref.slice(0, 2), 16) < 4 || stanzaClockDelta >= INBOUND_SLOW_MS)
+      inboundTrace(source, 'baileys_received', { ref, received_at_ms: receivedAt,
+        stanza_clock_delta_ms: stanzaClockDelta, result: stanzaClockDelta >= INBOUND_SLOW_MS ? 'slow' : 'sampled' });
+  } catch { /* Socket ingress diagnostics never affect processing or ACK. */ }
+}
+function observeInbound(config, msg, node) {
   try {
     const registration = configs.get(config);
     if (!registration?.context || !msg || typeof msg !== 'object') return;
     const source = registration.source;
     const ref = inboundReference(source, msg.key?.id);
     if (ref) {
-      const observedAt = Date.now(), sampled = parseInt(ref.slice(0, 2), 16) < 4;
-      inboundSpans.set(msg, { source, ref, observedAt, observedTick: performance.now(), sampled,
+      const observedAt = Date.now(), observedTick = performance.now(), sampled = parseInt(ref.slice(0, 2), 16) < 4;
+      const arrival = inboundArrivals.get(node);
+      inboundArrivals.delete(node);
+      const received = arrival?.ref === ref ? arrival : null;
+      const receiveToObserve = received ? Math.round(observedTick - received.receivedTick) : null;
+      inboundSpans.set(msg, { source, ref, observedAt, observedTick, sampled,
+        receivedAt: received?.receivedAt ?? null, receiveToObserve,
+        stanzaClockDelta: received?.stanzaClockDelta ?? null,
         bufferedAt: null, bufferedTick: null, enqueuedAt: null, enqueuedTick: null,
         queueStartedAt: null, queueStartTick: null });
-      if (sampled) inboundTrace(source, 'baileys_observed', { ref, observed_at_ms: observedAt, result: 'sampled' });
+      if (sampled || receiveToObserve >= INBOUND_SLOW_MS) inboundTrace(source, 'baileys_observed', {
+        ref, received_at_ms: received?.receivedAt, receive_to_observe_ms: receiveToObserve,
+        stanza_clock_delta_ms: received?.stanzaClockDelta, observed_at_ms: observedAt,
+        result: receiveToObserve >= INBOUND_SLOW_MS ? 'slow' : 'sampled' });
     }
   } catch { /* observation is diagnostic only */ }
 }
@@ -337,8 +369,10 @@ function endInbound(span) {
   const duration = Math.round(performance.now() - span.startTick), total = Math.round(performance.now() - span.observedTick);
   if (span.sampled) inboundTrace(span.source, 'handler_ended', { ref: span.ref, batch_ref: span.batchRef,
     duration_ms: duration, observed_to_end_ms: total, result: 'sampled' });
-  if (span.failed || duration >= INBOUND_SLOW_MS || total >= INBOUND_SLOW_MS)
+  if (span.failed || duration >= INBOUND_SLOW_MS || total >= INBOUND_SLOW_MS ||
+      span.receiveToObserve >= INBOUND_SLOW_MS || span.stanzaClockDelta >= INBOUND_SLOW_MS)
     inboundTrace(span.source, 'handler_ended', { ref: span.ref, batch_ref: span.batchRef, observed_at_ms: span.observedAt,
+      received_at_ms: span.receivedAt, receive_to_observe_ms: span.receiveToObserve, stanza_clock_delta_ms: span.stanzaClockDelta,
       buffered_at_ms: span.bufferedAt, enqueued_at_ms: span.enqueuedAt, queue_age_ms: span.queueAge,
       buffer_age_ms: span.bufferAge, pre_item_ms: span.preItem, duration_ms: duration,
       observed_to_end_ms: total, result: span.failed ? 'failed' : 'slow' });
@@ -1708,7 +1742,7 @@ function decodeCanonicalClaims(encoded) {
   return canonicalJson.parse(text);
 }
 module.exports = { canonical, digest, eventPayload, settings, publicAttestation, observePublicAccount, verifyPublicAccountSignature,
-  normalizeReceipt, normalization, numericNormalization, observeInbound, enqueueInbound, queueEnqueued, queueStarted, queueEnded,
+  normalizeReceipt, normalization, numericNormalization, receiveInbound, observeInbound, enqueueInbound, queueEnqueued, queueStarted, queueEnded,
   beginInbound, failInbound, endInbound, timedInbound, inboundFailure, clearInstanceDiagnostics, allowDiagnosticTrace,
   configure, sessionObserved, capture, refreshContext, classification, draft, prepare, closeCollision,
   foundationCapability, bindStanza, assertNode, externalRaw, retryMessage, legacyAllowed, legacyForInstance, ReceiptWorker,
