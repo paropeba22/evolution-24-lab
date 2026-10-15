@@ -60,7 +60,20 @@ export function patchAttendanceContactLookup(source) {
         q: identifier,
         sort: 'name',
       },
-    })) as any;`, `    const contact = (await chatwootRequest(this.getClientCwConfig(), {
+    })) as any;`, `    // Optional LID fallback: 2.5 s deadline per query; GET + POST HTTP budget is 5 s.
+    const nexiLidTimeoutMs = 2500;
+    const nexiLidRequest = async (options: Parameters<typeof chatwootRequest>[1]) => {
+      const request = chatwootRequest(this.getClientCwConfig(), options);
+      // Keep the original CancelablePromise: then/finally return plain Promises.
+      // SDK 1.1.17 cancel() signals Axios 0.27.2 CancelToken and aborts its request.
+      const timer = setTimeout(() => request.cancel(), nexiLidTimeoutMs);
+      try {
+        return await request;
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+    const contact = (await nexiLidRequest({
       method: 'GET',
       url: \`/api/v1/accounts/\${this.provider.accountId}/contacts/search\`,
       query: {
@@ -77,7 +90,7 @@ export function patchAttendanceContactLookup(source) {
           query_operator: null,
         },
       ],
-    })) as any;`, `    const contactByAttr = (await chatwootRequest(this.getClientCwConfig(), {
+    })) as any;`, `    const contactByAttr = (await nexiLidRequest({
       method: 'POST',
       url: \`/api/v1/accounts/\${this.provider.accountId}/contacts/filter\`,
       body: {
