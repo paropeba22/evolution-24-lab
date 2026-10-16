@@ -28,6 +28,7 @@ COPY nexi-canonical-json.cjs attendance-canonical.test.cjs attendance-correction
 COPY nexi-attendance-snapshot.cjs attendance-snapshot.test.cjs /evolution/
 COPY nexi-attendance-authority.cjs nexi-attendance-storage-guard.cjs attendance-authority.test.cjs attendance-authority-test-support.cjs attendance-test-network-trap.cjs /evolution/
 COPY nexi-attendance-dispatch.cjs attendance-physical-dispatch.test.cjs /evolution/
+COPY attendance-socket-test-support.cjs attendance-socket-registration.test.cjs /evolution/
 COPY nexi-attendance-storage-check.cjs /evolution/
 COPY attendance-storage-corrections.test.cjs /evolution/
 COPY fixtures/attendance-authority-v1.json /evolution/fixtures/attendance-authority-v1.json

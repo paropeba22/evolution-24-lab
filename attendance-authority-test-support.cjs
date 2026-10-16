@@ -39,6 +39,7 @@ function catalogState(provider){
 }
 function memory() {
   let row=structuredClone(fixture.prepared_row);
+  let transactionTail=Promise.resolve();
   for(const key of ['frozenAt','reservedAt'])row[key]=new Date(row[key]);
   const trace=[];
   const repo={now:fixture.now+1,failStorage:false,failCommit:false,badGuard:false,badIndex:false,
@@ -63,7 +64,16 @@ function memory() {
       if(sql.includes('information_schema.COLUMNS'))return state.columns;
       if(sql.includes('pg_index')||sql.includes('information_schema.STATISTICS')){if(this.badIndex)state.indexes[0].columns='wrong';return state.indexes;}
       throw Error('unexpected SQL');},
-    async $transaction(work){const prior=structuredClone(row);try{const result=await work(this);if(this.failCommit)throw Error('commit lost');trace.push('committed');return result;}catch(e){row=prior;throw e;}},
+    async $transaction(work){
+      // These fixtures have one preparation row. Model its real FOR UPDATE
+      // exclusion: a rejected transaction must never restore a snapshot over
+      // another transaction's committed dispatch CAS.
+      const previous=transactionTail;let release;
+      transactionTail=new Promise(resolve=>{release=resolve;});await previous;
+      const prior=structuredClone(row);
+      try{const result=await work(this);if(this.failCommit)throw Error('commit lost');trace.push('committed');return result;}
+      catch(e){row=prior;throw e;}finally{release();}
+    },
     row(){return row;},trace};
   const source={prismaRepository:repo,instanceId:row.instanceId,instance:{name:row.instanceName}};
   source.service={instanceId:source.instanceId,instance:source.instance,client:{authState:{creds:credentials()},ws:{isOpen:true}}};

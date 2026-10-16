@@ -8,6 +8,7 @@ const {createHash}=require('node:crypto');
 const a=require('./nexi-attendance.cjs'), authority=require('./nexi-attendance-authority.cjs');
 const transport=require('./nexi-attendance-dispatch.cjs');
 const {memory,original}=require('./attendance-authority-test-support.cjs');
+const {registerSocket}=require('./attendance-socket-test-support.cjs');
 
 function enabled(payload={kind:'text',body:'texto real\n😀',reply_to:null}) {
   const f=memory(),row=f.repo.row(),claims=original(),g=claims.material.grant;
@@ -22,10 +23,8 @@ function enabled(payload={kind:'text',body:'texto real\n😀',reply_to:null}) {
   claims.material.release_digest=a.digest(r);
   return {...f,claims};
 }
-async function lexical(f,throws=false) {
-  const config={auth:{creds:f.source.service.client.authState.creds},logger:{level:'silent',warn(){}}};
-  f.source.service.prismaRepository=f.repo;
-  await a.configure(f.source.service,config);
+async function lexical(f,t,throws=false) {
+  const {config}=await registerSocket(f,t);
   const fixture=JSON.parse(fs.readFileSync(__dirname+'/fixtures/baileys-send-node-rc13.json','utf8'));
   const {patchAttendanceSendNode}=await import(pathToFileURL(__dirname+'/patch-attendance-source.mjs'));
   let writes=0;
@@ -50,35 +49,35 @@ test('signed dispatch grant requires active isolated writer and exact frozen bin
   f.repo.row().authority.isolation_cutover=false;
   assert.equal(authority.physicalDispatchEnabled(f.source,f.repo.row()),false);
 });
-test('actual patched lexical boundary commits CAS before one socket write; replay never writes twice',async()=>{
-  const f=enabled();await authority.consumption(f.source,f.claims);const socket=await lexical(f);
+test('actual patched lexical boundary commits CAS before one socket write; replay never writes twice',async t=>{
+  const f=enabled();await authority.consumption(f.source,f.claims);const socket=await lexical(f,t);
   const result=await transport.dispatch(f.source,f.claims.material);
   assert.equal(socket.writes,1);assert.equal(result.state,'transport_returned');assert.equal(result.outcome_unknown,true);
   assert.equal(result.physical_dispatch,true);assert.ok(result.dispatch_started_at);
   assert.equal(result.delivered,undefined);assert.equal(result.sent,undefined);
   assert.deepEqual(await transport.dispatch(f.source,f.claims.material),result);assert.equal(socket.writes,1);
 });
-test('socket failure after CAS persists UNKNOWN and suppresses restart resend',async()=>{
-  const f=enabled();await authority.consumption(f.source,f.claims);const socket=await lexical(f,true);
+test('socket failure after CAS persists UNKNOWN and suppresses restart resend',async t=>{
+  const f=enabled();await authority.consumption(f.source,f.claims);const socket=await lexical(f,t,true);
   const result=await transport.dispatch(f.source,f.claims.material);
   assert.equal(result.state,'outcome_unknown');assert.equal(socket.writes,1);
   await transport.dispatch({...f.source},f.claims.material);assert.equal(socket.writes,1);
 });
-test('expired consumed release proves no dispatch under row lock and never writes',async()=>{
-  const f=enabled();await authority.consumption(f.source,f.claims);const socket=await lexical(f);
+test('expired consumed release proves no dispatch under row lock and never writes',async t=>{
+  const f=enabled();await authority.consumption(f.source,f.claims);const socket=await lexical(f,t);
   f.repo.now=f.claims.material.release.deadline+1;
   const result=await transport.dispatch(f.source,f.claims.material);
   assert.equal(result.state,'release_expired_before_dispatch');
   assert.equal(result.dispatch_started_at,null);assert.equal(result.outcome_unknown,false);assert.equal(socket.writes,0);
   assert.deepEqual(await transport.dispatch(f.source,f.claims.material),result);
 });
-test('concurrent physical operations reach the lexical socket at most once',async()=>{
-  const f=enabled();await authority.consumption(f.source,f.claims);const socket=await lexical(f);
-  await Promise.allSettled([transport.dispatch(f.source,f.claims.material),transport.dispatch(f.source,f.claims.material)]);
-  assert.equal(socket.writes,1);
+test('concurrent physical operations reach the lexical socket at most once',async t=>{
+  const f=enabled();await authority.consumption(f.source,f.claims);const socket=await lexical(f,t);
+  const results=await Promise.allSettled([transport.dispatch(f.source,f.claims.material),transport.dispatch(f.source,f.claims.material)]);
+  assert.equal(socket.writes,1,JSON.stringify(results.map(result=>({status:result.status,code:result.reason?.code,state:result.value?.state}))));
 });
-for(const fault of ['failCommit','badGuard','badIndex'])test(`${fault} cannot escape to socket`,async()=>{
-  const f=enabled();await authority.consumption(f.source,f.claims);const socket=await lexical(f);f.repo[fault]=true;
+for(const fault of ['failCommit','badGuard','badIndex'])test(`${fault} cannot escape to socket`,async t=>{
+  const f=enabled();await authority.consumption(f.source,f.claims);const socket=await lexical(f,t);f.repo[fault]=true;
   await assert.rejects(transport.dispatch(f.source,f.claims.material));assert.equal(socket.writes,0);
 });
 for(const type of ['image','file','audio','video'])test(`${type} resolves APP-authorized bytes and verifies checksum before Baileys`,async()=>{

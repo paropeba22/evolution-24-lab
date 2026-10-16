@@ -1,0 +1,312 @@
+{
+  "verdict": "S7 PARTIAL — SPECIFIC BLOCKERS",
+  "generated_at_utc": "2026-10-16T06:51:36.019074+00:00",
+  "baselines": {
+    "evolution": "9c7b90d135bbd397dd945ef4fe938761aa50c367",
+    "app": "9bf54ed160f773a636d685863824c9a17f4c325b"
+  },
+  "branch": "candidate/v23-prod-13-s7-integrated-certification",
+  "environment": {
+    "os": "Windows",
+    "docker_available": false,
+    "podman_available": false,
+    "wsl_installed": false,
+    "native_postgresql_or_redis_found": false,
+    "physical_memory_gib_approx": 3.8,
+    "free_memory_mib_samples": [
+      156,
+      324
+    ],
+    "free_disk_gib_approx": 11,
+    "node": "24.19.0",
+    "ruby": "3.4.10",
+    "required_ruby": "3.4.4",
+    "active_record": "7.1.5.2",
+    "active_job": "7.1.5.2",
+    "sidekiq": "7.3.1",
+    "connection_pool": "2.5.5",
+    "pg": "1.6.3",
+    "pglite": "0.3.14",
+    "pglite_postgresql": "17.5"
+  },
+  "checks": [
+    {
+      "id": "A.baseline",
+      "status": "PASS",
+      "level": "failure reproduction fixture",
+      "tests": 56,
+      "passed": 49,
+      "failed": 7,
+      "command": "node --test --test-timeout=15000 attendance-authority.test.cjs attendance-physical-dispatch.test.cjs (before S7 edits)"
+    },
+    {
+      "id": "A.corrected",
+      "status": "PASS",
+      "level": "production authority functions with memory repository and fake wire",
+      "tests": 66,
+      "passed": 66,
+      "failed": 0,
+      "skipped": 0,
+      "original_tests": 56,
+      "additional_negative_tests": 10,
+      "command": "NODE_PATH=<pinned rc13 node_modules> node --test --test-timeout=15000 attendance-authority.test.cjs attendance-physical-dispatch.test.cjs attendance-socket-registration.test.cjs"
+    },
+    {
+      "id": "B.source_composition",
+      "status": "PASS",
+      "level": "source and controlled SDK/dispatcher fixtures",
+      "command": "node verify-transport-s6.mjs <pristine Evolution> <local node_modules> <pristine SDK> <installed SDK>"
+    },
+    {
+      "id": "B.transport",
+      "status": "PASS",
+      "level": "native loopback fetch plus adversarial fake transports",
+      "tests": 27,
+      "passed": 27,
+      "failed": 0,
+      "skipped": 0,
+      "command": "S6_COMPOSED_ROOT=<composed root> S6_DEPENDENCIES=<local node_modules> node --test --test-timeout=15000 baileys-transport-s6.test.cjs"
+    },
+    {
+      "id": "B.final_image",
+      "status": "BLOCKED",
+      "providers": {
+        "postgresql": "BLOCKED",
+        "mysql": "BLOCKED",
+        "psql_bouncer": "BLOCKED"
+      },
+      "reason": "no local Docker/Podman/WSL runtime",
+      "build_attempted": false,
+      "final_runtime_executed": false
+    },
+    {
+      "id": "C.evolution_ingress_schema",
+      "status": "PASS",
+      "level": "single-backend PostgreSQL 17.5 WASM schema",
+      "check_groups": 5,
+      "command": "node verify-ingress-schema-s7.mjs <local PGlite 0.3.14/dist/index.js>"
+    },
+    {
+      "id": "C.app_schema",
+      "status": "PASS",
+      "level": "ActiveRecord with partial parent schema and PostgreSQL WASM",
+      "tests": 4,
+      "assertions": 14,
+      "failed": 0,
+      "errors": 0,
+      "command": "S5_NODE=<node> S5_PGLITE_MODULE=<local module> ruby verify-app-schema-s7.rb <APP checkout>",
+      "concurrent_index_build_tested": false
+    },
+    {
+      "id": "C.app_s5",
+      "status": "PASS",
+      "level": "ActiveRecord/ActiveJob/Sidekiq configuration with PostgreSQL WASM fixture",
+      "tests": 25,
+      "assertions": 96,
+      "failed": 0,
+      "errors": 0,
+      "command": "S5_NODE=<node> S5_PGLITE_MODULE=<local module> ruby <APP>/script/verify_attendance_s5.rb",
+      "historical_authority_stubbed": true,
+      "redis_running": false,
+      "sidekiq_workers_running": false
+    },
+    {
+      "id": "C.rails_sidekiq_boot",
+      "status": "BLOCKED",
+      "reason": "native services missing; Ruby 3.4.10 differs from Gemfile 3.4.4; bundle check rejects version",
+      "rails_boot_attempted": false,
+      "sidekiq_boot_attempted": false
+    },
+    {
+      "id": "D.app_release_contract",
+      "status": "PASS",
+      "level": "unit canonical/HMAC contract",
+      "tests": 4,
+      "assertions": 23,
+      "failed": 0,
+      "errors": 0,
+      "command": "ruby <APP>/test/attendance/release_contract_test.rb"
+    },
+    {
+      "id": "D.receipt_authentication",
+      "status": "PASS",
+      "level": "unit HMAC receiver with persistence double",
+      "tests": 7,
+      "assertions": 19,
+      "failed": 0,
+      "errors": 0,
+      "command": "ruby <APP>/test/attendance/receipt_authentication_test.rb"
+    },
+    {
+      "id": "D.receipt_producer",
+      "status": "PASS",
+      "level": "golden receipt producer fixture",
+      "fixtures": 7,
+      "command": "node <APP>/test/attendance/verify_receipt_producer.cjs <Evolution checkout>"
+    },
+    {
+      "id": "D.app_profile",
+      "status": "PASS",
+      "level": "profile projection unit fixture",
+      "command": "ruby <APP>/script/verify_ingress_r2_profile.rb"
+    },
+    {
+      "id": "D.additional_app_legacy",
+      "status": "FAIL",
+      "level": "obsolete memory fixture; not integration runtime regression",
+      "tests": 41,
+      "assertions": 155,
+      "passed": 26,
+      "failed": 0,
+      "errors": 15,
+      "cause": "AttendancePreparationOrchestratorTest: test double DatabaseGuard lacks verify_work_queue! and real work model/transaction contract",
+      "baseline": "fails bootstrap with missing WorkQueue constant",
+      "command": "ruby -I <APP>/test/attendance -e \"ARGV.each { |file| require File.expand_path(file) }\" <APP>/test/attendance/authority_transport_test.rb <APP>/test/attendance/automation_fence_test.rb"
+    },
+    {
+      "id": "D.integrated_apps",
+      "status": "BLOCKED",
+      "reason": "applications and native databases/workers not booted"
+    },
+    {
+      "id": "E.integrations",
+      "status": "BLOCKED",
+      "contract_fixture_groups_passed": 10,
+      "families": {
+        "message_webhook": {
+          "runtime_status": "BLOCKED",
+          "full_external_test": false
+        },
+        "chatbot": {
+          "runtime_status": "BLOCKED",
+          "full_external_test": false
+        },
+        "contact_webhook": {
+          "runtime_status": "BLOCKED",
+          "full_external_test": false
+        },
+        "contact_chatwoot": {
+          "runtime_status": "BLOCKED",
+          "full_external_test": false
+        },
+        "chat_name_webhook": {
+          "runtime_status": "BLOCKED",
+          "full_external_test": false
+        },
+        "contact_cache": {
+          "runtime_status": "BLOCKED",
+          "full_external_test": false
+        }
+      }
+    },
+    {
+      "id": "F.runtime_concurrency_recovery",
+      "status": "BLOCKED",
+      "real_independent_postgresql_connections": 0,
+      "real_load_contacts": 0,
+      "reason": "no integrated applications, native database or workers"
+    },
+    {
+      "id": "G.integrated_latency",
+      "status": "NOT TESTED",
+      "samples": 0,
+      "p50": null,
+      "p95": null,
+      "p99": null,
+      "max": null,
+      "failures": null,
+      "queue_age": null,
+      "throughput": null,
+      "backpressure": null
+    },
+    {
+      "id": "whatsapp_runtime",
+      "status": "NOT TESTED",
+      "reason": "explicitly prohibited; no real session or send"
+    }
+  ],
+  "migrations": {
+    "evolution": {
+      "prisma/postgresql-migrations/20261015000000_nexi_durable_ingress/migration.sql": {
+        "sha256_lf": "042e4282213477a330644a5017621f1646793880c141b195c82092bf0009ba04",
+        "altered_in_s7": false
+      },
+      "prisma/postgresql-migrations/20261015000001_nexi_ingress_secondary/migration.sql": {
+        "sha256_lf": "f9e556dd35b041ce92b9a860ab5b49002dfc553d0c2f3f043edc199e8ee8be6d",
+        "altered_in_s7": false
+      },
+      "prisma/postgresql-migrations/20261015000002_nexi_ingress_contact_cache/migration.sql": {
+        "sha256_lf": "3c6a65a339cae039d0742337ae76bec09f5890b8f0786dfa9e61b6e0ec0a599c",
+        "altered_in_s7": false
+      }
+    },
+    "app": {
+      "db/migrate/20261015000000_create_channel_whatsapp_ingress_admissions.rb": {
+        "sha256_lf": "bf373d75ebde77f41cbd687122c100ed6e2bb0e20382e577f2bb5297721822f5",
+        "altered_in_s7": false
+      },
+      "db/migrate/20261016000000_add_attendance_durable_work.rb": {
+        "sha256_lf": "4b4ccf33a051b7e395d9ef31299f71e301d38dc860276a7180d2f134f45e6e76",
+        "altered_in_s7": false
+      },
+      "db/migrate/20261016000001_index_attendance_receipt_correlation.rb": {
+        "sha256_lf": "e46b95a1b5aaafd6393e5857524720e6cf209b95a2fac2887f46ae310dd2f198",
+        "altered_in_s7": false
+      }
+    }
+  },
+  "local_logs": {
+    "s7-baseline-authority.log": {
+      "sha256": "8aae282adac5385fd2ee628d9daf04aafe2c787ae9a28348960fbba0bba9af7e",
+      "bytes": 61948
+    },
+    "s7-authority-and-negative.log": {
+      "sha256": "8863f9348d32d8ec8a5f1a4a0345497466547ffe7409d2f937ee3c1d3752a10e",
+      "bytes": 67676
+    },
+    "s7-composition.log": {
+      "sha256": "39d516605d01d2e5e9fb2cd9bc2113ed97dec5e5a170e5370d4fc95566782d2b",
+      "bytes": 2471
+    },
+    "s7-transport.log": {
+      "sha256": "3c9c0fa68220bc6942e84e25a6867d9cd6db8d85a3a0e263f09c47b31ba4c536",
+      "bytes": 2962
+    },
+    "s7-evolution-schema.json": {
+      "sha256": "1b4868d86c3a3ce38767e6ca280a45f477ee4b2f755c94f2f1b65e4f17cfbec3",
+      "bytes": 1021
+    },
+    "s7-app-schema.log": {
+      "sha256": "e30f90d42ba409ee52070a0199b3bdc9ae1c254ada966cb402bc325b15f69c3c",
+      "bytes": 389
+    },
+    "s7-app-s5.log": {
+      "sha256": "761f768f9a922934574810c513fddcc83b797c103d66c652b93359b38e2f5e10",
+      "bytes": 674
+    },
+    "s7-app-release-contract.log": {
+      "sha256": "3c948a1cd712b2d11c8c383b2759819a706d3364e673a946fe727fbad972548a",
+      "bytes": 170
+    },
+    "s7-app-receipt-auth.log": {
+      "sha256": "337d59bd58ed15aa8f583ef3161d2696162a0875dc109a146c4b93414d684610",
+      "bytes": 173
+    },
+    "s7-app-profile.log": {
+      "sha256": "3d205abdceeff25fd003af8b7184cdef8f7e52d83a2cf3d9ea7e9b5240ac7d51",
+      "bytes": 114
+    },
+    "s7-app-authority-extra.log": {
+      "sha256": "5d35c41984b03d032d83263c55c84b949171dcddb7620e24189614b5f1a5cc07",
+      "bytes": 19880
+    },
+    "s7-app-extra-baseline.log": {
+      "sha256": "f94cee77731588ec7f90a62243ebc4bf814ffabe13b0b46263ace5ab12fba9e9",
+      "bytes": 1378
+    }
+  },
+  "production_access": false,
+  "deployment_performed": false,
+  "whatsapp_send_performed": false,
+  "signal_journal_atomicity_claimed": false
+}

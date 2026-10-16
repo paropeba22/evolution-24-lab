@@ -8,6 +8,7 @@ const a=require('./nexi-attendance.cjs');
 const authority=require('./nexi-attendance-authority.cjs');
 const storage=require('./nexi-attendance-storage-guard.cjs');
 const {fixture,catalog,memory,original}=require('./attendance-authority-test-support.cjs');
+const {registerSocket,withSocket}=require('./attendance-socket-test-support.cjs');
 const changed=m=>{m.grant_digest=a.digest(m.grant);m.release.grant_digest=m.grant_digest;m.release.request_digest=a.digest({admission_id:m.grant.admission_id,grant_id:m.grant.grant_id,grant_digest:m.grant_digest,attempt_id:m.grant.attempt_id,reservation_id:m.grant.reservation_id});m.release_digest=a.digest(m.release);return m;};
 const consume=f=>authority.consumption(f.source,original());
 const stanza=f=>({tag:'message',attrs:{id:f.repo.row().externalId,to:f.repo.row().recipient}});
@@ -52,24 +53,24 @@ test('expired unconsumed grant/release denies while readback remains UNKNOWN',as
 for(const fault of ['failStorage','failCommit','badGuard','badIndex'])test(`${fault} blocks durable consumption and dispatch eligibility`,async()=>{
   const f=memory();f.repo[fault]=true;await assert.rejects(consume(f));assert.equal(f.repo.row().consumptionId,null);assert.equal(f.repo.row().dispatchStartedAt,null);
 });
-test('CAS commits before a hypothetical fake write and second CAS never writes',async()=>{
-  const f=memory();await consume(f);f.repo.trace.length=0;let writes=0;
+test('CAS commits before a hypothetical fake write and second CAS never writes',async t=>{
+  const f=memory();await consume(f);await registerSocket(f,t);f.repo.trace.length=0;let writes=0;
   const boundary=async()=>{const cas=await authority.dispatchStart(f.source,f.repo.row().id,fixture.material.consumption_id,stanza(f));if(cas.started){assert.equal(f.repo.trace.at(-1),'committed');writes++;f.repo.trace.push('FAKE_WRITE');}};
   await boundary();await boundary();assert.equal(writes,1);assert.deepEqual(f.repo.trace.slice(0,3),['dispatch_started','committed','FAKE_WRITE']);
 });
 test('unconsumed, expired, wrong stanza, changed socket or storage gap deny dispatch CAS',async()=>{
-  let f=memory();await assert.rejects(authority.dispatchStart(f.source,f.repo.row().id,fixture.material.consumption_id,stanza(f)));
+  let f=memory();await withSocket(f,()=>assert.rejects(authority.dispatchStart(f.source,f.repo.row().id,fixture.material.consumption_id,stanza(f)),{code:'nexi_attendance_dispatch_unconsumed'}));
   for(const mutate of [f=>f.repo.now=fixture.now+15000,f=>f.source.service.client.authState.creds.registrationId++,f=>f.repo.failStorage=true,f=>f.source.service.endSession=true]){
-    f=memory();await consume(f);mutate(f);await assert.rejects(authority.dispatchStart(f.source,f.repo.row().id,fixture.material.consumption_id,stanza(f)));assert.equal(f.repo.row().dispatchStartedAt,null);
+    f=memory();await consume(f);await withSocket(f,async()=>{mutate(f);await assert.rejects(authority.dispatchStart(f.source,f.repo.row().id,fixture.material.consumption_id,stanza(f)));assert.equal(f.repo.row().dispatchStartedAt,null);});
   }
-  f=memory();await consume(f);await assert.rejects(authority.dispatchStart(f.source,f.repo.row().id,fixture.material.consumption_id,{tag:'message',attrs:{id:'other',to:f.repo.row().recipient}}));
+  f=memory();await consume(f);await withSocket(f,()=>assert.rejects(authority.dispatchStart(f.source,f.repo.row().id,fixture.material.consumption_id,{tag:'message',attrs:{id:'other',to:f.repo.row().recipient}}),{code:'nexi_attendance_dispatch_fenced'}));
 });
-test('crash after CAS preserves UNKNOWN through restart and never resends',async()=>{
-  const f=memory();await consume(f);await authority.dispatchStart(f.source,f.repo.row().id,fixture.material.consumption_id,stanza(f));
+test('crash after CAS preserves UNKNOWN through restart and never resends',async t=>{
+  const f=memory();await consume(f);await registerSocket(f,t);await authority.dispatchStart(f.source,f.repo.row().id,fixture.material.consumption_id,stanza(f));
   assert.equal(f.repo.row().outcomeUnknown,true);const restart={...f.source};assert.deepEqual(await authority.dispatchStart(restart,f.repo.row().id,fixture.material.consumption_id,stanza(f)),{started:false,outcome_unknown:true});
 });
-for(const succeeded of [true,false])test(`transport return ${succeeded} keeps UNKNOWN and never synthesizes SERVER_ACK/not-sent`,async()=>{
-  const f=memory();await consume(f);await authority.dispatchStart(f.source,f.repo.row().id,fixture.material.consumption_id,stanza(f));
+for(const succeeded of [true,false])test(`transport return ${succeeded} keeps UNKNOWN and never synthesizes SERVER_ACK/not-sent`,async t=>{
+  const f=memory();await consume(f);await registerSocket(f,t);await authority.dispatchStart(f.source,f.repo.row().id,fixture.material.consumption_id,stanza(f));
   const row=await authority.transportReturned(f.source,f.repo.row().id,fixture.material.consumption_id,succeeded);
   assert.equal(row.outcomeUnknown,true);assert.equal(row.state,succeeded?'transport_returned':'outcome_unknown');assert.equal(JSON.stringify(row.transportReturn).includes('ACK'),false);
   assert.equal((await authority.dispatchStart(f.source,row.id,fixture.material.consumption_id,stanza(f))).started,false);
