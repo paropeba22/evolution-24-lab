@@ -1,0 +1,30 @@
+{
+  "status": "OWNER_DEFERRED_READ_ONLY_TO_ANOTHER_AUTHORIZED_CONVERSATION",
+  "owner_reminder": "O proprietário decidiu deixar o READ-ONLY da OVH para outra conversa especificamente autorizada. Não tentar acesso remoto nesta conversa.",
+  "inspection_performed": false,
+  "inspection_utc": null,
+  "previously_authorized_access_reference": null,
+  "ovh_host_or_alias": null,
+  "easypanel_project_id": null,
+  "deployment_authorized_by_this_file": false,
+  "services": {
+    "app_web": { "service_id": null, "container_ids": [], "image_digest": null, "git_sha": null, "replicas": null, "restart_policy": null },
+    "app_sidekiq": { "service_id": null, "container_ids": [], "image_digest": null, "git_sha": null, "replicas": null, "concurrency": null, "capsules": null, "restart_policy": null },
+    "evolution_nexi": { "service_id": null, "container_ids": [], "image_digest": null, "git_sha": null, "replicas": null, "provider": null, "restart_policy": null }
+  },
+  "databases": {
+    "app": { "service_id": null, "engine_version": null, "database_name": null, "schema": null, "shared_with_bia": null, "migration_catalog_evidence": null, "max_connections": null },
+    "evolution": { "service_id": null, "engine_version": null, "database_name": null, "schema": null, "shared_with_bia": null, "migration_catalog_evidence": null, "pgbouncer_mode_if_any": null }
+  },
+  "redis": {
+    "app": { "service_id": null, "logical_database": null, "shared_with_bia": null, "memory_policy": null, "durability": null },
+    "evolution": { "service_id": null, "logical_database": null, "shared_with_bia": null, "memory_policy": null, "durability": null }
+  },
+  "resources": { "cpu_budget": null, "memory_available": null, "disk_available": null, "build_peak_budget": null, "postgres_total_connection_budget": null, "redis_connection_budget": null },
+  "volumes": [],
+  "backups": { "last_success_utc": null, "covered_databases_and_volumes": [], "retention_policy": null, "manifest_or_digest_evidence": null, "last_integrity_verification": null, "restore_procedure_reference": null },
+  "whatsapp": { "nexi_instance_count": null, "nexi_account_ownership_verified": false, "shares_account_with_external_session": null, "old_processes_drained": false },
+  "configuration_checks_without_secret_values": { "hmac_continuity": null, "app_encryption_keys_preserved": null, "service_user_membership": null, "https_callbacks": null, "attendance_receipt_limits": null, "sidekiq_pool_budget": null },
+  "forbidden_targets": ["BIA", "n8n", "independent old Evolution", "181.225.170.5:8081"],
+  "notes": "No secrets, API tokens, private keys, QR codes, message bodies or personal contact data belong in this inventory. Do not derive targets from old reports."
+}

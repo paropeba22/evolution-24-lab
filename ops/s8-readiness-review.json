@@ -1,0 +1,63 @@
+{
+  "verdict": "S8 CONDITIONAL — EXPLICIT PREDEPLOY REQUIREMENTS",
+  "baselines": {
+    "evolution": "73ce9bb163b76d6633d04d0cb20f3465c8742d4b",
+    "app": "05fc828d70fcbf8f8d439515cd4c11fa10a16d23"
+  },
+  "branch": "candidate/v23-prod-13-s8-activation-readiness",
+  "app_modified": false,
+  "migrations_modified": false,
+  "reviewed": [
+    "Dockerfile builder and final-stage composition",
+    "startup migration separation and npm package version metadata",
+    "SDK 1.1.17 instrumented hashes and nested Axios 0.27.2 resolution",
+    "direct ingress/dispatch imports and transitive effects helper resolution",
+    "required Prisma models/fields for three providers",
+    "APP S5 WorkQueue model and production DatabaseGuard.verify_work_queue!",
+    "Sidekiq capsules and aggregate connection-budget dependencies",
+    "Rails release hook and explicit migrations",
+    "migration order, concurrent-index and rollback restrictions",
+    "BIA exclusion, writer ownership, UNKNOWN and Signal retention",
+    "prepared read-only catalog SQL and owner-deferred inventory"
+  ],
+  "checks_passed": [
+    "Node syntax",
+    "sh -n syntax only",
+    "file-only SDK/Axios metadata",
+    "three existing Prisma source schemas",
+    "missing required field rejected",
+    "missing actual bundles rejected",
+    "startup contains no DDL action and execs Node",
+    "two build/final ingress gate invocations present",
+    "catalog statements restricted to read-only transaction/SELECT/session-local settings",
+    "migration and target manifests parsed",
+    "git diff --check"
+  ],
+  "not_executed": [
+    "image build",
+    "application boot",
+    "remote inspection",
+    "any SQL against a database",
+    "new fixture suite",
+    "Docker/PG/Redis lab",
+    "deployment",
+    "container restart",
+    "WriterBarrier activation",
+    "WhatsApp send"
+  ],
+  "remaining_requirements": [
+    "owner-deferred OVH read-only in another authorized conversation",
+    "verified targets, services, current revisions, databases, volumes and sessions",
+    "backup integrity and forward recovery plan",
+    "real resource/connection/build budget",
+    "final image build and required assertions",
+    "approved exact pending migration list and drift checks",
+    "separate authority for maintenance/schema/service updates",
+    "specific accounts and authorization for operational sends"
+  ],
+  "legacy_app_fixture_errors": 15,
+  "legacy_fixtures_reexecuted_in_s8": false,
+  "latency_measured": false,
+  "owner_reminder": "O proprietário decidiu deixar o READ-ONLY da OVH para outra conversa especificamente autorizada. Não tentar acesso remoto nesta conversa.",
+  "operational_authorization_granted": false
+}

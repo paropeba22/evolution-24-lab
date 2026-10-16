@@ -1,0 +1,905 @@
+{
+  "status": "PREPARED_NOT_EXECUTED",
+  "generated_at_utc": "2026-10-16T07:33:02.400376+00:00",
+  "baselines": {
+    "evolution_s7": "73ce9bb163b76d6633d04d0cb20f3465c8742d4b",
+    "app_s7": "05fc828d70fcbf8f8d439515cd4c11fa10a16d23",
+    "evolution_upstream": "e273b904d53f5726970fd6a244ed9caa61dfeb9a"
+  },
+  "warning": "This is a dependency and checksum inventory, not an apply-all allowlist. Resolve actual pending/drifted migrations before authorizing operations. Older Chatwoot/ISP history must also be reconciled.",
+  "hash_format": "SHA256 UTF8 with CRLF normalized to LF; use final image bytes for Prisma ledger verification",
+  "app_dependency_inventory": [
+    {
+      "version": "20260901000001",
+      "file": "db/migrate/20260901000001_create_isp_platform_foundation.rb",
+      "sha256_lf": "ebda58459fdd71d3ac9d159d9dda625a5e8971c29caa7e22062b7ae9e9179216",
+      "declares_irreversible": false,
+      "uses_concurrent_index": false,
+      "applied_on_ovh": "UNKNOWN"
+    },
+    {
+      "version": "20260925000001",
+      "file": "db/migrate/20260925000001_create_managed_channels.rb",
+      "sha256_lf": "689e8f34a1ee4bf35890ae6e189a7aeee0e6f0e55b22491f14ca66ddb4a8eb45",
+      "declares_irreversible": false,
+      "uses_concurrent_index": false,
+      "applied_on_ovh": "UNKNOWN"
+    },
+    {
+      "version": "20260925000002",
+      "file": "db/migrate/20260925000002_create_managed_channel_provisioning_executions.rb",
+      "sha256_lf": "cfd45d7204192c88d6419bda0863a5342ae7d2321fa64ba80cd18c57abbe313e",
+      "declares_irreversible": false,
+      "uses_concurrent_index": false,
+      "applied_on_ovh": "UNKNOWN"
+    },
+    {
+      "version": "20260925000003",
+      "file": "db/migrate/20260925000003_create_managed_channel_action_executions.rb",
+      "sha256_lf": "b9653e5381a5e6a247d4e13715bc874d3015144960952c39637e1e9f899c642c",
+      "declares_irreversible": false,
+      "uses_concurrent_index": false,
+      "applied_on_ovh": "UNKNOWN"
+    },
+    {
+      "version": "20260926000001",
+      "file": "db/migrate/20260926000001_add_managed_channel_chatwoot_binding_and_events.rb",
+      "sha256_lf": "ff4fe8180dfdd1e9facc78a408ebffd1cd4bce5d474b381317741e56735a1818",
+      "declares_irreversible": false,
+      "uses_concurrent_index": false,
+      "applied_on_ovh": "UNKNOWN"
+    },
+    {
+      "version": "20260926000003",
+      "file": "db/migrate/20260926000003_allow_managed_channel_restore_action.rb",
+      "sha256_lf": "5cd78c13d4529fa0b0eedeeadcfac5eea53d259390b0b3fc6cd4d944f0717fc2",
+      "declares_irreversible": false,
+      "uses_concurrent_index": false,
+      "applied_on_ovh": "UNKNOWN"
+    },
+    {
+      "version": "20260926000004",
+      "file": "db/migrate/20260926000004_add_managed_channel_reconciliation_start.rb",
+      "sha256_lf": "3351a8cd5eb1c0c33bec44b924fb5cf5cc07d8fc42d48a889e3db2770965a936",
+      "declares_irreversible": false,
+      "uses_concurrent_index": false,
+      "applied_on_ovh": "UNKNOWN"
+    },
+    {
+      "version": "20260930000001",
+      "file": "db/migrate/20260930000001_create_channel_whatsapp_identity_ledger.rb",
+      "sha256_lf": "341aa1553d94460f53d779a33061c9fc50b2d7fa236d1dc5eadc486d52c17ab0",
+      "declares_irreversible": false,
+      "uses_concurrent_index": false,
+      "applied_on_ovh": "UNKNOWN"
+    },
+    {
+      "version": "20261002000001",
+      "file": "db/migrate/20261002000001_create_group_inbound_foundation.rb",
+      "sha256_lf": "d19737322caa82be3439753c50089cc6222d34ec4834f2942e6714c1d2e28964",
+      "declares_irreversible": false,
+      "uses_concurrent_index": false,
+      "applied_on_ovh": "UNKNOWN"
+    },
+    {
+      "version": "20261002000002",
+      "file": "db/migrate/20261002000002_harden_group_inbound_foundation.rb",
+      "sha256_lf": "5364869c5ed28aa477b7b507ff6c9ece4ace881f5d3080d68e11b3d6f1878525",
+      "declares_irreversible": true,
+      "uses_concurrent_index": false,
+      "applied_on_ovh": "UNKNOWN"
+    },
+    {
+      "version": "20261002000003",
+      "file": "db/migrate/20261002000003_namespace_group_message_identity.rb",
+      "sha256_lf": "7761678133644e5fe563157aa8a423968ec2a5f54886759f4bc4bc40026f50c3",
+      "declares_irreversible": true,
+      "uses_concurrent_index": false,
+      "applied_on_ovh": "UNKNOWN"
+    },
+    {
+      "version": "20261004000001",
+      "file": "db/migrate/20261004000001_create_attendance_identity_foundations.rb",
+      "sha256_lf": "ea08c9a6c325c8aef58687f34f1cd608274c86ee4d7aaba3b98ffdf4297db2fa",
+      "declares_irreversible": true,
+      "uses_concurrent_index": false,
+      "applied_on_ovh": "UNKNOWN"
+    },
+    {
+      "version": "20261004000002",
+      "file": "db/migrate/20261004000002_create_attendance_outbound_foundations.rb",
+      "sha256_lf": "685c3768a7181c6653aa6b5b0afa6c1abb8602c7c252eea2aab5b6b8d7b6e228",
+      "declares_irreversible": true,
+      "uses_concurrent_index": false,
+      "applied_on_ovh": "UNKNOWN"
+    },
+    {
+      "version": "20261004000003",
+      "file": "db/migrate/20261004000003_guard_attendance_authority.rb",
+      "sha256_lf": "2d29cbb9a8d61d88eaeb6c232389a81f7c2fb987ac6928cd47254980ce666055",
+      "declares_irreversible": true,
+      "uses_concurrent_index": false,
+      "applied_on_ovh": "UNKNOWN"
+    },
+    {
+      "version": "20261004000004",
+      "file": "db/migrate/20261004000004_correct_attendance_authority_findings.rb",
+      "sha256_lf": "2c8c8e3c444e48644d031c46d68f54f3825c546ddc84668632b68e993bb4e015",
+      "declares_irreversible": true,
+      "uses_concurrent_index": false,
+      "applied_on_ovh": "UNKNOWN"
+    },
+    {
+      "version": "20261004000005",
+      "file": "db/migrate/20261004000005_seal_attendance_projection_authority.rb",
+      "sha256_lf": "90839688ba38658153ebae0465cf283e27e37d5d76fb07f8949c8e3ff93cbd5f",
+      "declares_irreversible": true,
+      "uses_concurrent_index": false,
+      "applied_on_ovh": "UNKNOWN"
+    },
+    {
+      "version": "20261005000001",
+      "file": "db/migrate/20261005000001_create_attendance_transport_foundation_receipts.rb",
+      "sha256_lf": "c672758e0e015c05a3073591be680bc47517ca51c123dff5bf27ad798e9dfcef",
+      "declares_irreversible": true,
+      "uses_concurrent_index": false,
+      "applied_on_ovh": "UNKNOWN"
+    },
+    {
+      "version": "20261005000002",
+      "file": "db/migrate/20261005000002_version_attendance_canonical_authority.rb",
+      "sha256_lf": "7fb0e426dd6c2ebf440fa2ba36d27f1d7cbefa8ca7483a18d719ffe0036fb519",
+      "declares_irreversible": true,
+      "uses_concurrent_index": false,
+      "applied_on_ovh": "UNKNOWN"
+    },
+    {
+      "version": "20261006000001",
+      "file": "db/migrate/20261006000001_create_attendance_receipt_intake.rb",
+      "sha256_lf": "4ed49b10b8c42b377387df9aa8fdb59b7db1b64a85e2883a8f3c5f18af3b29c6",
+      "declares_irreversible": true,
+      "uses_concurrent_index": false,
+      "applied_on_ovh": "UNKNOWN"
+    },
+    {
+      "version": "20261006000002",
+      "file": "db/migrate/20261006000002_correlate_attendance_receipt_evidence.rb",
+      "sha256_lf": "a06d065833f9b6fe8f0cf54154d696cdc74cec6210f2b5af158da6ae9bcf0534",
+      "declares_irreversible": true,
+      "uses_concurrent_index": false,
+      "applied_on_ovh": "UNKNOWN"
+    },
+    {
+      "version": "20261006000003",
+      "file": "db/migrate/20261006000003_seal_attendance_atomic_creation.rb",
+      "sha256_lf": "dc5d0f91bfc28fe3ab012b974df22446e23376dbf68b3491f9d438fcb6ba9b37",
+      "declares_irreversible": true,
+      "uses_concurrent_index": false,
+      "applied_on_ovh": "UNKNOWN"
+    },
+    {
+      "version": "20261006000004",
+      "file": "db/migrate/20261006000004_complete_attendance_authority_transport.rb",
+      "sha256_lf": "57f42273ac075f0e714fd87f32df028004631eadc0549c7767b5813a4ca07908",
+      "declares_irreversible": true,
+      "uses_concurrent_index": false,
+      "applied_on_ovh": "UNKNOWN"
+    },
+    {
+      "version": "20261007000002",
+      "file": "db/migrate/20261007000002_add_explicit_attendance_ownership_routes.rb",
+      "sha256_lf": "f45b9133203cfe787ffe315cc7aad699a3199f184b9be4f8be775b28214364f2",
+      "declares_irreversible": false,
+      "uses_concurrent_index": false,
+      "applied_on_ovh": "UNKNOWN"
+    },
+    {
+      "version": "20261007000003",
+      "file": "db/migrate/20261007000003_certify_attendance_generic_automation.rb",
+      "sha256_lf": "03b8703e637161d11b2288a79fa4fd99127130db6edc8779fff5c2df4bc3167b",
+      "declares_irreversible": true,
+      "uses_concurrent_index": false,
+      "applied_on_ovh": "UNKNOWN"
+    },
+    {
+      "version": "20261010000001",
+      "file": "db/migrate/20261010000001_enable_attendance_physical_dispatch.rb",
+      "sha256_lf": "19fa668c450cb76cb1eb9b1d1ced57bc536d5b4c117d19d622464e80a96f26f0",
+      "declares_irreversible": true,
+      "uses_concurrent_index": false,
+      "applied_on_ovh": "UNKNOWN"
+    },
+    {
+      "version": "20261010000002",
+      "file": "db/migrate/20261010000002_authorize_managed_attendance_dispatch.rb",
+      "sha256_lf": "8f49924c550a833978c8b5635c6727045baea2c99b7d71baa45e6f374b9a4890",
+      "declares_irreversible": true,
+      "uses_concurrent_index": false,
+      "applied_on_ovh": "UNKNOWN"
+    },
+    {
+      "version": "20261011000001",
+      "file": "db/migrate/20261011000001_add_attendance_identity_invalidations.rb",
+      "sha256_lf": "ac1d7371eb702255b76604443c169c472ee788c7afc40990a017b7f6180baf88",
+      "declares_irreversible": false,
+      "uses_concurrent_index": false,
+      "applied_on_ovh": "UNKNOWN"
+    },
+    {
+      "version": "20261011000002",
+      "file": "db/migrate/20261011000002_add_authenticated_whatsapp_contact_profiles.rb",
+      "sha256_lf": "b6e886ec6776cd02ecb0e3c5c253e2fd86e308e4c9d1583986168b12468c13a4",
+      "declares_irreversible": true,
+      "uses_concurrent_index": false,
+      "applied_on_ovh": "UNKNOWN"
+    },
+    {
+      "version": "20261013000001",
+      "file": "db/migrate/20261013000001_add_whatsapp_conversation_successors.rb",
+      "sha256_lf": "c0ff231b7e5e5071580a6b243aab5bdb5c1fcf40f24dc33052b490287f71c8c8",
+      "declares_irreversible": true,
+      "uses_concurrent_index": false,
+      "applied_on_ovh": "UNKNOWN"
+    },
+    {
+      "version": "20261015000000",
+      "file": "db/migrate/20261015000000_create_channel_whatsapp_ingress_admissions.rb",
+      "sha256_lf": "bf373d75ebde77f41cbd687122c100ed6e2bb0e20382e577f2bb5297721822f5",
+      "declares_irreversible": false,
+      "uses_concurrent_index": false,
+      "applied_on_ovh": "UNKNOWN"
+    },
+    {
+      "version": "20261016000000",
+      "file": "db/migrate/20261016000000_add_attendance_durable_work.rb",
+      "sha256_lf": "4b4ccf33a051b7e395d9ef31299f71e301d38dc860276a7180d2f134f45e6e76",
+      "declares_irreversible": true,
+      "uses_concurrent_index": false,
+      "applied_on_ovh": "UNKNOWN"
+    },
+    {
+      "version": "20261016000001",
+      "file": "db/migrate/20261016000001_index_attendance_receipt_correlation.rb",
+      "sha256_lf": "e46b95a1b5aaafd6393e5857524720e6cf209b95a2fac2887f46ae310dd2f198",
+      "declares_irreversible": false,
+      "uses_concurrent_index": true,
+      "applied_on_ovh": "UNKNOWN"
+    }
+  ],
+  "evolution_full_image_migration_inventory": {
+    "postgresql": [
+      {
+        "name": "20240609181238_init",
+        "sha256_lf": "7507eff6b49fad53cdd0b3ace500f529597dfa1a8987afbb9807968a8ee8ef49",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20240610144159_create_column_profile_name_instance",
+        "sha256_lf": "914eeefb9eba0dacdbcb7cdbe47567abd957543d6f27c39db4eec6a40c864008",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20240611125754_create_columns_whitelabel_chatwoot",
+        "sha256_lf": "50d6920345af06dbd5086959784b7e2b4d163a5b555ff1029e5f81678a454444",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20240611202817_create_columns_debounce_time_typebot",
+        "sha256_lf": "b90c49299ed812fb46b71a4f0b9f818b7fc7109c52b1aff227a107236839d93c",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20240712144948_add_business_id_column_to_instances",
+        "sha256_lf": "01303057a037f5dc28272ac513b60d5a75be71d1bf727e671ca538db3268fa2e",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20240712150256_create_templates_table",
+        "sha256_lf": "34235c250eb1f088c285489ad690b4c045680f1638076436cdc66de0ea382cc2",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20240712155950_adjusts_in_templates_table",
+        "sha256_lf": "0ba192ba428c9ab5a9b31d1f7d73603ee47b6192e2f8c590f6d93ade0dbdbccf",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20240712162206_remove_templates_table",
+        "sha256_lf": "426256b73f7ea52538dc91a890179c841325a9c387cf02885b81971d582af830",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20240712223655_column_fallback_typebot",
+        "sha256_lf": "3496739609829e80daf733baecd3d3e4e279bf318a99adc1ca3aa1c76f893b2f",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20240712230631_column_ignore_jids_typebot",
+        "sha256_lf": "bea48f697c0c5db52ade4a3f26c1321e3f5611c80ea50384baa54e58c6b3a79e",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20240713184337_add_media_table",
+        "sha256_lf": "1bac56740af5d2d6512b29e7a6e0721d69b2a290400f6660b92b6f2d8b30cd6e",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20240718121437_add_openai_tables",
+        "sha256_lf": "bdd992b253321ca9a9556e30fea5e7760556cb8e80140aec34066301b55dc675",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20240718123923_adjusts_openai_tables",
+        "sha256_lf": "8147ec0cc86ac30ea1be05d461559ba5064273a3fcb3227af71ddcd895f5aebe",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20240722173259_add_name_column_to_openai_creds",
+        "sha256_lf": "8c2a595975dc2f6dee831983304996e25c37014c48291576e7c8044078bfde32",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20240722173518_add_name_column_to_openai_creds",
+        "sha256_lf": "20b3c04d93799c25fa8b2d0a85d10f9280e915a5d7519542492ed85ff082a3c0",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20240723152648_adjusts_in_column_openai_creds",
+        "sha256_lf": "7ffb91b84cb7aa17b1f488d580626144cd557ccdfaec6654515545401d1938af",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20240723200254_add_webhookurl_on_message",
+        "sha256_lf": "3056f8f1335e8933e4098f005e33cd4821190be2eb76520c0d01e2e13cf6e073",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20240725184147_create_template_table",
+        "sha256_lf": "9d6c9b4ffe51483a851f6507f7aefd2fb34f54a7c28961856e3230fda4f87022",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20240725202651_add_webhook_url_template_table",
+        "sha256_lf": "94e2edb21107895c77b24402f41cd020c7f74dbb39b9a95664a45e62e2582be9",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20240725221646_modify_token_instance_table",
+        "sha256_lf": "d0da588e4204c50bde2e41a615b9301afca072991033545b6f4e3e34e088db87",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20240729115127_modify_trigger_type_openai_typebot_table",
+        "sha256_lf": "a80f5c27cd80d088ea69153f8d6f4879406770ffa5a7fd50b28da82bd020322e",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20240729180347_modify_typebot_session_status_openai_typebot_table",
+        "sha256_lf": "c29ccc88930138c50091712466f3f97bff48f6a0f486dcec5b19dc08c3612973",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20240730152156_create_dify_tables",
+        "sha256_lf": "961a8627684fe1e4c7123565db3d16db30768df41881342032f9a2df16145eaf",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20240801193907_add_column_speech_to_text_openai_setting_table",
+        "sha256_lf": "b56b053451d564ff6282078fad4fc7bff4aa71e3b0b8d00bf219da4ed1bc4c86",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20240803163908_add_column_description_on_integrations_table",
+        "sha256_lf": "2b963cbc826ea024f9a643af2d5d9fcea06717c90ec9bacb255d3836efa06aea",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20240808210239_add_column_function_url_openaibot_table",
+        "sha256_lf": "4d2dd947ebb7515c7c278472a10ebab6d5f41a5ef60e15df717a05d457d5d2aa",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20240811021156_add_chat_name_column",
+        "sha256_lf": "c8627bad5d72ee4ef774ed32c95a2524517b0c60c49fa67cd4ba9dff7cbdde3b",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20240811183328_add_unique_index_for_remoted_jid_and_instance_in_contacts",
+        "sha256_lf": "ee44f0420384d55de6d252fffb8f2cfa88479e5811e14cfe975d8edfcc6957e0",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20240813003116_make_label_unique_for_instance",
+        "sha256_lf": "29c330029a48aaee63567e63c4f4e57b7c1f5344162b11fbf61a4dc194547861",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20240814173033_add_ignore_jids_chatwoot",
+        "sha256_lf": "428a9148f2a29f773e0c9813149e6d07bf51765e018652aeac0be2141a722b67",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20240814202359_integrations_unification",
+        "sha256_lf": "e1eb8997ac99fd555b8a9241c817b97fa5614124922b4e6b3cb1751e9e2199c7",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20240817110155_add_trigger_type_advanced",
+        "sha256_lf": "bc5cd1c7fb4df72e88cb4856c9c49ea340284c9d8f389fe558008a921494ed82",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20240819154941_add_context_to_integration_session",
+        "sha256_lf": "1af30cbbccd90152fbb1b99a458978e42428a792b822b4b5f9c9c7fffbf7264f",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20240821120816_bot_id_integration_session",
+        "sha256_lf": "a363a9ebc5bb526e504c4e6f71ed7702a5b6d317db6a9981f36c4560f9147fba",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20240821171327_add_generic_bot_table",
+        "sha256_lf": "e31947e6c709ee3a62504980ae9ab1ffbfd9faf0cf9ac389cfd6435734c49902",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20240821194524_add_flowise_table",
+        "sha256_lf": "18dde8e48c49a97f33f5b789ccd919326253c26d43af72c77f6b13d4285ffba8",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20240824161333_add_type_on_integration_sessions",
+        "sha256_lf": "0148a09e0e5eedafe5c5169c6351201a5c70ebaa853456693d75a7b82a851dbe",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20240825130616_change_to_evolution_bot",
+        "sha256_lf": "710e7ee3aabf07aa6ee9bf2865c09f75d461efa5724dd83f5a6f324ea1e5e47c",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20240828140837_add_is_on_whatsapp_table",
+        "sha256_lf": "d03a8a31df36eb0a07e80cd2a149b6d826e69bb2cb21fbe69943ae5ffba672ad",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20240828141556_remove_name_column_from_on_whatsapp_table",
+        "sha256_lf": "e927e00343b622bee7dab1b9b5c9fdd95007bfaf9d705ec52db9ecb05fb3d078",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20240830193533_changed_table_case",
+        "sha256_lf": "cf00d8ef2c28cf94aea51e7e2a80ddd65474a4f6c1113abc65dea6cc194c1a57",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20240906202019_add_headers_on_webhook_config",
+        "sha256_lf": "1cc60b9c38db62b694f753e2ee4c155e95c66815b5800f6ddb6f7cddec23b1ad",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20241001180457_add_message_status",
+        "sha256_lf": "7dff7227c1e013127210ab4f77b91dc24eae14bcd07f21fb27aaa2fa82b23865",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20241006130306_alter_status_on_message_table",
+        "sha256_lf": "07449acbac59175f82670f34664c1dcea4d34f9a1710f19bd3396e26868db09e",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20241007164026_add_unread_messages_on_chat_table",
+        "sha256_lf": "7e9a7c45f05285e9fea38ccfa4266790a099107605299d81c309e689c06494ef",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20241011085129_create_pusher_table",
+        "sha256_lf": "7e3e4686eb8009cbf0f71e8606a442b1c2862673dbc654b3f36f39a36efcb586",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20241011100803_split_messages_and_time_per_char_integrations",
+        "sha256_lf": "270e1e51c7b9d24c0e68708ad167cb5748d591fd194ad422486574a0e83c0b79",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20241017144950_create_index",
+        "sha256_lf": "e82282df963a32556a9c8cd5fd908dd5810d4c35f0d7765ab9e844ebad1106a2",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20250116001415_add_wavoip_token_to_settings_table",
+        "sha256_lf": "668e44d3cd8caafa8f60f89805e9f80587c1c69b4d52a21dfc79f4b615125b1c",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20250225180031_add_nats_integration",
+        "sha256_lf": "17983175f27c61a0ee6aaa42c94d665cabb7e904ee91c33f867c657512210e1a",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20250514232744_add_n8n_table",
+        "sha256_lf": "0a6034359b1cf68820e829d31402032eed0f77586fb1ee590a98f5a6c3e15847",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20250515211815_add_evoai_table",
+        "sha256_lf": "f9ddf352b22e52a1f466d40df95da7bd6f4bf51310c07911d9c990f720e1fe81",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20250516012152_remove_unique_atribute_for_file_name_in_media",
+        "sha256_lf": "7a03627d41844a016b28b4194e36eea0e52cd24be0061535fecba4ccbd0e72f4",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20250612155048_add_coluns_trypebot_tables",
+        "sha256_lf": "3fca4961d4e7fa8e1a99e3ec6b072d235bec706b7463ab699887be1084e3b656",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20250613143000_add_lid_column_to_is_onwhatsapp",
+        "sha256_lf": "36a19fe7711b98d02b450aedb2de8802b5e2e635a1e530cbc42f1d184e89bec3",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20250918182355_add_kafka_integration",
+        "sha256_lf": "2b9d50b837a154ee3a74284c130b21fbe10ecddc1159cb29dac74c4ba4cb6a5f",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20251122003044_add_chat_instance_remotejid_unique",
+        "sha256_lf": "84053d218d69e85953f7533bbfced9171e762c02c88ab944aaaa75b17f18e161",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20251216143054_increase_token_length",
+        "sha256_lf": "75bf5f658ead0ca12ea58eabd7ffcc4411d94c3d2ff9a6ca050d4e1fa3c9161a",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20260506184850_add_runtime_config",
+        "sha256_lf": "17efc12cc44028e72a66cddeb41be00b7abdbac7d1bbd5e2e9408ad14c4535e0",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20260926000000_add_chatwoot_inbox_id",
+        "sha256_lf": "6e7004d282dd2e196e5737ea40e2c0f0aaee287cac98e5054d60f700a1580b90",
+        "source": "candidate",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20261002000000_nexi_groups_wave1",
+        "sha256_lf": "dfbae110b75f4dcfc981677eab787491813ec99a9968053f4bc6621e7cf7985c",
+        "source": "candidate",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20261002000001_harden_groups_wave1",
+        "sha256_lf": "8a7bb12eace9434ced34834c0b3abe193d31c9db6603e070143110cdb9c1afa5",
+        "source": "candidate",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20261002000002_namespace_groups_source",
+        "sha256_lf": "2400f3e45fba4f0e6d2ad307a8a20abec502fb4acb5d7da255a29c1d37c70dcd",
+        "source": "candidate",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20261005000000_nexi_attendance_boundaries",
+        "sha256_lf": "57f49c82bc9340a7f1db76b3fa1ce6648bc0f07ba404bd0f3da96c111539486f",
+        "source": "candidate",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20261005000001_attendance_canonical_version",
+        "sha256_lf": "0214f56e508df1d81b23700ee6ca73c554f82945db1ffc898d5a58b626ca4ab1",
+        "source": "candidate",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20261006000000_attendance_release_dispatch",
+        "sha256_lf": "2a8daff6ce7b8bc16173d2babbe70c7e580237d90291df8d465f693d6647580f",
+        "source": "candidate",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20261010000000_attendance_physical_dispatch",
+        "sha256_lf": "a17cff382193662ebd2598e59d8d559d7e7a642cd0137a8754007ddcd46af2ae",
+        "source": "candidate",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20261015000000_nexi_durable_ingress",
+        "sha256_lf": "042e4282213477a330644a5017621f1646793880c141b195c82092bf0009ba04",
+        "source": "candidate",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20261015000001_nexi_ingress_secondary",
+        "sha256_lf": "f9e556dd35b041ce92b9a860ab5b49002dfc553d0c2f3f043edc199e8ee8be6d",
+        "source": "candidate",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20261015000002_nexi_ingress_contact_cache",
+        "sha256_lf": "3c6a65a339cae039d0742337ae76bec09f5890b8f0786dfa9e61b6e0ec0a599c",
+        "source": "candidate",
+        "applied_on_ovh": "UNKNOWN"
+      }
+    ],
+    "mysql": [
+      {
+        "name": "20240809105427_init",
+        "sha256_lf": "3e951ed9fe8c30ebb2f93b7d5d58a84a37195aaf7b075e8adc4e4d3a986eed67",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20240813153900_add_unique_index_for_remoted_jid_and_instance_in_contacts",
+        "sha256_lf": "87bba6c49668d4e5540f1b466285454427b1a4748b0ab26ccfd71db6369bfe97",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20240814173138_add_ignore_jids_chatwoot",
+        "sha256_lf": "446d6e514aa44f483f6806c7f279038073876f0f4ddb2cf57a2e7169bece4ba8",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20240814214314_integrations_unification",
+        "sha256_lf": "588f0ec8c6e9ae65c8535ea2779b6031a34474e9b1852171d723798793009ae8",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20240821203259_add_postgres_migrations",
+        "sha256_lf": "72f8c98e20cc6da17b45c2db75d3346e8022255d85de5cdfc8a5b6937294d8b6",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20240824162012_add_type_on_integration_sessions",
+        "sha256_lf": "5dd1780943efe9dfe2d032182c13d81a4d3c7449f1ec8958d3951f09408e8413",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20240825131301_change_to_evolution_bot",
+        "sha256_lf": "7855c328b5d2388ae44a22559ae347e17cbf8376e63f91e82aea91832a6fa8a8",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20241001172800_add_message_status",
+        "sha256_lf": "aa03462134bdb796393455a7c62c296586e9da6c40bb46c21d4095e7ac211fb5",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20241108101333_fix_message_status_as_string",
+        "sha256_lf": "35ab903ac16e03e805f46b408883680b2ce882cbfa6352cf9d5c06d8385b8a65",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20250214181954_add_wavoip_token_column",
+        "sha256_lf": "fa79017c38971214fe63c1f8ba3946c4a5f07f1155f46122738cc0ff58477c3e",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20250225180031_add_nats_integration",
+        "sha256_lf": "d5d9ac2582f65a04e884643af33351347b0b8adbb8eeac529569e56220c42e5c",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20250510035200_add_wavoip_token_to_settings_table",
+        "sha256_lf": "f8fdaa4612565eca57035fc56c2684c6238c97d85137394a886e3799aa171d05",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20250514232744_add_n8n_table",
+        "sha256_lf": "8e393273f215b120db8cb0f4f765dfc8efd70e3df518157957efb6a5b300e1a2",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20250515211815_add_evoai_table",
+        "sha256_lf": "ec7ab1b7b4fa1bf3523ec34aa525478e3b669112bdc3ac1bb09817f8e5a62856",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20250516012152_remove_unique_atribute_for_file_name_in_media",
+        "sha256_lf": "8f33fff4a13e1f7b22dcb1f8bd422c7f27b5d04007cd9022e6cddf1603a964e7",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20250612155048_add_coluns_trypebot_tables",
+        "sha256_lf": "d9dd0fe8162800d1eda545cd285a910c216dfaef221535cd5eaaae35590bac85",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20250613143000_add_lid_column_to_is_onwhatsapp",
+        "sha256_lf": "701f547c2f4daacdf7b3553eb7a4acfda1ffb600d516fd36b8acbb30ee11d0e4",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20250918183910_add_kafka_integration",
+        "sha256_lf": "4a5e344e55ec2e68bff505c576b9dbf7b9ed05a4cb2c5aae5451077f04fbe89b",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20251216143054_increase_token_length",
+        "sha256_lf": "9de98732b68850986d328a6667a4f53d46a9735dca8d95a3a89c5b5c9929a69d",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20251223093839_re_add_lid_to_is_onwhatsapp",
+        "sha256_lf": "d4449e3d1e3537379944f761176dc8f9fc4f4b60108a99d5b5e14759b2af4b40",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20260506184850_add_runtime_config",
+        "sha256_lf": "759f63bf456e41e9c553d3cf62a8e80e98d24cc41dc468be75ec9da78ce28c62",
+        "source": "upstream",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20260926000000_add_chatwoot_inbox_id",
+        "sha256_lf": "d298e7f715d2c3bb617a6b8531e48325a7c8307af246729306f47545a708c3e2",
+        "source": "candidate",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20261002000000_nexi_groups_wave1",
+        "sha256_lf": "b467c25efd565fb19dcc7785ad38274deaf48384db37141926da71e141a130b7",
+        "source": "candidate",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20261002000001_harden_groups_wave1",
+        "sha256_lf": "04901f2d73364ed181ccd22eb08f722fba1c8962672afa411e3d2e31a4d96efb",
+        "source": "candidate",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20261002000002_namespace_groups_source",
+        "sha256_lf": "4543c73f1381601b0bf8bb63bdf91430f39dc30dbac91c9311fd1d3b86daa6e9",
+        "source": "candidate",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20261005000000_nexi_attendance_boundaries",
+        "sha256_lf": "cd434d4a33e12bb30ff79d227d18878ccc6c5caf5adb56580bfb769cab3e5acc",
+        "source": "candidate",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20261005000001_attendance_canonical_version",
+        "sha256_lf": "3a14dfa320417b23763479169c40df2a0b767e6b4a98bf49665390c7b7e58f17",
+        "source": "candidate",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20261006000000_attendance_release_dispatch",
+        "sha256_lf": "eb8dab2e548e599997e3ff00b298ae1b8384fac62e3f4394eb8ce2fc48b2af49",
+        "source": "candidate",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20261010000000_attendance_physical_dispatch",
+        "sha256_lf": "f65426005ece70ea5832903340433f31c6456d00b341a197c2ddb20335c3bdee",
+        "source": "candidate",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20261015000000_nexi_durable_ingress",
+        "sha256_lf": "1c61ec4b98688fd4e1059443e96ca5285820c991a1cb994ed2e31fd1dd92ac75",
+        "source": "candidate",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20261015000001_nexi_ingress_secondary",
+        "sha256_lf": "e7f98d39a17ed436741e8328e8aa924b1a8f49ac52cd950add70f9b19ebec18e",
+        "source": "candidate",
+        "applied_on_ovh": "UNKNOWN"
+      },
+      {
+        "name": "20261015000002_nexi_ingress_contact_cache",
+        "sha256_lf": "88d438471165e960c7fc04d85907363bc9556bb27fe1101f724f49c016b798b7",
+        "source": "candidate",
+        "applied_on_ovh": "UNKNOWN"
+      }
+    ]
+  },
+  "psql_bouncer_migrations": "postgresql",
+  "new_app_versions_in_order": [
+    "20261015000000",
+    "20261016000000",
+    "20261016000001"
+  ],
+  "new_evolution_migrations_in_order": [
+    "20261015000000_nexi_durable_ingress",
+    "20261015000001_nexi_ingress_secondary",
+    "20261015000002_nexi_ingress_contact_cache"
+  ],
+  "new_migrations_added_in_s8": false,
+  "known_downgrade_limits": {
+    "app_20261015000000": "implicit down drops admissions; prohibited after real data",
+    "app_20261016000000": "explicit irreversible down; preserve all work",
+    "app_20261016000001": "concurrent index DDL, no global transaction; invalid index needs separately authorized repair",
+    "evolution": "no reset or destructive rollback; retain journal/checkpoints/contact cache proof metadata; no Signal rollback"
+  }
+}
