@@ -39,6 +39,7 @@ COPY patch-trusted-baileys.mjs patch-managed-retry.mjs patch-webhook-safe-logs.m
 COPY patch-ingress-source.mjs ingress-models.prisma nexi-ingress.cjs /evolution/
 COPY patch-chatwoot-completion.mjs nexi-ingress-effects.cjs ingress-effects.ts.inc /evolution/
 COPY patch-ingress-integrations.mjs ingress-event-adapters.ts.inc nexi-ingress-dispatch.cjs /evolution/
+COPY patch-baileys-transport.mjs assert-baileys-transport-runtime.mjs nexi-baileys-transport.cjs nexi-baileys-device-cache.cjs /evolution/
 COPY patch-groups-source.mjs nexi-groups.cjs groups-wave1.test.cjs /evolution/
 COPY groups-postgresql.integration.test.cjs /evolution/
 COPY attendance-database.integration.test.cjs /evolution/
@@ -79,6 +80,7 @@ RUN node /evolution/patch-attendance-source.mjs /evolution --snapshot
 RUN node /evolution/patch-chatwoot-completion.mjs /evolution
 RUN node /evolution/patch-ingress-source.mjs /evolution --snapshot
 RUN node /evolution/patch-ingress-integrations.mjs /evolution --snapshot
+RUN node /evolution/patch-baileys-transport.mjs /evolution --snapshot
 
 # tsup bakes licensing definitions into each bundle. Empty args retain the
 # pinned upstream source's official-endpoint fallback; no runtime ENV is added.
@@ -113,7 +115,8 @@ RUN set -eu; mkdir -p /tmp/evolution-provider-bundles; \
     done; \
     EVOLUTION_PROVIDER=postgresql EVOLUTION_SCHEMA_PROVIDER=psql_bouncer EVOLUTION_SKIP_GENERATED=1 EVOLUTION_BUNDLE_PATH=/evolution/dist/providers/psql_bouncer.js node /tmp/assert-runtime-model.mjs; \
     EVOLUTION_PROVIDER=postgresql EVOLUTION_SCHEMA_PROVIDER=psql_bouncer EVOLUTION_BUNDLE_PATH=/evolution/dist/providers/psql_bouncer.js node /evolution/assert-attendance-runtime.mjs; \
-    EVOLUTION_PROVIDER=postgresql node /tmp/assert-runtime-model.mjs;
+    EVOLUTION_PROVIDER=postgresql node /tmp/assert-runtime-model.mjs; \
+    node /evolution/assert-baileys-transport-runtime.mjs /evolution;
 
 FROM evoapicloud/evolution-api@sha256:65e29aa1a2ca096675825ff8feb3b5bf7fbcb167e368f9282fd80670e8da18a2
 
@@ -122,6 +125,8 @@ COPY prisma.config.ts /evolution/prisma.config.ts
 COPY --from=source-builder /evolution/dist /evolution/dist
 COPY --from=source-builder /evolution/prisma /evolution/prisma
 COPY --from=source-builder /evolution/nexi-transport.cjs /evolution/nexi-transport.cjs
+COPY --from=source-builder /evolution/nexi-baileys-transport.cjs /evolution/nexi-baileys-transport.cjs
+COPY --from=source-builder /evolution/nexi-baileys-device-cache.cjs /evolution/nexi-baileys-device-cache.cjs
 COPY --from=source-builder /evolution/nexi-financial-transport.cjs /evolution/nexi-financial-transport.cjs
 COPY --from=source-builder /evolution/nexi-identity.cjs /evolution/nexi-identity.cjs
 COPY --from=source-builder /evolution/nexi-ingress.cjs /evolution/nexi-ingress.cjs
@@ -146,6 +151,7 @@ COPY assert-runtime-model.mjs /tmp/assert-runtime-model.mjs
 COPY assert-groups-runtime.mjs /tmp/assert-groups-runtime.mjs
 COPY assert-attendance-runtime.mjs /tmp/assert-attendance-runtime.mjs
 COPY assert-protected-send-node.cjs /tmp/assert-protected-send-node.cjs
+COPY assert-baileys-transport-runtime.mjs /tmp/assert-baileys-transport-runtime.mjs
 
 RUN set -eu; \
     test -f /evolution/prisma.config.ts; \
@@ -163,5 +169,6 @@ RUN set -eu; \
     EVOLUTION_PROVIDER=postgresql EVOLUTION_SCHEMA_PROVIDER=psql_bouncer EVOLUTION_SKIP_GENERATED=1 EVOLUTION_BUNDLE_PATH=/evolution/dist/providers/psql_bouncer.js node /tmp/assert-runtime-model.mjs; \
     EVOLUTION_PROVIDER=postgresql EVOLUTION_SCHEMA_PROVIDER=psql_bouncer EVOLUTION_BUNDLE_PATH=/evolution/dist/providers/psql_bouncer.js node /tmp/assert-attendance-runtime.mjs; \
     EVOLUTION_PROVIDER=postgresql node /tmp/assert-runtime-model.mjs && \
+    node /tmp/assert-baileys-transport-runtime.mjs /evolution && \
     rm /tmp/assert-runtime-model.mjs
 ENTRYPOINT ["/bin/bash", "-c", "node /evolution/select-provider-bundle.cjs && . ./Docker/scripts/deploy_database.sh && npm run start:prod"]
