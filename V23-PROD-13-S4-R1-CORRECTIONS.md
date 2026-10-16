@@ -1,5 +1,9 @@
 # V23-PROD-13-S4-R1 — corrective implementation
 
+Historical R1 report. [R2 integration contracts](V23-PROD-13-S4-R2-INTEGRATION-CONTRACTS.md)
+restore the six families for new admissions; historical held/unknown operations
+are preserved and are not automatically backfilled.
+
 Status: **PARTIAL — SPECIFIC BLOCKER** for promotion with all legacy integrations
 enabled. Cancellation and the independent durable secondary mechanism are
 implemented. Generic legacy dispatchers remain explicitly held because their

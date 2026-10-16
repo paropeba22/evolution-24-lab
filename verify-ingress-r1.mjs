@@ -125,6 +125,8 @@ const mainCtx = { service, row: mainRow, claims: { instance_name: service.instan
   observation: { external_message_id: 'external' } }, owner: { socket, token: 'owner' }, token: 'lease', message: {} };
 const stored = new Map();
 const repo = { ...tx,
+  nexiIngressEffect: { ...tx.nexiIngressEffect, findFirst: async () => null },
+  contact: { findFirst: async () => null }, chat: { findFirst: async () => null },
   $transaction: work => work(repo),
   instance: { updateMany: async () => ({ count: 1 }) },
   nexiIngressScope: { ...tx.nexiIngressScope, update: async () => ({}) },

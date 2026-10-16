@@ -12,8 +12,8 @@
             AND JSON_UNQUOTE(JSON_EXTRACT(\`key\`, '$.fromMe')) = 'false' AND status = ${status[3]}`
         : await tx.$queryRaw`SELECT COUNT(*)::int AS count FROM "Message" WHERE "instanceId" = ${this.instanceId}
             AND "key"->>'remoteJid' = ${remoteJid} AND ("key"->>'fromMe')::boolean = false AND status = ${status[3]}`;
-      const name = policy.saveChats && typeof received.pushName === 'string' && received.pushName.trim()
-        ? received.pushName : chat.name;
+      const publicName = require('/evolution/nexi-ingress-dispatch.cjs').current().claims.observation.contact_profile?.public_name;
+      const name = policy.saveChats && publicName ? publicName : chat.name;
       await tx.chat.update({ where: { id: chat.id }, data: { name, unreadMessages: Number(rows[0]?.count || 0) } });
       return { completed: true };
     },
@@ -21,9 +21,10 @@
   contact_projection: {
     mode: 'local', selected: policy => policy.saveContacts,
     run: async ({ received, tx }) => {
-      const remoteJid = received.key.remoteJid;
+      const remoteJid = require('/evolution/nexi-ingress-dispatch.cjs').current().claims.observation.pn_jid;
       const contact = await tx.contact.findFirst({ where: { instanceId: this.instanceId, remoteJid } });
-      const data = { remoteJid, instanceId: this.instanceId, pushName: received.pushName || '',
+      const publicName = require('/evolution/nexi-ingress-dispatch.cjs').current().claims.observation.contact_profile?.public_name;
+      const data = { remoteJid, instanceId: this.instanceId, pushName: publicName || contact?.pushName || '',
         ...(contact?.profilePicUrl ? { profilePicUrl: contact.profilePicUrl } : {}) };
       await tx.contact.upsert({ where: { remoteJid_instanceId: { remoteJid, instanceId: this.instanceId } }, create: data, update: data });
       return { completed: true };
@@ -92,14 +93,73 @@
       return { request_id: typeof id === 'string' ? id : null };
     },
   },
-  // These dispatchers swallow failure, retry internally or detach promises.
-  // There is no safe automatic execution/completion/reconciliation contract.
-  // Persist the intent and block this family, without dispatch or main-lane
-  // ownership. A later adapter must explicitly reconcile/authorize recovery.
-  message_webhook: { mode: 'blocked', selected: () => true },
-  chatbot: { mode: 'blocked', selected: () => true },
-  contact_webhook: { mode: 'blocked', selected: () => true },
-  contact_chatwoot: { mode: 'blocked', selected: policy => policy.chatwoot },
-  chat_name_webhook: { mode: 'blocked', selected: policy => policy.saveChats },
-  contact_cache: { mode: 'blocked', selected: () => true },
+  message_webhook: {
+    mode: 'dispatch', contractVersion: 2, independent: true, orderedTargets: true, selected: () => true,
+    run: async ({ journalId, guard }) => {
+      const dispatch = require('/evolution/nexi-ingress-dispatch.cjs'), ctx = dispatch.current();
+      const message = await this.prismaRepository.message.findUnique({ where: { id: journalId } });
+      if (!message || message.instanceId !== this.instanceId) throw new Error('nexi_ingress_message_missing');
+      const observation = ctx.claims.observation;
+      const body = { ...message, key: { ...message.key, remoteJid: observation.pn_jid,
+        remoteJidAlt: observation.lid_jid, addressingMode: 'pn' } };
+      await guard();
+      await this.sendDataWebhook(Events.MESSAGES_UPSERT, body);
+      return dispatch.summary(ctx);
+    },
+  },
+  chatbot: {
+    mode: 'dispatch', contractVersion: 2, selected: () => true,
+    run: async ({ journalId, guard }) => {
+      const dispatch = require('/evolution/nexi-ingress-dispatch.cjs'), ctx = dispatch.current();
+      const message = await this.prismaRepository.message.findUnique({ where: { id: journalId } });
+      if (!message || message.instanceId !== this.instanceId) throw new Error('nexi_ingress_message_missing');
+      const observation = ctx.claims.observation;
+      const msg = { ...message, key: { ...message.key, remoteJid: observation.pn_jid,
+        remoteJidAlt: observation.lid_jid, addressingMode: 'pn' } };
+      await guard();
+      await chatbotController.emit({ instance: { instanceName: this.instance.name, instanceId: this.instanceId },
+        remoteJid: observation.pn_jid, msg, pushName: observation.contact_profile?.public_name || '' });
+      return dispatch.summary(ctx);
+    },
+  },
+  contact_webhook: {
+    mode: 'dispatch', contractVersion: 2, independent: true, orderedTargets: true, selected: () => true,
+    run: async ({ policy, guard }) => {
+      const dispatch = require('/evolution/nexi-ingress-dispatch.cjs'), ctx = dispatch.current();
+      const observation = ctx.claims.observation;
+      const body = { remoteJid: observation.pn_jid, pushName: observation.contact_profile?.public_name || '',
+        ...(policy.contactPhoto ? { profilePicUrl: policy.contactPhoto } : {}), instanceId: this.instanceId };
+      await guard();
+      await this.sendDataWebhook(policy.contactExisted ? Events.CONTACTS_UPDATE : Events.CONTACTS_UPSERT, body);
+      return dispatch.summary(ctx);
+    },
+  },
+  contact_chatwoot: {
+    mode: 'reconciled', contractVersion: 2, selected: policy => policy.chatwoot,
+    run: async () => require('/evolution/nexi-ingress.cjs').contactSupplement(this),
+  },
+  chat_name_webhook: {
+    mode: 'dispatch', contractVersion: 2, independent: true, orderedTargets: true, selected: policy => policy.saveChats && policy.chatNameChanged,
+    run: async ({ policy, guard }) => {
+      const dispatch = require('/evolution/nexi-ingress-dispatch.cjs'), ctx = dispatch.current();
+      await guard();
+      await this.sendDataWebhook(Events.CHATS_UPSERT, [{ ...policy.chatSnapshot,
+        name: ctx.claims.observation.contact_profile?.public_name || policy.chatSnapshot.name }]);
+      return dispatch.summary(ctx);
+    },
+  },
+  contact_cache: {
+    mode: 'local', contractVersion: 2, selected: policy => policy.cacheContacts,
+    run: async ({ tx, policy }) => {
+      const ctx = require('/evolution/nexi-ingress-dispatch.cjs').current(), row = ctx.parent;
+      const { pn_jid, lid_jid } = ctx.claims.observation;
+      const id = require('/evolution/nexi-canonical-json.cjs').digest([row.scopeId, row.sessionIdentity, pn_jid]);
+      const data = { scopeId: row.scopeId, instanceId: row.instanceId, sessionIdentity: row.sessionIdentity,
+        pnJid: pn_jid, lidJid: lid_jid || null, journalId: row.id, sequence: row.sequence,
+        expiresAt: new Date(Date.now() + policy.cacheDays * 86400000) };
+      const previous = await tx.nexiIngressContactCache.findUnique({ where: { id } });
+      if (!previous || previous.sequence < row.sequence) await tx.nexiIngressContactCache.upsert({ where: { id }, create: { id, ...data }, update: data });
+      return { cached: true, scope_id: row.scopeId };
+    },
+  },
 })

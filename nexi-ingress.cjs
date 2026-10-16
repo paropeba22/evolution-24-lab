@@ -161,6 +161,7 @@ function register(service, decode, process, effects, policy) {
   wake();
 }
 async function check(ctx) {
+  if (ctx.secondary) return require('./nexi-ingress-dispatch.cjs').guard();
   if (ctx.lost) fail('nexi_ingress_lease_lost');
   if (ctx.service.instanceId !== ctx.row.instanceId || ctx.service.instance.name !== ctx.claims.instance_name)
     fail('nexi_ingress_binding_fenced');
@@ -272,7 +273,15 @@ async function materializePrimary(service, body) {
     if (message.instanceId !== ctx.row.instanceId || message.chatwootMessageId !== ctx.row.association.message_id ||
         message.key?.id !== ctx.claims.observation.external_message_id || message.key?.fromMe !== false)
       fail('nexi_ingress_local_message_conflict');
-    await effects.plan(tx, ctx, registration.policy(), registration.effects);
+    const contact = await tx.contact.findFirst({ where: { instanceId: ctx.row.instanceId, remoteJid: ctx.claims.observation.pn_jid } });
+    const chat = await tx.chat.findFirst({ where: { instanceId: ctx.row.instanceId, remoteJid: body.key.remoteJid } });
+    const priorContactEvent = await tx.nexiIngressEffect.findFirst({ where: { conversationLaneId: ctx.row.laneId,
+      kind: 'contact_webhook', contractVersion: 2, sequence: { lt: ctx.row.sequence } }, select: { id: true } });
+    const policy = { ...registration.policy(), contactExisted: !!contact || !!priorContactEvent,
+      contactPhoto: contact?.profilePicUrl || null, chatSnapshot: chat ? JSON.parse(JSON.stringify(chat)) : null,
+      chatNameChanged: !!(chat && ctx.claims.observation.contact_profile?.public_name &&
+        chat.name !== ctx.claims.observation.contact_profile.public_name) };
+    await effects.plan(tx, ctx, policy, registration.effects);
     await tx.nexiIngressJournal.update({ where: { id: ctx.row.id }, data: {
       mainMaterializedAt: new Date(), checkpoint: 'main_materialized', state: 'pending', lastError: null } });
   });
@@ -476,11 +485,32 @@ const retention = setInterval(() => {
   for (const { service } of registrations.values()) {
     const cutoff = new Date(Date.now() - 7 * 86400000);
     void require('./nexi-ingress-effects.cjs').retain(service, cutoff)
+    .then(() => service.prismaRepository.nexiIngressContactCache.deleteMany({ where: { instanceId: service.instanceId, expiresAt: { lt: new Date() } } }))
     .then(() => service.prismaRepository.nexiIngressLane.deleteMany({ where: { instanceId: service.instanceId,
       pending: 0, leaseToken: null, servedAt: { lt: cutoff } } }))
       .catch(() => log(service, 'ingress.retention_pending', null, 'storage_unavailable'));
   }
 }, 3600000); retention.unref?.();
+async function contactSupplement(service) {
+  const ctx = current(service);
+  if (!ctx?.secondary || ctx.effect.kind !== 'contact_chatwoot') fail('nexi_ingress_effect_context_invalid');
+  const result = await request(ctx, 'ingress.profile', ctx.row.association);
+  if (result.message_id !== ctx.row.association.message_id || result.contact_id !== ctx.row.association.contact_id)
+    fail('nexi_ingress_confirmed_id_conflict');
+  return { contact_id: result.contact_id, message_id: result.message_id, profile_synchronized: true };
+}
+async function cachedContacts(service, jids) {
+  const owner = groups.lifecycleCapture(service), session = identity.sessionFingerprint(owner.socket?.authState?.creds);
+  if (!session) fail('nexi_ingress_session_fenced');
+  await ownerCheck(service, owner, session);
+  const target = await binding(service);
+  const scopeId = canonical.digest(['evolution', target.account, target.inbox, service.instanceId]);
+  const rows = await service.prismaRepository.nexiIngressContactCache.findMany({ where: {
+    scopeId, sessionIdentity: session, expiresAt: { gt: new Date() }, OR: [{ pnJid: { in: jids } }, { lidJid: { in: jids } }] } });
+  await ownerCheck(service, owner, session);
+  return rows.map(row => ({ remoteJid: row.pnJid, number: row.pnJid.split('@')[0],
+    jidOptions: [row.pnJid, row.lidJid].filter(Boolean), lid: row.lidJid ? 'lid' : undefined }));
+}
 module.exports = { configure, inheritConfig, trackSocket, capture, skipSerial, observation, register, current, observed, chatwoot, correlated, socket,
-  materializePrimary, persistMessage, control, provider, setProvider, cancellable, inWorker: () => !!context.getStore(),
+  materializePrimary, persistMessage, control, provider, setProvider, cancellable, contactSupplement, cachedContacts, inWorker: () => !!context.getStore(),
   secondaryRuntime: { registrations, context, verify, ownerCheck, log } };

@@ -71,6 +71,8 @@ model NexiIngressEffect {
   instanceId String @db.VarChar(100)
   kind String @db.VarChar(32)
   sequence BigInt
+  conversationLaneId String? @db.VarChar(64)
+  contractVersion Int @default(1)
   intent Json JSON_TYPE
   intentDigest String @db.VarChar(64)
   intentSignature String @db.VarChar(64)
@@ -84,4 +86,22 @@ model NexiIngressEffect {
   @@unique([journalId, kind])
   @@unique([laneId, sequence])
   @@index([instanceId, state, createdAt])
+  @@index([conversationLaneId, kind, contractVersion, sequence], map: "NexiIngressEffect_causal_idx")
+}
+
+// Presentation/lookup cache only; exact authenticated aliases within one scope
+// and session. Never the legacy global cache or a physical-send authority.
+model NexiIngressContactCache {
+  id String @id @db.VarChar(64)
+  scopeId String @db.VarChar(64)
+  instanceId String @db.VarChar(100)
+  sessionIdentity String @db.VarChar(64)
+  pnJid String @db.VarChar(64)
+  lidJid String? @db.VarChar(64)
+  journalId String @db.VarChar(36)
+  sequence BigInt
+  expiresAt DateTime
+  @@unique([scopeId, sessionIdentity, pnJid], map: "NexiIngressContactCache_pn_key")
+  @@unique([scopeId, sessionIdentity, lidJid], map: "NexiIngressContactCache_lid_key")
+  @@index([instanceId, expiresAt])
 }

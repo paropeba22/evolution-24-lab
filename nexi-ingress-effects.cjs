@@ -22,7 +22,8 @@ async function plan(tx, ctx, policy, definitions) {
   for (const [kind, definition] of Object.entries(selectedDefinitions)) {
     if (!definition.selected(policy, ctx.message) && kind !== ctx.legacyControlUnknown) continue;
     if (await tx.nexiIngressEffect.findUnique({ where: { journalId_kind: { journalId: row.id, kind } } })) continue;
-    const laneId = canonical.digest([row.laneId, kind, definition.independent ? row.id : null]);
+    const laneId = canonical.digest([row.laneId, kind, definition.independent ? row.id : null,
+      ...(definition.contractVersion ? [definition.contractVersion] : [])]);
     const lane = await tx.nexiIngressEffectLane.upsert({ where: { id: laneId },
       create: { id: laneId, instanceId: row.instanceId, kind }, update: {} });
     // An S4 monolithic tail might already have executed ANY of its effects.
@@ -36,6 +37,7 @@ async function plan(tx, ctx, policy, definitions) {
       session_identity: row.sessionIdentity, policy };
     await tx.nexiIngressEffect.create({ data: { id, journalId: row.id, laneId, scopeId: row.scopeId,
       instanceId: row.instanceId, kind, sequence: row.sequence, intent,
+      conversationLaneId: row.laneId, contractVersion: definition.contractVersion || 1,
       intentDigest: canonical.digest(intent), intentSignature: signature(claims.instance_name, intent), state,
       lastError: state === 'outcome_unknown' ? 'legacy_effect_execution_unproved' : definition.mode === 'blocked' ?
         'completion_or_idempotency_contract_missing' : lane.blockedBy ? 'earlier_effect_unresolved' : null } });
@@ -136,6 +138,13 @@ async function run(registration, lane, token) {
     await runtime().ownerCheck(service, owner, parent.sessionIdentity);
     const definition = registration.effects[effect.kind];
     if (!definition || definition.mode === 'blocked') fail('nexi_ingress_effect_contract_missing');
+    // Finish earlier manifests before starting a later message in this family.
+    // Unknown destinations hold their own target lane, not healthy siblings.
+    if (definition.orderedTargets && await repo.nexiIngressEffect.findFirst({ where: {
+      conversationLaneId: parent.laneId, kind: effect.kind, contractVersion: effect.contractVersion,
+      sequence: { lt: effect.sequence }, state: { notIn: terminal } }, select: { id: true } })) {
+      delay = 1000; return;
+    }
     timer = setInterval(() => {
       if (ctx.renewing) return;
       ctx.renewing = true;
@@ -144,7 +153,7 @@ async function run(registration, lane, token) {
         .then(result => { if (result.count !== 1) ctx.lost = true; }, () => { ctx.lost = true; })
         .finally(() => { ctx.renewing = false; });
     }, LEASE_MS / 3); timer.unref?.();
-    if (effect.state === 'inflight' && definition.mode !== 'local') {
+    if (effect.state === 'inflight' && !['local', 'dispatch', 'reconciled'].includes(definition.mode)) {
       await close(ctx, 'outcome_unknown', 'interrupted_external_effect'); return;
     }
     if (effect.state !== 'result_confirmed') {
@@ -175,11 +184,12 @@ async function run(registration, lane, token) {
       await checkpoint(ctx, { state: 'result_confirmed', result: normalized });
     }
     await applyResult(ctx);
-    await close(ctx, 'succeeded');
+    await close(ctx, effect.result?.uncertain ? 'outcome_unknown' : 'succeeded',
+      effect.result?.uncertain ? 'destination_result_unconfirmed' : null);
   } catch (error) {
     delay = Math.min(300000, 1000 * 2 ** Math.min(ctx?.effect.attempts || 1, 8));
     if (ctx && !ctx.lost) {
-      const localRetry = registration.effects[ctx.effect.kind]?.mode === 'local' || ctx.effect.state === 'result_confirmed';
+      const localRetry = ['local', 'dispatch', 'reconciled'].includes(registration.effects[ctx.effect.kind]?.mode) || ctx.effect.state === 'result_confirmed';
       try {
         if (localRetry && !/fenced|STALE|proof_invalid|target_conflict/.test(error.code || ''))
           await checkpoint(ctx, { state: ctx.effect.state === 'result_confirmed' ? 'result_confirmed' : 'recoverable_failure', lastError: error.code || 'effect_unavailable' });
@@ -240,10 +250,12 @@ async function retain(service, cutoff) {
         // Active effects need their exact recovery payload. Uncertain/blocked
         // effects are never replayed and retain their audit/proof metadata.
         if (await tx.nexiIngressEffect.count({ where: { journalId: row.id, state: { notIn: terminal } } })) return;
-        runtime().verify(row);
+        const claims = runtime().verify(row);
         const effects = await tx.nexiIngressEffect.findMany({ where: { journalId: row.id } });
         for (const effect of effects) if (effect.result) await tx.nexiIngressEffect.update({ where: { id: effect.id },
-          data: { result: { retained_digest: canonical.digest(effect.result), payload_pruned: true } } });
+          data: { result: effect.result.dispatch
+            ? require('./nexi-ingress-dispatch.cjs').prune(effect.result, claims, row.id)
+            : { retained_digest: canonical.digest(effect.result), payload_pruned: true } } });
         await tx.nexiIngressJournal.update({ where: { id: row.id }, data: { payload: '', payloadPrunedAt: new Date() } });
       });
       if (rows.length < 100) break;
@@ -252,4 +264,4 @@ async function retain(service, cutoff) {
     }
   } finally { retaining.delete(service.instanceId); }
 }
-module.exports = { plan, wake, retain };
+module.exports = { plan, wake, retain, checkpoint, held };

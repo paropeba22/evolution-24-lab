@@ -55,6 +55,8 @@ patch('src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts', sourc
       archiveVideo: !!this.configService.get<S3>('S3').SAVE_VIDEO,
       readMessages: !!this.localSettings.readMessages,
       chatwoot: !!this.localChatwoot?.enabled,
+      cacheContacts: !!this.configService.get<Database>('DATABASE').SAVE_DATA.IS_ON_WHATSAPP,
+      cacheDays: Math.min(30, Math.max(1, this.configService.get<Database>('DATABASE').SAVE_DATA.IS_ON_WHATSAPP_DAYS || 7)),
     }));`);
   const start = source.indexOf("    'messages.upsert': async ("), end = source.indexOf("    'messages.update': async (", start);
   if (start < 0 || end <= start) throw new Error('Ingress handler boundary changed');
