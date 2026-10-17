@@ -135,6 +135,9 @@ for (const anchor of ['values[valuesById[14] = "MESSAGE_EDIT"] = 14;',
 assert.ok(bundle.includes('@prisma/adapter-mariadb') && bundle.includes('underlyingDriver()'), 'shipped dedicated pool boundary');
 assertMariaDbMetadata(bundle);
 const attendance = createRequire(import.meta.url)(path.join(root, 'nexi-attendance.cjs'));
+assert.equal(attendance.cutoverHeld({ NEXI_ATTENDANCE_CUTOVER_HOLD: 'true' }), true);
+assert.equal(attendance.cutoverHeld({ NEXI_ATTENDANCE_CUTOVER_HOLD: 'false' }), false);
+assert.equal(attendance.cutoverHeld({ NEXI_ATTENDANCE_CUTOVER_HOLD: 'invalid' }), true);
 const snapshotHelper = createRequire(import.meta.url)(path.join(root, 'nexi-attendance-snapshot.cjs'));
 assert.equal(snapshotHelper.LIMITS.depth, 64);
 const mutableFrame = { tag: 'iq', attrs: { id: 'BEFORE' }, content: [{ tag: 'data', attrs: {}, content: Buffer.from([1, 2]) }] };

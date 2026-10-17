@@ -621,6 +621,15 @@ function receiptMetadata(data) {
 function common(context) {
   return Object.fromEntries(COMMON.map(key => [key, key === 'audience' ? 'nexi-attendance-app' : context[key] ?? null]));
 }
+function cutoverHeld(env = process.env, readRelease = file => require('node:fs').readFileSync(file, 'utf8')) {
+  const value = env.NEXI_ATTENDANCE_CUTOVER_HOLD;
+  if (value === undefined || value === 'false') return false;
+  if (value !== 'true') return true; // Invalid configuration cannot be released.
+  const boot = env.NEXI_ATTENDANCE_CUTOVER_BOOT_ID;
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(boot || '')) return true;
+  try { return readRelease(`/tmp/nexi-attendance-cutover-${boot}.release`) !== `${boot}\n`; }
+  catch { return true; }
+}
 function settings(env = process.env) {
   const names = { queueItems: 'QUEUE_ITEMS', queueBytes: 'QUEUE_BYTES', concurrent: 'APPEND_CONCURRENCY',
     acquireMs: 'DB_ACQUISITION_TIMEOUT_MS', statementMs: 'DB_STATEMENT_TIMEOUT_MS', lockMs: 'DB_LOCK_TIMEOUT_MS',
@@ -1455,6 +1464,9 @@ function bindStanza(config, stanza, message, messageId) {
 }
 async function assertNode(config, stanza) {
   if (stanza?.tag !== 'message') return;
+  // Operational hold is independent of cached contexts and persisted grants.
+  // It does not change their historical facts or claim that Signal is idle.
+  if (cutoverHeld()) fail('nexi_attendance_cutover_held');
   const registration = configs.get(config);
   const capability = scope.getStore();
   if (capability) {
@@ -1802,7 +1814,7 @@ function decodeCanonicalClaims(encoded) {
 module.exports = { canonical, digest, eventPayload, settings, publicAttestation, observePublicAccount, verifyPublicAccountSignature,
   normalizeReceipt, normalization, numericNormalization, receiveInbound, observeInbound, enqueueInbound, queueEnqueued, queueStarted, queueEnded,
   beginInbound, resumeIngressDiagnostics, failInbound, endInbound, timedInbound, inboundFailure, clearInstanceDiagnostics, allowDiagnosticTrace,
-  configure, sessionObserved, capture, refreshContext, classification, draft, prepare, closeCollision,
+  configure, sessionObserved, capture, refreshContext, classification, draft, prepare, closeCollision, cutoverHeld,
   foundationCapability, bindStanza, assertNode, externalRaw, retryMessage, legacyAllowed, legacyForInstance, ReceiptWorker,
   drain, installRoutes, requestMaterial, common, prepareClaims, rawNodeForInstance, rawNodeForSocket, trackSocket, writerIsolation, writerProbeTrace,
   captureContextSnapshot, captureContextCurrent, installCaptureContext,

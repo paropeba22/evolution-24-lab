@@ -41,6 +41,7 @@ async function content(source,row,fetchImpl) {
 }
 
 async function dispatch(source, material, fetchImpl = fetch) {
+  if (attendance.cutoverHeld()) fail('nexi_attendance_cutover_held');
   const db = source.prismaRepository.nexiAttendancePreparation;
   let row = await db.findUnique({where:{id:material.grant.preparation_id}});
   authority.binding(source,row,material);

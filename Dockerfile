@@ -157,9 +157,12 @@ COPY assert-protected-send-node.cjs /tmp/assert-protected-send-node.cjs
 COPY assert-baileys-transport-runtime.mjs /tmp/assert-baileys-transport-runtime.mjs
 COPY assert-ingress-runtime.mjs /evolution/assert-ingress-runtime.mjs
 COPY nexi-start.sh /evolution/nexi-start.sh
+COPY ops/s12-release-current-boot.cjs /evolution/ops/s12-release-current-boot.cjs
 
 RUN set -eu; \
     test -f /evolution/prisma.config.ts; \
+    test -f /evolution/ops/s12-release-current-boot.cjs; \
+    node --check /evolution/ops/s12-release-current-boot.cjs; \
     test -f /evolution/prisma/postgresql-schema.prisma; \
     test -f /evolution/prisma/psql_bouncer-schema.prisma; \
     test -f /evolution/prisma/mysql-schema.prisma; \

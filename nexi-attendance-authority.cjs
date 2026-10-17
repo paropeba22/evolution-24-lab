@@ -113,6 +113,7 @@ function replay(row, m) {
     fail('nexi_attendance_consumption_conflict');
 }
 async function consumption(source, authorityClaims) {
+  if (authorityClaims.action === 'consume' && attendance().cutoverHeld()) fail('nexi_attendance_cutover_held');
   const m = material(authorityClaims.material);
   if (authorityClaims.request_id !== m.consumption_id) fail('nexi_attendance_consumption_identity_conflict');
   const started = performance.now();
@@ -267,6 +268,7 @@ function installRoute(router, monitor, guard, repository) {
       probe?.attempt('contract_validation');
       const value=claims(source,req.body);
       if (value.action==='writer_probe') {
+        if (attendance().cutoverHeld()) fail('nexi_attendance_cutover_held');
         probe?.stage('signed_contract_validated');
         probe?.attempt('socket_validation');
         const m=value.material, groups=require('./nexi-groups.cjs');
@@ -321,7 +323,11 @@ function installRoute(router, monitor, guard, repository) {
         {...await preparationReadback(source,value),request_digest:canonical.digest(value.material)}));
       let observed=await consumption(source,value);
       if (value.material.grant.physical_dispatch && observed.consumed_at && !observed.dispatch_started_at) {
-        observed=await require('./nexi-attendance-dispatch.cjs').dispatch(source,value.material);
+        const dispatch=require('./nexi-attendance-dispatch.cjs');
+        // A readback never initiates a physical operation, including replay of
+        // an already-consumed grant whose lexical dispatch has not started.
+        observed=value.action==='consume' ? await dispatch.dispatch(source,value.material) :
+          await dispatch.expiryReadback(source,value.material) || observed;
       }
       return res.json(response(source,value,observed));
     } catch(error) {
