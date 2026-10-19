@@ -122,12 +122,12 @@ test('final Docker stage restores Prisma config and selects the provider before 
   const entrypoints = [...finalStage.matchAll(/^ENTRYPOINT (.+)$/gm)];
   assert.equal(entrypoints.length, 1);
   const entrypoint = JSON.parse(entrypoints[0][1]);
-  assert.deepEqual(entrypoint.slice(0, 2), ['/bin/bash', '-c']);
-  assert.deepEqual(entrypoint[2].split(' && '), [
-    'node /evolution/select-provider-bundle.cjs',
-    '. ./Docker/scripts/deploy_database.sh',
-    'npm run start:prod',
-  ]);
+  assert.deepEqual(entrypoint, ['/bin/sh', '/evolution/nexi-start.sh']);
+  const startup = fs.readFileSync(path.join(__dirname, 'nexi-start.sh'), 'utf8');
+  const select = startup.indexOf('node /evolution/select-provider-bundle.cjs');
+  const start = startup.indexOf('exec node --network-family-autoselection-attempt-timeout=1000 /evolution/dist/main.js');
+  assert.ok(select >= 0 && start > select, 'select the provider before runtime starts');
+  assert.doesNotMatch(startup, /deploy_database|db:deploy|prisma\s+migrate/, 'startup never runs migrations');
   const prismaConfig = fs.readFileSync(path.join(__dirname, 'prisma.config.ts'), 'utf8');
   assert.match(prismaConfig, /url: env\('DATABASE_CONNECTION_URI'\)/);
   assert.match(prismaConfig, /process\.env\.DATABASE_PROVIDER/);

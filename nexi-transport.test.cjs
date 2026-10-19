@@ -91,6 +91,45 @@ function request(body, overrides = {}) {
 
 const privateNote = { event: 'message_created', account: { id: 4 }, inbox: { id: 13 }, private: true };
 
+test('compiled Chatwoot webhook rejects unauthenticated and foreign requests before validation or dispatch',
+  { skip: !process.env.EVOLUTION_BUNDLE_PATH }, async () => {
+    const source = require('node:fs').readFileSync(process.env.EVOLUTION_BUNDLE_PATH, 'utf8');
+    const routes = [...source.matchAll(/\.post\(this\.routerPath\("webhook"\),async\((?<request>[\w$]+),(?<response>[\w$]+)\)=>\{let (?<result>[\w$]+)=await require\("\/evolution\/nexi-transport\.cjs"\)\.processChatwootWebhook\(\k<request>,await (?<singleton>[\w$]+)\.getProvider\(\{instanceName:\k<request>\.params\.instanceName\}\),\(\)=>this\.dataValidate\(\{request:\k<request>,schema:(?<schema>[\w$]+),ClassRef:(?<dto>[\w$]+),execute:\((?<instance>[\w$]+),(?<payload>[\w$]+)\)=>(?<controller>[\w$]+)\.receiveWebhook\(\k<instance>,\k<payload>\)\}\)\);return \k<response>\.status\(\k<result>\.status\)\.json\(\k<result>\.body\)\}\)/g)];
+    assert.equal(routes.length, 1, 'one authenticated compiled route');
+    const route = routes[0], g = route.groups;
+    const ledger = createReplayLedger({ client: new RedisContract() });
+    let handler, validations = 0, dispatches = 0;
+    const owner = {
+      router: { post(routePath, callback) { assert.equal(routePath, '/webhook/:instanceName'); handler = callback; } },
+      routerPath: name => `/${name}/:instanceName`,
+      async dataValidate(input) { validations++; return input.execute(input.request.params, input.request.body); },
+    };
+    // Evaluate only the extracted route registration, never the application bundle.
+    new Function('require', g.singleton, g.schema, g.dto, g.controller, `this.router${route[0]}`).call(owner,
+      module => { assert.equal(module, '/evolution/nexi-transport.cjs'); return {
+        processChatwootWebhook: (req, config, next) => processChatwootWebhook(req, config, next, fetchInbox, ledger),
+      }; },
+      { getProvider: async params => { assert.equal(params.instanceName, instanceName); return provider; } },
+      {}, class InstanceDto {}, { receiveWebhook: async () => { dispatches++; return { message: 'synthetic_accepted' }; } });
+    const invalid = [
+      request(privateNote, { headers: { 'x-chatwoot-signature': undefined } }),
+      request(privateNote, { headers: { 'x-chatwoot-signature': `sha256=${'0'.repeat(64)}` } }),
+      request(privateNote, { headers: { 'x-chatwoot-timestamp': '1000000000' } }),
+      request({ ...privateNote, account: { id: 99 } }),
+      request({ ...privateNote, inbox: { id: 99 } }),
+    ];
+    for (const req of invalid) {
+      const res = { status(code) { this.code = code; return this; }, json(body) { this.body = body; return this; } };
+      await handler(req, res);
+      assert.equal(res.code, 401); assert.equal(validations, 0); assert.equal(dispatches, 0);
+    }
+    const res = { status(code) { this.code = code; return this; }, json(body) { this.body = body; return this; } };
+    await handler(request(privateNote), res);
+    assert.equal(res.code, 200); assert.equal(validations, 1); assert.equal(dispatches, 1);
+    await handler(request(privateNote), res);
+    assert.equal(res.code, 200); assert.equal(validations, 1); assert.equal(dispatches, 1);
+  });
+
 test('financial signed operations are consumed atomically on claim, never lease-reclaimed, and isolated from CW replay keys', async () => {
   const redis = new RedisContract();
   const first = createReplayLedger({ client: redis, consumeOnClaim: true });

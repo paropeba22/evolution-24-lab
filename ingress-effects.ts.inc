@@ -100,7 +100,7 @@
       const message = await this.prismaRepository.message.findUnique({ where: { id: journalId } });
       if (!message || message.instanceId !== this.instanceId) throw new Error('nexi_ingress_message_missing');
       const observation = ctx.claims.observation;
-      const body = { ...message, key: { ...message.key, remoteJid: observation.pn_jid,
+      const body = { ...message, key: { ...(message.key as Record<string, unknown>), remoteJid: observation.pn_jid,
         remoteJidAlt: observation.lid_jid, addressingMode: 'pn' } };
       await guard();
       await this.sendDataWebhook(Events.MESSAGES_UPSERT, body);
@@ -114,7 +114,7 @@
       const message = await this.prismaRepository.message.findUnique({ where: { id: journalId } });
       if (!message || message.instanceId !== this.instanceId) throw new Error('nexi_ingress_message_missing');
       const observation = ctx.claims.observation;
-      const msg = { ...message, key: { ...message.key, remoteJid: observation.pn_jid,
+      const msg = { ...message, key: { ...(message.key as Record<string, unknown>), remoteJid: observation.pn_jid,
         remoteJidAlt: observation.lid_jid, addressingMode: 'pn' } };
       await guard();
       await chatbotController.emit({ instance: { instanceName: this.instance.name, instanceId: this.instanceId },

@@ -44,7 +44,7 @@ patch('src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts', sourc
       if (require('node:crypto').createHash('sha256').update(proto.Message.encode(message.message).finish()).digest('hex') !== contentDigest)
         throw Object.assign(new Error('nexi_ingress_content_conflict'), { code: 'nexi_ingress_payload_identity_invalid' });
       Object.assign(message.key, transportKey);
-      cleanMessage(message, creds.me.id, creds.me.lid);
+      cleanMessage(message as WAMessage, creds.me.id, creds.me.lid);
       return message;
     }, async message => this.messageHandle['messages.upsert']({ messages: [message], type: 'notify' }, await this.findSettings()),
     ${effectCallbacks}, () => ({

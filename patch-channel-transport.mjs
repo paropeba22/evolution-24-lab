@@ -31,6 +31,12 @@ function callEnd(source, start) {
   throw new Error('webhook/find: unclosed route call');
 }
 
+function closesRouter(source, end) {
+  // Constructor + class, optionally inside esbuild's lazy module initializer.
+  // Only the two observed layouts are accepted; an extra route still fails.
+  return source.startsWith('}};', end) || source.startsWith('}}});', end);
+}
+
 function webhookFindRoute(source) {
   const setCalls = [...source.matchAll(webhookSet)];
   if (setCalls.length !== 1) throw new Error(`webhook/find: expected one owning webhook/set route, found ${setCalls.length}`);
@@ -57,7 +63,7 @@ function webhookFindRoute(source) {
   if (!source.startsWith('.get(this.routerPath("find"),', getStart)) throw new Error('webhook/find: chained find route absent');
   if (webhookFindStarts[0] !== getStart) throw new Error('webhook/find: find route is outside owning router');
   const getEnd = callEnd(source, getStart);
-  if (!source.startsWith('}};', getEnd)) throw new Error('webhook/find: find route is duplicated or boundary changed');
+  if (!closesRouter(source, getEnd)) throw new Error('webhook/find: find route is duplicated or boundary changed');
   const route = source.slice(getStart, getEnd);
   const header = route.match(findHeader);
   if (!header || header[1] !== postHeader[1] || header[2] !== header[5]) {
@@ -178,7 +184,7 @@ function authenticatedChatwootRoute(source, singleton) {
   if (!match) throw new Error(`${label}: validation/dispatch/response shape changed`);
   const find = chatwootFindRoute(source);
   if (find.end !== target.start || find.service !== match.groups.service ||
-      find.schema !== match.groups.schema || find.dto !== match.groups.dto || !source.startsWith('}};', target.end)) {
+      find.schema !== match.groups.schema || find.dto !== match.groups.dto || !closesRouter(source, target.end)) {
     throw new Error(`${label}: owning Chatwoot router context changed`);
   }
   const validation = match[1];

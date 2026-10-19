@@ -196,6 +196,14 @@ test('authenticated Chatwoot route captures symbols, dispatches lazily and rejec
       });
     }
     const f = chatwootRouteFixture({ singleton: 'shared' });
+    // Current tsup/esbuild wraps ChatwootRouter in a lazy module initializer.
+    // Preserve the constructor/class boundary as well as that initializer close.
+    const lazy = (source) => source.replace(/}};$/, '}}});');
+    await t.test('lazy module router boundary preserves the authenticated transformation', () => {
+      const result = run(services + lazy(f.source));
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.output, services + lazy(chatwootRouteFixture({ singleton: 'shared' }, true, false).source));
+    });
     for (const [name, source] of [
       ['zero target', f.source.replace('routerPath("webhook")', 'routerPath("other")')],
       ['duplicate target', f.source + f.source],
@@ -206,7 +214,18 @@ test('authenticated Chatwoot route captures symbols, dispatches lazily and rejec
       ['wrong controller context', f.source.replace('pn.findChatwoot(a)', 'other.findChatwoot(a)')],
       ['wrong schema context', f.source.replace('schema:v,ClassRef:b,execute:(a,i)', 'schema:Other,ClassRef:b,execute:(a,i)')],
       ['changed router boundary', f.source.replace('}};', '}')],
-    ]) await t.test(name, () => rejected(services + source));
+    ]) await t.test(name, () => {
+      rejected(services + source);
+      rejected(services + lazy(source));
+    });
+    for (const boundary of ['}});', '}})();', '}}}});', '}}', '}']) {
+      await t.test(`unexpected module boundary ${boundary} rejected`, () => {
+        rejected(services + f.source.replace(/}};$/, boundary));
+      });
+    }
+    await t.test('webhook outside the lazy owning router is rejected', () => {
+      rejected(services + f.find + '}}});var other=class{constructor(){this.router' + f.route + '}};');
+    });
     await t.test('unrelated webhook route remains untouched', () => {
       const unrelated = '.post(this.routerPath("webhook"),async(req,res)=>res.status(200).json({ok:true}))';
       const result = run(services + f.source + unrelated);
@@ -223,15 +242,23 @@ test('authenticated Chatwoot route captures symbols, dispatches lazily and rejec
       assert.equal(result.status, 0, result.stderr);
       assert.equal(result.output, marked);
     });
+    await t.test('marked lazy router is byte-identical on reapplication', () => {
+      const source = lazy(marked.replace(signedFind, () => lazy(signedFind)));
+      const result = run(source, true);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.output, source);
+    });
     for (const [name, source] of [
       ['marked old route rejected', marked.replace(corrected.route, f.route)],
       ['marked duplicate route rejected', marked + corrected.source],
       ['marked incorrect singleton rejected', marked.replace('await shared.getProvider', 'await wrong.getProvider')],
       ['marked malformed response rejected', marked.replace('json(n.body)', 'json(n.other)')],
     ]) await t.test(name, () => {
-      const result = run(source, true);
-      assert.notEqual(result.status, 0); assert.match(result.stderr, /authenticated chatwoot webhook route:/);
-      assert.equal(result.output, source);
+      for (const input of [source, lazy(source)]) {
+        const result = run(input, true);
+        assert.notEqual(result.status, 0); assert.match(result.stderr, /authenticated chatwoot webhook route:/);
+        assert.equal(result.output, input);
+      }
     });
     await t.test('marked stale transport proof rejected', () => {
       const source = marked.replace('n.nexi_transport_hardened=true;n.nexi_replay_store_ready=await ' + transportHelper + '.replayStoreReady();', '');
@@ -610,7 +637,7 @@ test('webhook/find patch targets only its owning route and fails closed',
         rejected(oldBundle.replace(oldRoute, () => oldRoute.replace('routerPath("find")', 'routerPath("missing")')));
       });
       await t.test('duplicate find route fails', () => {
-        rejected(oldBundle.replace(oldRoute + '}};', () => oldRoute + oldRoute + '}};'));
+        rejected(oldBundle.replace(oldRoute, () => oldRoute + oldRoute));
       });
       await t.test('unrelated identical suffix is untouched', () => {
         const result = run(oldBundle + unrelatedOld);
