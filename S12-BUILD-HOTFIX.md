@@ -1,5 +1,8 @@
 # S12 Evolution build hotfix
 
+The S6 validation correction dated 2026-10-19 below supersedes the original S6
+validation claim: that replay preceded the final three type assertions.
+
 Baseline: `eff836cd7fb8be54a7dde4e9c55e0af563c0aed3`, branch
 `candidate/v23-prod-13-s12-cutover-safety`. Upstream remains pinned to
 `e273b904d53f5726970fd6a244ed9caa61dfeb9a`.
@@ -99,3 +102,57 @@ No new migration. No migration executed. No changes to runtime hold,
 WriterBarrier, backlog, physical-send authorization, Redis state or consumers.
 No merge to main and no new environment. Luna can rebuild the pushed S12
 candidate on the existing EasyPanel service and retain all S12 hold gates.
+
+## S6 follow-up: complete composition replay (2026-10-19)
+
+The operational thread records Luna's confirmation from EasyPanel history that
+the failed execution used `ec0b09cfa76af8c84fbf26536913fa69948b284f` on this S12
+branch. Local HEAD and the remote branch were independently checked at that SHA.
+The owner's authorization is limited to correcting S6 for that confirmed build.
+No new EasyPanel operation was performed from this coding task.
+
+The failure is real: S6 hashes the entire normalized TypeScript source, including
+erased type assertions. Its expected provider-source hash still described the
+composition before ec0b09c's three type assertions. The previous local validation
+ran S6 before those assertions and did not repeat the entire chain afterward.
+
+A fresh local artifact replay used the pinned upstream archive and pristine
+Baileys 7.0.0-rc13 / Chatwoot SDK 1.1.17 package tarballs. SHA512 integrity matched
+the upstream lockfile. All source patchers were executed in the Dockerfile's
+actual order, through ingress and ingress-integrations, then S6. No source bytes
+were manually edited between those stages.
+
+Exactly one of six S6 input fingerprints differed. Comparing the entire provider
+source against the historical accepted composition proved that the only changes
+are the three existing type assertions; emitted JavaScript is byte-identical.
+
+The only patcher change replaces the provider-source expected SHA256:
+
+- Previous: `56d0a31141622514bd972d26a6c01b657f95ed10655173a95052d8afcf866448`
+- Current: `4f968359cf1dbaabe7db36bac057b55f61d4fbee61385f73678f48f6abe22ecb`
+
+The old hash is not retained as an alternate accepted input. All other hashes,
+anchors, preflight checks and fail-closed behavior remain unchanged.
+
+Validation completed:
+
+- RED: ec0b09c's patcher reproduced the exact S6 error on the fully recomposed
+  input, with all six inputs unchanged and no manifest written.
+- GREEN: corrected S6 `--snapshot` completed on that same input, followed by
+  `assert-baileys-transport-runtime.mjs --source-only` and
+  `verify-ingress-r2.mjs`, all PASS.
+- All six final patched source files match the previously validated final
+  artifacts; every shipped runtime fingerprint in the S6 manifest is unchanged.
+- `baileys-transport-s6.test.cjs`: 35 PASS, zero skips. New negative cases change
+  each of the six fingerprinted inputs and restore the historical pre-typefix
+  source. Every case is rejected before any file, snapshot or manifest write.
+- `nexi-transport.test.cjs` and `cutover-safety.test.cjs`: 27 PASS, zero skips,
+  including the previously compiled PostgreSQL handler's real authentication
+  boundary, replay rejection and held consume/dispatch/wire behavior.
+- Syntax and `git diff --check`: PASS.
+
+Evidence is retained locally under ignored `.test-runtime/s6-*` artifacts.
+This follow-up changes only `patch-baileys-transport.mjs`, its S6 regression tests
+and this report. No Dockerfile, runtime helper, Signal/hold/WriterBarrier policy,
+authentication implementation, migration, consumer or remote environment changes.
+The complete Linux image build remains Luna's next EasyPanel gate.

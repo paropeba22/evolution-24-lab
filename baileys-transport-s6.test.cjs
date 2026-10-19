@@ -490,3 +490,39 @@ test('missing runtime helper fails source preflight before any source mutation',
     assert.equal(crypto.createHash('sha256').update(fs.readFileSync(path.join(partial, file))).digest('hex'), digest);
   }
 });
+
+test('S6 fingerprints reject every changed input and the pre-typefix composition without partial writes', async t => {
+  const manifest = JSON.parse(fs.readFileSync(path.join(fixture, 'fixtures/baileys-transport-s6.json')));
+  const provider = 'src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts';
+  const mutations = Object.keys(manifest.inputs).map(file => ({ file, name: file, change: source => source + '\n// synthetic fingerprint drift\n' }));
+  mutations.push({ file: provider, name: 'historical source without the three accepted type assertions', change(source) {
+    assert.equal(source.split('cleanMessage(message as WAMessage,').length - 1, 1);
+    assert.equal(source.split('...(message.key as Record<string, unknown>)').length - 1, 2);
+    const historical = source.replace('cleanMessage(message as WAMessage,', 'cleanMessage(message,')
+      .replaceAll('...(message.key as Record<string, unknown>)', '...message.key');
+    assert.equal(crypto.createHash('sha256').update(historical).digest('hex'),
+      '56d0a31141622514bd972d26a6c01b657f95ed10655173a95052d8afcf866448');
+    return historical;
+  } });
+  for (const mutation of mutations) await t.test(mutation.name, () => {
+    const partial = fs.mkdtempSync(path.join(__dirname, '.test-runtime/s6-fingerprint-'));
+    for (const file of Object.keys(manifest.inputs)) {
+      const target = path.join(partial, file);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.copyFileSync(path.join(fixture, '.transport-s6-upstream', file), target);
+    }
+    for (const helper of ['nexi-baileys-transport.cjs', 'nexi-baileys-device-cache.cjs']) {
+      fs.copyFileSync(path.join(__dirname, helper), path.join(partial, helper));
+    }
+    const target = path.join(partial, mutation.file);
+    fs.writeFileSync(target, mutation.change(fs.readFileSync(target, 'utf8')));
+    const before = Object.fromEntries(Object.keys(manifest.inputs).map(file => [file, fs.readFileSync(path.join(partial, file))]));
+    const result = spawnSync(process.execPath, [path.join(__dirname, 'patch-baileys-transport.mjs'), partial, '--snapshot'],
+      { encoding: 'utf8', timeout: 15000 });
+    assert.notEqual(result.status, 0);
+    assert.ok(result.stderr.includes(`S6 accepted composition changed: ${mutation.file}`), result.stderr);
+    for (const [file, bytes] of Object.entries(before)) assert.deepEqual(fs.readFileSync(path.join(partial, file)), bytes);
+    assert.equal(fs.existsSync(path.join(partial, 'fixtures/baileys-transport-s6.json')), false);
+    assert.equal(fs.existsSync(path.join(partial, '.transport-s6-upstream')), false);
+  });
+});
