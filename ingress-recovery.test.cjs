@@ -35,7 +35,7 @@ function runtime() {
     setImmediate() {}, // Workers are driven explicitly, never by a background pump.
   };
   vm.runInThisContext(`(function(${Object.keys(dependencies).join(',')}) {\n` +
-    fs.readFileSync(path.join(__dirname, 'nexi-ingress.cjs'), 'utf8') + '\nmodule.exports.testRun = run; module.exports.testPump = pump;\n})')(...Object.values(dependencies));
+    fs.readFileSync(process.env.NEXI_INGRESS_RUNTIME_FILE || path.join(__dirname, 'nexi-ingress.cjs'), 'utf8') + '\nmodule.exports.testRun = run; module.exports.testPump = pump;\n})')(...Object.values(dependencies));
   return module.exports;
 }
 function evaluate(expression, ingress, extra = {}) {
@@ -136,6 +136,8 @@ async function fixture(t, options = {}) {
     assert.equal(body.data.external_message_id, received.key.id);
     assert.equal(body.data.pn_jid, received.key.remoteJid);
     events.push({ event: body.event, id: headers['X-Nexi-Event-Id'], journal: claims?.journal_id });
+    const requestError = options.requestError?.(body.event);
+    if (requestError) throw requestError;
     const status = options.status?.(body.event, events) || 200;
     if (status !== 200) return { ok: false, status };
     if (['ingress.observed', 'identity.observed'].includes(body.event)) app.observed = true;
@@ -215,6 +217,66 @@ async function inflight(t, options = {}) {
       conversation_id: 60, conversation_display_id: 6 } });
   return f;
 }
+test('attempts 59/60 rejected at ingress.observed expose status without reaching Chatwoot', async t => {
+  const f = await inflight(t, { status: event => event === 'ingress.observed' ? 401 : 200 });
+  Object.assign(f.row(), { attempts: 58, checkpoint: 'identity_pending', state: 'recoverable_failure' });
+  const association = structuredClone(f.row().association);
+  await f.recover(); await f.recover();
+  assert.equal(f.row().attempts, 60); assert.equal(f.row().state, 'recoverable_failure');
+  assert.equal(f.row().checkpoint, 'identity_pending'); assert.equal(f.row().lastError, 'nexi_ingress_remote_rejected');
+  assert.deepEqual(f.row().association, association); assert.equal(f.row().acknowledgement, undefined);
+  assert.equal(f.posts.length, 0); assert.equal(f.materializations.length, 0);
+  assert.deepEqual(f.events.map(item => item.event), ['ingress.observed', 'ingress.observed']);
+  assert.equal(f.events[0].id, f.events[1].id);
+  const responses = f.logs.filter(item => item?.event === 'ingress.request' && item.stage === 'http_response');
+  assert.deepEqual(responses.map(item => [item.attempt, item.ingress_event, item.http_status, item.error_class]),
+    [[59, 'ingress.observed', 401, 'authorization_rejected'], [60, 'ingress.observed', 401, 'authorization_rejected']]);
+  assert.ok(responses.every(item => item.event_id === f.events[0].id));
+  assert.ok(!f.logs.some(item => ['ingress.creation', 'ingress.reconciliation'].includes(item?.event)));
+  assert.equal(attendance.cutoverHeld(), true);
+});
+for (const [status, classification] of [[403, 'authorization_rejected'], [409, 'http_rejected'],
+  [422, 'validation_rejected'], [429, 'remote_unavailable'], [503, 'remote_unavailable']]) {
+  test(`observed HTTP ${status} is visible before creation and retains the original worker error`, async t => {
+    const f = await inflight(t, { status: event => event === 'ingress.observed' ? status : 200 });
+    await f.recover();
+    assert.equal(f.row().checkpoint, 'identity_pending'); assert.equal(f.row().state, 'recoverable_failure');
+    assert.equal(f.row().lastError, status === 429 || status >= 500 ? 'nexi_ingress_remote_unavailable' : 'nexi_ingress_remote_rejected');
+    assert.equal(f.posts.length, 0); assert.equal(f.row().acknowledgement, undefined);
+    const response = f.logs.find(item => item?.event === 'ingress.request' && item.stage === 'http_response');
+    assert.equal(response.http_status, status); assert.equal(response.error_class, classification);
+    const allowed = ['event', 'journal_id', 'attempt', 'ingress_event', 'event_id', 'stage', 'http_status', 'error_class'];
+    assert.ok(Object.keys(response).every(key => allowed.includes(key)));
+    for (const privateValue of [f.received.key.remoteJid, f.received.key.id, f.received.message.conversation, 'synthetic-chatwoot-token'])
+      assert.ok(!JSON.stringify(response).includes(privateValue));
+  });
+}
+test('observed timeout logs transport classification without inventing an HTTP status', async t => {
+  const f = await inflight(t, { requestError: event => event === 'ingress.observed'
+    ? Object.assign(Error('PRIVATE_OBSERVED_TIMEOUT'), { name: 'TimeoutError' }) : null });
+  await f.recover();
+  assert.equal(f.row().checkpoint, 'identity_pending'); assert.equal(f.row().state, 'recoverable_failure');
+  assert.equal(f.row().lastError, 'worker_unavailable'); assert.equal(f.posts.length, 0);
+  const entry = f.logs.find(item => item?.event === 'ingress.request' && item.stage === 'transport_error');
+  assert.equal(entry.error_class, 'timeout'); assert.equal(entry.http_status, undefined);
+  assert.ok(!JSON.stringify(f.logs).includes('PRIVATE_OBSERVED_TIMEOUT'));
+});
+test('observed diagnostic logger failure preserves HTTP rejection and never enters creation', async t => {
+  const f = await inflight(t, { status: event => event === 'ingress.observed' ? 401 : 200 });
+  const warn = f.service.logger.warn;
+  f.service.logger.warn = entry => { if (entry?.event === 'ingress.request') throw Error('synthetic diagnostic sink failure'); warn(entry); };
+  await f.recover();
+  assert.equal(f.row().lastError, 'nexi_ingress_remote_rejected'); assert.equal(f.row().checkpoint, 'identity_pending');
+  assert.equal(f.posts.length, 0); assert.equal(f.materializations.length, 0);
+});
+test('request telemetry covers successful observation, reconciliation and correlation with their signed event IDs', async t => {
+  const f = await inflight(t); await f.recover();
+  assert.equal(f.row().state, 'succeeded'); assert.equal(f.app.creates, 1);
+  const responses = f.logs.filter(item => item?.event === 'ingress.request' && item.stage === 'http_response');
+  assert.deepEqual(responses.map(item => item.ingress_event), f.events.map(item => item.event));
+  assert.deepEqual(responses.map(item => item.event_id), f.events.map(item => item.id));
+  assert.ok(responses.every(item => item.http_status === 200 && item.error_class === undefined));
+});
 for (const status of [401, 403, 422, 503]) {
   test(`actual SDK POST ${status} preserves uncertainty and reports its classification`, async t => {
     const f = await inflight(t, { post: async () => postResponse(status, { error: 'PRIVATE_ERROR_SENTINEL' }) });

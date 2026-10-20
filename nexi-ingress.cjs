@@ -31,6 +31,15 @@ function creationError(error, status) {
   if (['ECONNRESET', 'ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN'].includes(error?.code)) return 'transport_unavailable';
   return 'unclassified_failure';
 }
+function ingressRequestDiagnostic(ctx, event, eventId, stage, status, error) {
+  if (!['ingress.observed', 'ingress.reconcile', 'ingress.correlated', 'ingress.profile'].includes(event)) return;
+  try {
+    const httpStatus = Number.isSafeInteger(status) && status >= 100 && status <= 599 ? status : undefined;
+    creationDiagnostic(ctx, 'ingress.request', { ingress_event: event, event_id: eventId, stage,
+      ...(httpStatus ? { http_status: httpStatus } : {}),
+      ...(stage === 'transport_error' || httpStatus >= 400 ? { error_class: creationError(error, httpStatus) } : {}) });
+  } catch { /* Diagnostics must not replace a rejection or authorize a retry. */ }
+}
 // Called at the actual SDK/Axios boundary. Never log URL, headers, source_id,
 // exception messages/bodies, content or caller-provided diagnostic properties.
 function creationHttp(kind, stage, status, error) {
@@ -259,9 +268,18 @@ async function request(ctx, event, acknowledgement) {
   // legitimately change the correlation ACK; it must not reuse another body.
   const eventHash = canonical.digest([ctx.row.id, event, acknowledgement || null]);
   prepared.headers['X-Nexi-Event-Id'] = `${eventHash.slice(0, 8)}-${eventHash.slice(8, 12)}-${eventHash.slice(12, 16)}-${eventHash.slice(16, 20)}-${eventHash.slice(20, 32)}`;
-  const response = await fetch(target.url, { method: 'POST', redirect: 'error',
+  const options = { method: 'POST', redirect: 'error',
     headers: transport.freshEventHeaders(prepared.headers, prepared.body), body: JSON.stringify(prepared.body),
-    signal: AbortSignal.timeout(10000) });
+    signal: AbortSignal.timeout(10000) };
+  const eventId = prepared.headers['X-Nexi-Event-Id'];
+  ingressRequestDiagnostic(ctx, event, eventId, 'request_started');
+  let response;
+  try { response = await fetch(target.url, options); }
+  catch (error) {
+    ingressRequestDiagnostic(ctx, event, eventId, 'transport_error', undefined, error);
+    throw error;
+  }
+  ingressRequestDiagnostic(ctx, event, eventId, 'http_response', response.status);
   if (!response.ok) {
     const code = response.status >= 500 || response.status === 429 ? 'nexi_ingress_remote_unavailable' : 'nexi_ingress_remote_rejected';
     throw Object.assign(new Error(code), { code, httpStatus: response.status });
