@@ -42,7 +42,7 @@ const cancelable = evaluate(fs.readFileSync(path.join(sdk, 'dist/core/Cancelable
 let releaseTransport, aborted = false;
 const transport = new Promise((_resolve, reject) => { releaseTransport = () => reject(new Error('transport actually settled')); });
 const request = evaluate(patchChatwootCompletion(raw), {
-  '/evolution/nexi-ingress.cjs': { creationHttp() {} },
+  '/evolution/nexi-ingress.cjs': { creationHttp() {}, creationStep() {} },
   axios: { CancelToken: { source: () => ({ token: {}, cancel: () => { aborted = true; } }) }, request: () => transport },
   'form-data': class { append() {} }, './ApiError': { ApiError: Error }, './CancelablePromise': cancelable,
 }).request;

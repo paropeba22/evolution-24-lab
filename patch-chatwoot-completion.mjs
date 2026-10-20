@@ -35,6 +35,10 @@ export function patchChatwootCompletion(source) {
     }`);
   const before = 'const request = (config, options) => {\n    return new CancelablePromise_1.CancelablePromise(async (resolve, reject, onCancel) => {';
   const after = `const request = (config, options) => {
+    const nexiIngress = options.method === 'POST' &&
+        options.url === '/api/v1/accounts/{account_id}/conversations/{conversation_id}/messages'
+        ? require('/evolution/nexi-ingress.cjs') : null;
+    let nexiStep = 'sdk_url';
     let transportSettled;
     const completion = new Promise(resolve => { transportSettled = resolve; });
     const operation = new CancelablePromise_1.CancelablePromise(async (resolve, reject, onCancel) => {`;
@@ -45,7 +49,22 @@ export function patchChatwootCompletion(source) {
 };
 exports.request = request;`;
   if (source.split(before).length !== 2 || source.split(tail).length !== 2) throw new Error('Pinned SDK completion anchors changed');
+  const steps = [
+    ['            const url = getUrl(config, options);', 'sdk_url'],
+    ['            const formData = getFormData(options);', 'sdk_form'],
+    ['            const body = getRequestBody(options);', 'sdk_body'],
+    ['            const headers = await getHeaders(config, options, formData);', 'sdk_headers'],
+    ['                const response = await sendRequest(config, options, url, body, formData, headers, onCancel);', 'sdk_send'],
+    ['                const responseBody = getResponseBody(response);', 'sdk_response'],
+    ['                resolve(result.body);', 'sdk_return'],
+  ];
+  for (const [anchor, step] of steps) {
+    if (source.split(anchor).length !== 2) throw new Error('Pinned SDK preparation anchor changed');
+    const indent = anchor.match(/^ */)[0];
+    source = source.replace(anchor, `${indent}nexiStep = '${step}';\n${indent}nexiIngress?.creationStep(nexiStep);\n${anchor}`);
+  }
   return source.replace(before, after).replace(tail, `        catch (error) {
+            nexiIngress?.creationStep(nexiStep, error);
             reject(error);
         }
         finally {

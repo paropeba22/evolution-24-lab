@@ -153,8 +153,12 @@ patch('src/api/integrations/chatbot/chatwoot/services/chatwoot.service.ts', sour
   if (messageStart < 0 || messageEnd <= messageStart || mediaStart < 0 || mediaEnd <= mediaStart)
     throw new Error('Ingress Chatwoot method boundaries changed');
   let message = source.slice(messageStart, messageEnd);
+  message = once(message, '    const client = await this.clientCw(instance);',
+    `    ${helper}.creationStep('message_preparation');\n    const client = await this.clientCw(instance);`);
+  message = once(message, '    const replyToIds = await this.getReplyToIds(messageBody, instance);',
+    `    ${helper}.creationStep('reply_resolution');\n    const replyToIds = await this.getReplyToIds(messageBody, instance);`);
   message = once(message, '    const message = await client.messages.create({',
-    `    const message = await ${helper}.cancellable(() => client.messages.create({`);
+    `    ${helper}.creationStep('sdk_operation');\n    const message = await ${helper}.cancellable(() => client.messages.create({`);
   message = once(message, '      data: messageData,\n    });', '      data: messageData,\n    }));');
   source = source.slice(0, messageStart) + message + source.slice(messageEnd);
   const updatedMediaStart = source.indexOf('  private async sendData(');
@@ -181,6 +185,11 @@ patch('src/api/integrations/chatbot/chatwoot/services/chatwoot.service.ts', sour
   const eventEnd = source.indexOf('  public normalizeJidIdentifier(', eventStart);
   if (eventStart < 0 || eventEnd <= eventStart) throw new Error('Ingress Chatwoot event diagnostic boundary changed');
   let event = source.slice(eventStart, eventEnd);
+  for (const [anchor, step] of [
+    ['      const client = await this.clientCw(instance);', 'client_resolution'],
+    ['        const originalMessage = await this.getConversationMessage(body.message);', 'body_preparation'],
+    ['        const getConversation = await this.createConversation(instance, body);', 'conversation_resolution'],
+  ]) event = once(event, anchor, `${anchor.match(/^ */)[0]}${helper}.creationStep('${step}');\n${anchor}`);
   for (const [message, reason] of [
     ["'wa instance not found'", 'instance_unavailable'], ["'client not found'", 'client_unavailable'],
     ["'conversation not found'", 'conversation_unavailable'], ["'no body message found'", 'empty_body'],

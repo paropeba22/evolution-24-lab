@@ -217,6 +217,70 @@ async function inflight(t, options = {}) {
       conversation_id: 60, conversation_display_id: 6 } });
   return f;
 }
+
+for (const [label, options, step, name] of [
+  ['synchronous SDK throw', { sdkCreate() { throw new TypeError('PRIVATE_PREPARATION_SENTINEL'); } }, 'sdk_operation', 'TypeError'],
+  ['asynchronous SDK rejection', { sdkCreate: async () => { throw new RangeError('PRIVATE_PREPARATION_SENTINEL'); } }, 'sdk_operation', 'RangeError'],
+  ['synchronous URL preparation', { sdkConfig: { encode_path() { throw new URIError('PRIVATE_PREPARATION_SENTINEL'); } } }, 'sdk_url', 'URIError'],
+  ['asynchronous header preparation', { sdkConfig: { token: async () => { throw new TypeError('PRIVATE_PREPARATION_SENTINEL'); } } }, 'sdk_headers', 'TypeError'],
+  ['provider resolution', { providerError: async () => { throw new ReferenceError('PRIVATE_PREPARATION_SENTINEL'); } }, 'client_resolution', 'ReferenceError'],
+]) test(`${label} is classified before Axios without inventing an ACK under HOLD`, async t => {
+  const f = await inflight(t, options);
+  Object.assign(f.row(), { attempts: 116 });
+  await f.recover(); await f.recover();
+  assert.equal(f.row().attempts, 118); assert.equal(f.posts.length, 0); assert.equal(f.app.creates, 0);
+  assert.equal(f.row().state, 'result_uncertain'); assert.equal(f.row().checkpoint, 'chatwoot_inflight');
+  assert.equal(f.row().acknowledgement, undefined); assert.equal(f.materializations.length, 0);
+  const errors = f.logs.filter(item => item?.stage === 'event_whatsapp_error');
+  assert.equal(errors.length, 2);
+  for (const error of errors) {
+    assert.equal(error.operation_step, step); assert.equal(error.error_name, name);
+    assert.equal(error.error_class, 'local_runtime_failure'); assert.equal(error.request_started, false);
+    assert.equal(error.has_http_response, false); assert.equal(error.http_status, undefined);
+  }
+  assert.ok(!f.logs.some(item => item?.stage === 'request_started' && item?.event === 'ingress.creation'));
+  assert.ok(!JSON.stringify(f.logs).includes('PRIVATE_PREPARATION_SENTINEL'));
+});
+
+test('SDK returns without HTTP: operation entry alone cannot confirm creation', async t => {
+  const f = await inflight(t, { sdkCreate: () => undefined }); await f.recover();
+  assert.equal(f.posts.length, 0); assert.equal(f.row().acknowledgement, undefined);
+  assert.equal(f.row().lastError, 'nexi_ingress_chatwoot_unconfirmed');
+  assert.ok(f.logs.some(item => item?.operation_step === 'sdk_operation'));
+  assert.ok(f.logs.some(item => item?.stage === 'event_whatsapp_returned' && item.request_started === false));
+});
+
+test('provider storage failure retains safe Prisma class/code without logging query or schema data', async t => {
+  const f = await inflight(t, { providerError: async () => { throw { name: 'PrismaClientKnownRequestError', code: 'P2022',
+    message: 'PRIVATE_QUERY_SENTINEL', meta: { column: 'PRIVATE_COLUMN_SENTINEL' } }; } });
+  await f.recover();
+  const error = f.logs.find(item => item?.stage === 'event_whatsapp_error');
+  assert.equal(error.error_name, 'PrismaClientKnownRequestError'); assert.equal(error.error_code, 'P2022');
+  assert.equal(error.error_class, 'local_persistence_failure'); assert.equal(error.request_started, false);
+  assert.equal(f.posts.length, 0); assert.equal(f.row().acknowledgement, undefined);
+  assert.ok(!JSON.stringify(f.logs).includes('SENTINEL'));
+});
+
+test('native Axios URL configuration error is safely identifiable without private exception fields', async t => {
+  const f = await inflight(t, { post: async () => { throw Object.assign(new TypeError('PRIVATE_URL_SENTINEL'),
+    { code: 'ERR_INVALID_URL', input: 'PRIVATE_URL_SENTINEL', config: { secret: 'PRIVATE_CONFIG_SENTINEL' } }); } });
+  await f.recover();
+  const error = f.logs.find(item => item?.stage === 'event_whatsapp_error');
+  assert.equal(error.error_name, 'TypeError'); assert.equal(error.error_code, 'ERR_INVALID_URL');
+  assert.equal(error.error_class, 'local_configuration_failure');
+  assert.equal(error.request_started, true); assert.equal(error.has_http_response, false);
+  assert.equal(f.row().acknowledgement, undefined); assert.ok(!JSON.stringify(f.logs).includes('SENTINEL'));
+});
+
+test('untrusted exception names and codes never become diagnostic data', async t => {
+  const f = await inflight(t, { sdkCreate() { throw { name: 'PRIVATE_NAME_SENTINEL', code: 'PRIVATE_CODE_SENTINEL',
+    message: 'PRIVATE_MESSAGE_SENTINEL', response: { status: 403, data: 'PRIVATE_RESPONSE_SENTINEL' } }; } });
+  await f.recover();
+  const error = f.logs.find(item => item?.stage === 'event_whatsapp_error');
+  assert.equal(error.error_class, 'authorization_rejected'); assert.equal(error.error_name, 'other');
+  assert.equal(error.has_http_response, true); assert.equal(error.http_status, 403);
+  assert.equal(error.request_started, false); assert.ok(!JSON.stringify(f.logs).includes('SENTINEL'));
+});
 test('attempts 59/60 rejected at ingress.observed expose status without reaching Chatwoot', async t => {
   const f = await inflight(t, { status: event => event === 'ingress.observed' ? 401 : 200 });
   Object.assign(f.row(), { attempts: 58, checkpoint: 'identity_pending', state: 'recoverable_failure' });
@@ -286,6 +350,8 @@ for (const status of [401, 403, 422, 503]) {
     assert.equal(f.events.filter(item => item.event === 'ingress.reconcile').length, 4);
     assert.equal(f.materializations.length, 0); assert.equal(f.row().acknowledgement, undefined);
     assert.ok(f.logs.some(item => item?.http_status === status && item.error_class));
+    assert.ok(f.logs.some(item => item?.stage === 'event_whatsapp_error' && item.error_name === 'ApiError' &&
+      item.operation_step === 'sdk_response' && item.request_started === true && item.has_http_response === true));
     assert.ok(!JSON.stringify(f.logs).includes('PRIVATE_ERROR_SENTINEL'));
   });
 }
@@ -433,6 +499,8 @@ test('SDK HTTP instrumentation requires one exact anchor and rejects drift', asy
   assert.ok(block.includes(anchor));
   assert.throws(() => patchChatwootCompletion(original + '\n' + block), /HTTP diagnostic anchor changed/);
   assert.ok(patchChatwootCompletion(original).includes('nexiTransportSettled'));
+  assert.throws(() => patchChatwootCompletion(original.replace('const formData = getFormData(options);', 'const formData = null;')),
+    /SDK preparation anchor changed/);
 });
 
 test('persisted recoverable journal without association/ACK recovers with HOLD and instance Chatwoot absent', async t => {

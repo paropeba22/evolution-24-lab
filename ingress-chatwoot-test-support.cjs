@@ -43,7 +43,10 @@ function install({ root, ingress, service, repo, app, options, posts }) {
   } };
   const request = load('dist/core/request.js', { axios, '/evolution/nexi-ingress.cjs': ingress });
   const { Messages } = load('dist/services/Messages.js', { '../core/request': request });
-  const ChatwootClient = class { constructor({ config }) { this.messages = new Messages({ config }); } };
+  const ChatwootClient = class { constructor({ config }) {
+    this.messages = new Messages({ config: { ...config, ...options.sdkConfig } });
+    if (options.sdkCreate) this.messages.create = options.sdkCreate;
+  } };
   const file = path.join(root, 'src/api/integrations/chatbot/chatwoot/services/chatwoot.service.ts');
   const parsed = ts.createSourceFile(file, fs.readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true);
   const names = new Set(['eventWhatsapp', 'createMessage', 'getProvider', 'clientCw', 'getClientCwConfig',
@@ -64,6 +67,7 @@ function install({ root, ingress, service, repo, app, options, posts }) {
     prismaRepository: repo, logger: service.logger, cache: { async has(key) { return cache.has(key); },
       async get(key) { return cache.get(key); }, set(key, value) { cache.set(key, value); } } });
   client.isImportHistoryAvailable = () => false;
+  if (options.providerError) service.findChatwoot = options.providerError;
   service.getBase64FromMediaMessage = async () => ({ base64: Buffer.from('SYNTHETIC_MEDIA_BYTES').toString('base64'), mimetype: 'image/jpeg' });
   service.chatwootService = client;
 }

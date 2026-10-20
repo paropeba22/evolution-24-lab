@@ -29,7 +29,35 @@ function creationError(error, status) {
   if (['ETIMEDOUT', 'ECONNABORTED', 'TimeoutError'].includes(error?.code) || error?.name === 'TimeoutError') return 'timeout';
   if (['AbortError', 'CancelError'].includes(error?.name) || error?.code === 'ERR_CANCELED') return 'cancelled';
   if (['ECONNRESET', 'ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN'].includes(error?.code)) return 'transport_unavailable';
+  if (['ERR_INVALID_URL', 'ERR_INVALID_ARG_TYPE', 'ERR_INVALID_ARG_VALUE', 'ERR_BAD_OPTION_VALUE', 'ERR_BAD_OPTION'].includes(error?.code)) return 'local_configuration_failure';
+  if (['TypeError', 'ReferenceError', 'RangeError', 'SyntaxError', 'URIError'].includes(error?.name)) return 'local_runtime_failure';
+  if (['PrismaClientKnownRequestError', 'PrismaClientUnknownRequestError', 'PrismaClientInitializationError',
+    'PrismaClientRustPanicError', 'PrismaClientValidationError'].includes(error?.name)) return 'local_persistence_failure';
   return 'unclassified_failure';
+}
+function creationErrorDetails(error) {
+  // Never echo arbitrary names/codes: exceptions can contain private input.
+  const names = ['Error', 'TypeError', 'ReferenceError', 'RangeError', 'SyntaxError', 'URIError', 'AxiosError', 'ApiError', 'TimeoutError', 'AbortError', 'CancelError',
+    'PrismaClientKnownRequestError', 'PrismaClientUnknownRequestError', 'PrismaClientInitializationError', 'PrismaClientRustPanicError', 'PrismaClientValidationError'];
+  const codes = ['ETIMEDOUT', 'ECONNABORTED', 'ERR_CANCELED', 'ECONNRESET', 'ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN',
+    'ERR_INVALID_URL', 'ERR_INVALID_ARG_TYPE', 'ERR_INVALID_ARG_VALUE', 'ERR_BAD_OPTION_VALUE', 'ERR_BAD_OPTION', 'ERR_BAD_REQUEST', 'ERR_BAD_RESPONSE',
+    'P1000', 'P1001', 'P1002', 'P1003', 'P1008', 'P1010', 'P1011', 'P1017', 'P2000', 'P2001', 'P2002', 'P2003',
+    'P2010', 'P2011', 'P2012', 'P2013', 'P2014', 'P2021', 'P2022', 'P2024', 'P2025', 'P2028', 'P2034'];
+  return { error_name: names.includes(error?.name) ? error.name : 'other',
+    ...(codes.includes(error?.code) ? { error_code: error.code } : {}), has_http_response: !!error?.response ||
+      (error?.name === 'ApiError' && Number.isSafeInteger(error?.status) && error.status >= 100 && error.status <= 599) };
+}
+function creationStep(step, error) {
+  const ctx = context.getStore();
+  if (!ctx || ctx.secondary || !ctx.creationTrace || !['client_resolution', 'body_preparation', 'conversation_resolution',
+    'message_preparation', 'reply_resolution', 'sdk_operation', 'sdk_url', 'sdk_form', 'sdk_body', 'sdk_headers',
+    'sdk_send', 'sdk_response', 'sdk_return'].includes(step)) return;
+  try {
+    ctx.creationTrace.step = step;
+    creationDiagnostic(ctx, 'ingress.creation', { stage: error ? 'preparation_error' : 'preparation', operation_step: step,
+      request_started: ctx.creationTrace.requestStarted,
+      ...(error ? { error_class: creationError(error, error?.status || error?.response?.status), ...creationErrorDetails(error) } : {}) });
+  } catch { /* Diagnostics must not affect SDK preparation. */ }
 }
 function ingressRequestDiagnostic(ctx, event, eventId, stage, status, error) {
   if (!['ingress.observed', 'ingress.reconcile', 'ingress.correlated', 'ingress.profile'].includes(event)) return;
@@ -49,8 +77,8 @@ function creationHttp(kind, stage, status, error) {
   try {
     const httpStatus = Number.isSafeInteger(status) && status >= 100 && status <= 599 ? status : undefined;
     ctx.creationTrace.requestStarted = true;
-    creationDiagnostic(ctx, 'ingress.creation', { stage, transport: kind, ...(httpStatus ? { http_status: httpStatus } : {}),
-      ...(stage === 'transport_error' || httpStatus >= 400 ? { error_class: creationError(error, httpStatus) } : {}) });
+    creationDiagnostic(ctx, 'ingress.creation', { stage, transport: kind, boundary: 'axios_invocation', ...(httpStatus ? { http_status: httpStatus } : {}),
+      ...(stage === 'transport_error' || httpStatus >= 400 ? { error_class: creationError(error, httpStatus), ...creationErrorDetails(error) } : {}) });
   } catch { /* Observability is never authority or a request outcome. */ }
   return true;
 }
@@ -67,6 +95,7 @@ function creationFailure(error) {
   try {
     const status = error?.status || error?.response?.status;
     creationDiagnostic(ctx, 'ingress.creation', { stage: 'event_whatsapp_error', error_class: creationError(error, status),
+      ...creationErrorDetails(error), request_started: ctx.creationTrace.requestStarted, operation_step: ctx.creationTrace.step || 'event_entry',
       ...(Number.isSafeInteger(status) && status >= 100 && status <= 599 ? { http_status: status } : {}) });
   } catch { /* Preserve even unusual original errors. */ }
 }
@@ -327,6 +356,7 @@ async function chatwoot(service, body, work) {
       ...(ctx.creationTrace.skipReason ? { skip_reason: ctx.creationTrace.skipReason } : {}) });
   } catch (error) {
     creationDiagnostic(ctx, 'ingress.creation', { stage: 'event_whatsapp_failed', request_started: ctx.creationTrace.requestStarted,
+      operation_step: ctx.creationTrace.step || 'event_entry', ...creationErrorDetails(error),
       error_class: creationError(error, error?.status || error?.response?.status) });
     // Only reconciliation can establish the committed result, including after a timeout.
   }
@@ -610,6 +640,6 @@ async function cachedContacts(service, jids) {
     jidOptions: [row.pnJid, row.lidJid].filter(Boolean), lid: row.lidJid ? 'lid' : undefined }));
 }
 module.exports = { configure, inheritConfig, trackSocket, capture, skipSerial, observation, register, current, observed, chatwoot, correlated, socket,
-  creationHttp, creationSkipped, creationFailure,
+  creationHttp, creationSkipped, creationFailure, creationStep,
   materializePrimary, persistMessage, control, provider, setProvider, cancellable, contactSupplement, cachedContacts, inWorker: () => !!context.getStore(),
   secondaryRuntime: { registrations, context, verify, ownerCheck, log } };
