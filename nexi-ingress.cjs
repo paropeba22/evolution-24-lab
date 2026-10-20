@@ -17,6 +17,72 @@ const current = service => { const ctx = context.getStore(); return ctx?.service
 function log(service, event, row, reason) {
   service.logger?.warn({ event, journal_id: row?.id, instance_id: service.instanceId, reason });
 }
+function creationDiagnostic(ctx, event, fields) {
+  try { ctx.service.logger?.warn({ event, journal_id: ctx.row.id, attempt: ctx.row.attempts, ...fields }); }
+  catch { /* Diagnostics must never change creation or reconciliation. */ }
+}
+function creationError(error, status) {
+  if (status === 401 || status === 403) return 'authorization_rejected';
+  if (status === 400 || status === 422) return 'validation_rejected';
+  if (status === 429 || status >= 500) return 'remote_unavailable';
+  if (status >= 400) return 'http_rejected';
+  if (['ETIMEDOUT', 'ECONNABORTED', 'TimeoutError'].includes(error?.code) || error?.name === 'TimeoutError') return 'timeout';
+  if (['AbortError', 'CancelError'].includes(error?.name) || error?.code === 'ERR_CANCELED') return 'cancelled';
+  if (['ECONNRESET', 'ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN'].includes(error?.code)) return 'transport_unavailable';
+  return 'unclassified_failure';
+}
+// Called at the actual SDK/Axios boundary. Never log URL, headers, source_id,
+// exception messages/bodies, content or caller-provided diagnostic properties.
+function creationHttp(kind, stage, status, error) {
+  const ctx = context.getStore();
+  if (!ctx || ctx.secondary || !ctx.creationTrace || !['sdk_message_post', 'media_message_post'].includes(kind) ||
+      !['request_started', 'http_response', 'transport_error'].includes(stage)) return false;
+  try {
+    const httpStatus = Number.isSafeInteger(status) && status >= 100 && status <= 599 ? status : undefined;
+    ctx.creationTrace.requestStarted = true;
+    creationDiagnostic(ctx, 'ingress.creation', { stage, transport: kind, ...(httpStatus ? { http_status: httpStatus } : {}),
+      ...(stage === 'transport_error' || httpStatus >= 400 ? { error_class: creationError(error, httpStatus) } : {}) });
+  } catch { /* Observability is never authority or a request outcome. */ }
+  return true;
+}
+function creationSkipped(reason) {
+  const ctx = context.getStore();
+  if (!ctx || ctx.secondary || !ctx.creationTrace || !['instance_unavailable', 'client_unavailable', 'conversation_unavailable',
+    'ignored_group', 'ignored_contact', 'ignored_jid', 'empty_body'].includes(reason)) return false;
+  ctx.creationTrace.skipReason = reason;
+  return true;
+}
+function creationFailure(error) {
+  const ctx = context.getStore();
+  if (!ctx || ctx.secondary || !ctx.creationTrace) return;
+  try {
+    const status = error?.status || error?.response?.status;
+    creationDiagnostic(ctx, 'ingress.creation', { stage: 'event_whatsapp_error', error_class: creationError(error, status),
+      ...(Number.isSafeInteger(status) && status >= 100 && status <= 599 ? { http_status: status } : {}) });
+  } catch { /* Preserve even unusual original errors. */ }
+}
+async function persistCreationAck(ctx, ack) {
+  try { await checkpoint(ctx, { acknowledgement: ack, checkpoint: 'chatwoot_confirmed', state: 'pending' }); }
+  catch (error) {
+    creationDiagnostic(ctx, 'ingress.creation', { stage: 'ack_persistence_failed', has_message_id: true });
+    throw error;
+  }
+  creationDiagnostic(ctx, 'ingress.creation', { stage: 'ack_persisted', has_message_id: true });
+}
+async function reconcileCreation(ctx, stage) {
+  try {
+    const result = await request(ctx, 'ingress.reconcile');
+    creationDiagnostic(ctx, 'ingress.reconciliation', { stage, has_message_id: !!result.message_id,
+      result: result.message_id ? 'message_confirmed' : result.creation_state === 'absent_retry_safe' ? 'absent_retry_safe' : 'unconfirmed' });
+    return result;
+  } catch (error) {
+    try {
+      creationDiagnostic(ctx, 'ingress.reconciliation', { stage, result: 'failed', error_class: creationError(error, error?.httpStatus),
+        ...(error?.httpStatus ? { http_status: error.httpStatus } : {}) });
+    } catch { /* Preserve the original reconciliation error. */ }
+    throw error;
+  }
+}
 function key(name) {
   const master = process.env.NEXI_CHANNELS_EVENT_MASTER_SECRET || '';
   if (Buffer.byteLength(master) < 32) fail('nexi_ingress_secret_missing');
@@ -196,7 +262,10 @@ async function request(ctx, event, acknowledgement) {
   const response = await fetch(target.url, { method: 'POST', redirect: 'error',
     headers: transport.freshEventHeaders(prepared.headers, prepared.body), body: JSON.stringify(prepared.body),
     signal: AbortSignal.timeout(10000) });
-  if (!response.ok) fail(response.status >= 500 || response.status === 429 ? 'nexi_ingress_remote_unavailable' : 'nexi_ingress_remote_rejected');
+  if (!response.ok) {
+    const code = response.status >= 500 || response.status === 429 ? 'nexi_ingress_remote_unavailable' : 'nexi_ingress_remote_rejected';
+    throw Object.assign(new Error(code), { code, httpStatus: response.status });
+  }
   const result = await response.json();
   if (result.account_id !== ctx.claims.account_id || result.inbox_id !== ctx.claims.inbox_id ||
       !['association_id', 'generation', 'contact_id', 'contact_inbox_id', 'conversation_id', 'conversation_display_id']
@@ -218,27 +287,38 @@ async function chatwoot(service, body, work) {
   if (!ctx) return work();
   // Always reconcile before any creation, even on the first worker attempt.
   // The APP atomically reserves and returns the exact persisted source result.
-  const result = await request(ctx, 'ingress.reconcile');
+  const result = await reconcileCreation(ctx, 'before_creation');
   if (ctx.expectedMessageId && result.message_id !== ctx.expectedMessageId) fail('nexi_ingress_confirmed_id_conflict');
   await checkpoint(ctx, { association: result });
   identity.bind(body, result);
   if (result.message_id) {
     const ack = { id: result.message_id, inbox_id: result.inbox_id, conversation_id: result.conversation_display_id };
-    await checkpoint(ctx, { acknowledgement: ack, checkpoint: 'chatwoot_confirmed', state: 'pending' });
+    await persistCreationAck(ctx, ack);
     return ack;
   }
   if (result.creation_state !== 'absent_retry_safe') fail('nexi_ingress_reconciliation_uncertain');
   await checkpoint(ctx, { checkpoint: 'chatwoot_inflight', state: 'result_uncertain' });
   await check(ctx);
+  ctx.creationTrace = { requestStarted: false };
+  creationDiagnostic(ctx, 'ingress.creation', { stage: 'event_whatsapp_started' });
   let ack;
-  try { ack = await work(); } catch { /* Reconciliation owns an uncertain result. */ }
+  try {
+    ack = await work();
+    creationDiagnostic(ctx, 'ingress.creation', { stage: 'event_whatsapp_returned', request_started: ctx.creationTrace.requestStarted,
+      has_message_id: Number.isSafeInteger(ack?.id) && ack.id > 0,
+      ...(ctx.creationTrace.skipReason ? { skip_reason: ctx.creationTrace.skipReason } : {}) });
+  } catch (error) {
+    creationDiagnostic(ctx, 'ingress.creation', { stage: 'event_whatsapp_failed', request_started: ctx.creationTrace.requestStarted,
+      error_class: creationError(error, error?.status || error?.response?.status) });
+    // Only reconciliation can establish the committed result, including after a timeout.
+  }
   // A positive HTTP ACK alone is insufficient: reconcile the committed APP
   // reservation. A lost response/crash never falls through to a blind POST.
-  const confirmed = await request(ctx, 'ingress.reconcile');
+  const confirmed = await reconcileCreation(ctx, 'after_creation');
   if (!confirmed.message_id) fail('nexi_ingress_chatwoot_unconfirmed');
   if (ack?.id && ack.id !== confirmed.message_id) fail('nexi_ingress_ack_conflict');
   ack = { id: confirmed.message_id, inbox_id: confirmed.inbox_id, conversation_id: confirmed.conversation_display_id };
-  await checkpoint(ctx, { acknowledgement: ack, checkpoint: 'chatwoot_confirmed', state: 'pending' });
+  await persistCreationAck(ctx, ack);
   return ack;
 }
 async function correlated(service, acknowledgement, work) {
@@ -512,5 +592,6 @@ async function cachedContacts(service, jids) {
     jidOptions: [row.pnJid, row.lidJid].filter(Boolean), lid: row.lidJid ? 'lid' : undefined }));
 }
 module.exports = { configure, inheritConfig, trackSocket, capture, skipSerial, observation, register, current, observed, chatwoot, correlated, socket,
+  creationHttp, creationSkipped, creationFailure,
   materializePrimary, persistMessage, control, provider, setProvider, cancellable, contactSupplement, cachedContacts, inWorker: () => !!context.getStore(),
   secondaryRuntime: { registrations, context, verify, ownerCheck, log } };

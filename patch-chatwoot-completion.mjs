@@ -4,6 +4,35 @@ import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 export function patchChatwootCompletion(source) {
+  const send = `    try {
+        return await axios_1.default.request(requestConfig);
+    }
+    catch (error) {
+        const axiosError = error;
+        if (axiosError.response) {
+            return axiosError.response;
+        }
+        throw error;
+    }`;
+  if (source.split(send).length !== 2) throw new Error('Pinned SDK HTTP diagnostic anchor changed');
+  source = source.replace(send, `    const nexiMessagePost = options.method === 'POST' &&
+        options.url === '/api/v1/accounts/{account_id}/conversations/{conversation_id}/messages';
+    const nexiIngress = nexiMessagePost ? require('/evolution/nexi-ingress.cjs') : null;
+    nexiIngress?.creationHttp('sdk_message_post', 'request_started');
+    try {
+        const response = await axios_1.default.request(requestConfig);
+        nexiIngress?.creationHttp('sdk_message_post', 'http_response', response.status);
+        return response;
+    }
+    catch (error) {
+        const axiosError = error;
+        if (axiosError.response) {
+            nexiIngress?.creationHttp('sdk_message_post', 'http_response', axiosError.response.status);
+            return axiosError.response;
+        }
+        nexiIngress?.creationHttp('sdk_message_post', 'transport_error', undefined, error);
+        throw error;
+    }`);
   const before = 'const request = (config, options) => {\n    return new CancelablePromise_1.CancelablePromise(async (resolve, reject, onCancel) => {';
   const after = `const request = (config, options) => {
     let transportSettled;

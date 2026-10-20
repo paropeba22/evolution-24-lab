@@ -159,9 +159,40 @@ patch('src/api/integrations/chatbot/chatwoot/services/chatwoot.service.ts', sour
   source = source.slice(0, messageStart) + message + source.slice(messageEnd);
   const updatedMediaStart = source.indexOf('  private async sendData(');
   const updatedMediaEnd = source.indexOf('  public async createBotQr(', updatedMediaStart);
-  const media = once(source.slice(updatedMediaStart, updatedMediaEnd),
+  let media = once(source.slice(updatedMediaStart, updatedMediaEnd),
     '      maxBodyLength: Infinity,', '      maxBodyLength: Infinity,\n      timeout: 15000,');
+  media = once(media, `    try {
+      const { data } = await axios.request(config);
+
+      return data;
+    } catch (error) {
+      this.logger.error(error);
+    }`, `    ${helper}.creationHttp('media_message_post', 'request_started');
+    try {
+      const response = await axios.request(config);
+      ${helper}.creationHttp('media_message_post', 'http_response', response.status);
+      return response.data;
+    } catch (error) {
+      const traced = ${helper}.creationHttp('media_message_post', error.response ? 'http_response' : 'transport_error', error.response?.status, error);
+      if (!traced) this.logger.error(error);
+    }`);
   source = source.slice(0, updatedMediaStart) + media + source.slice(updatedMediaEnd);
+  const eventStart = source.indexOf('  public async eventWhatsapp(');
+  const eventEnd = source.indexOf('  public normalizeJidIdentifier(', eventStart);
+  if (eventStart < 0 || eventEnd <= eventStart) throw new Error('Ingress Chatwoot event diagnostic boundary changed');
+  let event = source.slice(eventStart, eventEnd);
+  for (const [message, reason] of [
+    ["'wa instance not found'", 'instance_unavailable'], ["'client not found'", 'client_unavailable'],
+    ["'conversation not found'", 'conversation_unavailable'], ["'no body message found'", 'empty_body'],
+    ["'Ignoring message from group: ' + body?.key?.remoteJid", 'ignored_group'],
+    ["'Ignoring message from contact: ' + body?.key?.remoteJid", 'ignored_contact'],
+    ["'Ignoring message from jid: ' + body?.key?.remoteJid", 'ignored_jid'],
+  ]) event = once(event, `this.logger.warn(${message});`,
+    `if (!${helper}.creationSkipped('${reason}')) this.logger.warn(${message});`);
+  event = once(event, "      this.logger.error('Chatwoot event processing failed');",
+    `      ${helper}.creationFailure(error);
+      this.logger.error('Chatwoot event processing failed');`);
+  source = source.slice(0, eventStart) + event + source.slice(eventEnd);
   const quotedAnchor = `        if (quotedId)
           quotedMsg = await this.prismaRepository.message.findFirst({
             where: {`;
