@@ -34,10 +34,12 @@ function authorityTiming(source, phase, preparationId, started, result) {
 function exact(value, keys) { return value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).sort().join(',') === [...keys].sort().join(','); }
 const WRITER_VERSION = 2;
 function physicalDispatchEnabled(source, row) {
+  const scoped = row?.authority?.isolated_operation || row?.releasedAuthority?.grant?.isolated_operation;
   return !!(source?.service && row?.releasedAuthority?.grant?.scope === 'attendance_dispatch_v1' &&
     row.releasedAuthority.grant.physical_dispatch === true && row.authority?.physical_dispatch === true &&
     row.authority.isolation_cutover === true && row.authority.barrier_state === 'active' &&
-    row.authority.writer_protocol_version === WRITER_VERSION);
+    row.authority.writer_protocol_version === WRITER_VERSION && (!scoped ||
+      canonical.digest(row.authority.isolated_operation || null) === canonical.digest(row.releasedAuthority.grant.isolated_operation || null)));
 }
 
 function claims(source, envelope, now = Date.now()) {
@@ -52,10 +54,11 @@ function claims(source, envelope, now = Date.now()) {
 }
 function material(value) {
   if (!exact(value, ['consumption_id','grant','grant_digest','release','release_digest']) || !UUID.test(value.consumption_id || '') ||
-      !exact(value.grant, GRANT_KEYS) || !exact(value.release, RELEASE_KEYS) ||
+      !exact(value.grant, Object.hasOwn(value.grant || {}, 'isolated_operation') ? [...GRANT_KEYS,'isolated_operation'] : GRANT_KEYS) || !exact(value.release, RELEASE_KEYS) ||
       canonical.digest(value.grant) !== value.grant_digest || canonical.digest(value.release) !== value.release_digest)
     fail('nexi_attendance_authority_material_conflict');
   const g = value.grant, r = value.release;
+  if (Object.hasOwn(g, 'isolated_operation')) require('./nexi-attendance-isolated.cjs').validate(g.isolated_operation, g.isolated_operation?.approved_at);
   if (!['grant_id','admission_id','request_id','execution_id','attempt_id','reservation_id','preparation_id','instance_lineage_id','sender_account_lineage_id'].every(k => UUID.test(g[k] || '')) ||
       !['request_digest','authority_snapshot_digest','preparation_digest','prepared_content_digest','session_identity'].every(k => HASH.test(g[k] || '')) ||
       !['account_id','managed_channel_id','message_id','identity_version_id','writer_epoch','binding_generation','expires_at'].every(k => Number.isSafeInteger(g[k]) && g[k] > 0) ||
@@ -84,6 +87,9 @@ function binding(source, row, m) {
         external_id:row.externalId, authority:a }) || row.preparationDigest !== canonical.digest({ content_digest:row.contentDigest,
         authority_digest:row.authorityDigest, preparation_id:row.id, nonce:row.preparationNonce, revision:row.preparationRevision }))
     fail('nexi_attendance_consumption_binding_conflict');
+  if (Object.hasOwn(m.grant, 'isolated_operation') || Object.hasOwn(a, 'isolated_operation')) {
+    require('./nexi-attendance-isolated.cjs').grant(source, row, m, m.grant.isolated_operation?.approved_at, {history:true});
+  }
 }
 async function clock(tx) {
   const rows = await tx.$queryRawUnsafe("SELECT CURRENT_TIMESTAMP AS attendance_now");
@@ -113,7 +119,8 @@ function replay(row, m) {
     fail('nexi_attendance_consumption_conflict');
 }
 async function consumption(source, authorityClaims) {
-  if (authorityClaims.action === 'consume' && attendance().cutoverHeld()) fail('nexi_attendance_cutover_held');
+  if (authorityClaims.action === 'consume' && attendance().cutoverHeld() && !authorityClaims.material?.grant?.isolated_operation)
+    fail('nexi_attendance_cutover_held');
   const m = material(authorityClaims.material);
   if (authorityClaims.request_id !== m.consumption_id) fail('nexi_attendance_consumption_identity_conflict');
   const started = performance.now();
@@ -130,6 +137,7 @@ async function consumption(source, authorityClaims) {
     if (row.consumptionId) { replay(row, m); return result(row, m); }
     if (authorityClaims.action === 'consumption_readback') return result(null, m);
     const now = await clock(tx);
+    if (m.grant.isolated_operation) require('./nexi-attendance-isolated.cjs').grant(source, row, m, now);
     if (now >= m.grant.expires_at || now >= m.release.deadline) fail('nexi_attendance_authority_expired');
     if (!['prepared','awaiting_admission'].includes(row.state) || row.admissionId || row.releaseId || row.dispatchStartedAt || row.outcomeUnknown)
       fail('nexi_attendance_consumption_fenced');
@@ -219,6 +227,9 @@ async function dispatchStart(source, preparationId, consumptionId, stanza) {
     // Even after a crash or a socket exception the original CAS is permanent.
     if (row.dispatchStartedAt) return { started:false, outcome_unknown:true };
     const now = await clock(tx);
+    if (m.grant.isolated_operation) require('./nexi-attendance-isolated.cjs').grant(source, row, m, now);
+    if (canonical.digest(current.isolated_operation || null) !== canonical.digest(row.authority.isolated_operation || null))
+      fail('nexi_attendance_dispatch_fenced');
     if (row.state !== 'dispatch_ready_but_disabled' || now>=m.release.deadline || now>=m.grant.expires_at ||
         current.writer_epoch !== row.authority.writer_epoch || current.binding_generation !== row.authority.binding_generation ||
         current.session_identity !== row.sessionIdentity || current.managed_channel_id !== row.authority.managed_channel_id ||
@@ -268,22 +279,26 @@ function installRoute(router, monitor, guard, repository) {
       probe?.attempt('contract_validation');
       const value=claims(source,req.body);
       if (value.action==='writer_probe') {
-        if (attendance().cutoverHeld()) fail('nexi_attendance_cutover_held');
+        const scoped = value.material?.isolated_operation;
+        if (attendance().cutoverHeld() && !scoped) fail('nexi_attendance_cutover_held');
+        if (scoped && !require('./nexi-attendance-isolated.cjs').enabled()) fail('nexi_attendance_cutover_held');
         probe?.stage('signed_contract_validated');
         probe?.attempt('socket_validation');
         const m=value.material, groups=require('./nexi-groups.cjs');
         const owner=source.service && groups.lifecycleCapture(source.service);
-        probe?.socketChecks(() => ({ material_valid:!!exact(m,['managed_channel_id','session_identity']) && Number.isSafeInteger(m?.managed_channel_id),
+        const materialKeys = scoped ? ['managed_channel_id','session_identity','isolated_operation'] : ['managed_channel_id','session_identity'];
+        probe?.socketChecks(() => ({ material_valid:!!exact(m,materialKeys) && Number.isSafeInteger(m?.managed_channel_id),
           socket_open:!!source.service?.client?.ws?.isOpen, owner_token_valid:UUID.test(owner?.token || ''),
           lifecycle_current:!!groups.lifecycleCurrent(owner),
           session_matches:identity.sessionFingerprint(source.service?.client?.authState?.creds)===m?.session_identity }));
-        if (!exact(m,['managed_channel_id','session_identity']) || !Number.isSafeInteger(m.managed_channel_id) ||
+        if (!exact(m,materialKeys) || !Number.isSafeInteger(m.managed_channel_id) ||
             !source.service?.client?.ws?.isOpen || !UUID.test(owner?.token || '') || !groups.lifecycleCurrent(owner) ||
             identity.sessionFingerprint(source.service.client.authState?.creds)!==m.session_identity)
           fail('nexi_attendance_writer_unavailable');
         probe?.stage('instance_socket_verified');
         probe?.attempt('context_request_setup');
         const snapshot=await attendance().captureContextSnapshot(source,owner,probe), context=snapshot.context;
+        if (scoped) require('./nexi-attendance-isolated.cjs').context(source,context,scoped,Date.now(),{probe:true});
         probe?.attempt('binding_validation');
         if (context.managed_channel_id!==m.managed_channel_id || context.session_identity!==m.session_identity || context.barrier_state!=='fencing')
           fail('nexi_attendance_writer_binding_conflict');
@@ -315,7 +330,8 @@ function installRoute(router, monitor, guard, repository) {
           storage_guarded:true,physical_dispatch:true,session_identity:m.session_identity,isolated_writer:'nexi-app',
           socket_owner:owner.token,verified_account_identity:true,account_id:context.account_id,inbox_id:context.inbox_id,
           writer_epoch:context.writer_epoch,binding_generation:context.binding_generation,
-          receipt_context:Object.fromEntries(['instance_lineage_id','sender_account_lineage_id','sender_attestation_id'].map(key=>[key,context[key]]))});
+          receipt_context:Object.fromEntries(['instance_lineage_id','sender_account_lineage_id','sender_attestation_id'].map(key=>[key,context[key]])),
+          ...(scoped ? {isolated_operation_id:scoped.authorization_id} : {})});
         probe?.stage('proof_response_produced');
         return res.json(proof);
       }

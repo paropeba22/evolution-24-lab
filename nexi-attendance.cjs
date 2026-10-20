@@ -625,6 +625,8 @@ function cutoverHeld(env = process.env, readRelease = file => require('node:fs')
   const value = env.NEXI_ATTENDANCE_CUTOVER_HOLD;
   if (value === undefined || value === 'false') return false;
   if (value !== 'true') return true; // Invalid configuration cannot be released.
+  // The isolated lane cannot release commercial work via a legacy boot file.
+  if (env.NEXI_ATTENDANCE_ISOLATED_DISPATCH_ENABLED === 'true') return true;
   const boot = env.NEXI_ATTENDANCE_CUTOVER_BOOT_ID;
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(boot || '')) return true;
   try { return readRelease(`/tmp/nexi-attendance-cutover-${boot}.release`) !== `${boot}\n`; }
@@ -723,6 +725,7 @@ function verifyContext(source, envelope, nonce, session) {
   const context = decodeCanonicalClaims(envelope.claims);
   canonicalVersion(context.canonical_version, source);
   const keys = [...COMMON, 'nonce', 'inbox_id', 'instance', 'channel_state', 'current_session', 'physical_dispatch', 'isolation_cutover'];
+  if (Object.hasOwn(context, 'isolated_operation')) keys.push('isolated_operation');
   if (Object.keys(context).sort().join(',') !== keys.sort().join(',') || context.version !== 1 || context.protocol_version !== 1 ||
       context.audience !== 'nexi-attendance-evolution' || context.provider !== 'evolution-baileys' || context.nonce !== nonce ||
       context.instance !== source.instance.name || context.instance_id !== source.instanceId || context.session_identity !== session ||
@@ -735,6 +738,7 @@ function verifyContext(source, envelope, nonce, session) {
       typeof context.current_session !== 'boolean' || !['active', 'disabled', 'removed'].includes(context.channel_state) ||
       !(context.original_session_identity === null || HASH.test(context.original_session_identity || '')))
     fail('nexi_attendance_context_invalid');
+  if (Object.hasOwn(context, 'isolated_operation')) require('./nexi-attendance-isolated.cjs').context(source, context, context.isolated_operation, Date.now());
   return context;
 }
 async function refreshContext(source, session, fetchImpl = fetch, socketOwner = null, writerProbe = null) {
@@ -1200,6 +1204,7 @@ async function compareUpdate(db, row, changes) {
 }
 async function draft(source, context, intent, requestId, predecessor = null) {
   validateIntent(context, intent);
+  if (Object.hasOwn(context, 'isolated_operation')) require('./nexi-attendance-isolated.cjs').intent(source, context, intent);
   if (!UUID.test(requestId)) fail('nexi_attendance_preparation_identity_invalid');
   const db = source.prismaRepository.nexiAttendancePreparation;
   if (predecessor && (predecessor.state !== 'definitively_not_sent' || predecessor.closureReason !== 'collision_fenced'))
@@ -1466,9 +1471,11 @@ async function assertNode(config, stanza) {
   if (stanza?.tag !== 'message') return;
   // Operational hold is independent of cached contexts and persisted grants.
   // It does not change their historical facts or claim that Signal is idle.
-  if (cutoverHeld()) fail('nexi_attendance_cutover_held');
-  const registration = configs.get(config);
   const capability = scope.getStore();
+  const scoped = capability?.kind === 'released_grant' && capability.preparation?.authority?.isolated_operation;
+  if (cutoverHeld() && !scoped) fail('nexi_attendance_cutover_held');
+  if (scoped) require('./nexi-attendance-isolated.cjs').grant(capability.source, capability.preparation, capability.preparation.releasedAuthority);
+  const registration = configs.get(config);
   if (capability) {
     const authority=require('./nexi-attendance-authority.cjs');
     // Commit the original one-way CAS before the lexical socket write.
@@ -1739,7 +1746,8 @@ function installRoutes(router, monitor, guard, repository) {
       const previous = await repository.nexiAttendancePreparation.findUnique({where:{instanceId_requestId:{instanceId:source.instanceId,requestId:claims.request_id}}});
       if (previous) {
         if (digest(previous.intent)!==digest(claims.intent) || previous.sessionIdentity!==claims.session_identity ||
-            previous.authority.managed_channel_id!==claims.managed_channel_id || previous.authority.writer_epoch!==claims.writer_epoch)
+            previous.authority.managed_channel_id!==claims.managed_channel_id || previous.authority.writer_epoch!==claims.writer_epoch ||
+            digest(previous.authority.isolated_operation || null)!==digest(claims.isolated_operation || null))
           fail('nexi_attendance_preparation_identity_conflict');
         const prepared=await prepare(source,previous);
         return res.json({state:prepared.state,preparation_id:prepared.id,physical_dispatch:prepared.authority.physical_dispatch === true});
@@ -1749,6 +1757,7 @@ function installRoutes(router, monitor, guard, repository) {
         fail('nexi_attendance_session_superseded');
       if (context?.managed_channel_id !== claims.managed_channel_id || context.writer_epoch !== claims.writer_epoch)
         fail('nexi_attendance_authorization_superseded');
+      if (digest(context.isolated_operation || null)!==digest(claims.isolated_operation || null)) fail('nexi_attendance_isolated_authority_invalid');
       const row = await draft(source, context, claims.intent, claims.request_id);
       const prepared = await prepare(source, row);
       return res.json({ state: prepared.state, preparation_id: prepared.id, attempt_id: prepared.attemptId,
@@ -1798,12 +1807,18 @@ function installRoutes(router, monitor, guard, repository) {
 function prepareClaims(service, envelope, now = Date.now()) {
   const claims = verifyEnvelope(service, envelope, 'attendance-prepare', 2097152);
   canonicalVersion(claims.canonical_version);
-  if (Object.keys(claims).sort().join(',') !== 'audience,canonical_version,expires_at,instance,instance_id,intent,managed_channel_id,physical_dispatch,provider,request_id,session_identity,version,writer_epoch' ||
+  const expected = 'audience,canonical_version,expires_at,instance,instance_id,intent,managed_channel_id,physical_dispatch,provider,request_id,session_identity,version,writer_epoch'.split(',');
+  if (Object.hasOwn(claims, 'isolated_operation')) expected.push('isolated_operation');
+  if (Object.keys(claims).sort().join(',') !== expected.sort().join(',') ||
       claims.version !== 1 || claims.audience !== 'nexi-attendance-evolution' || claims.provider !== 'evolution-baileys' ||
       claims.instance !== service.instance.name || claims.instance_id !== service.instanceId || ![true,false].includes(claims.physical_dispatch) ||
       !['managed_channel_id', 'writer_epoch'].every(key => Number.isSafeInteger(claims[key]) && claims[key] > 0) ||
       !UUID.test(claims.request_id || '') || !Number.isSafeInteger(claims.expires_at) || claims.expires_at <= now || claims.expires_at > now + 60000 ||
       claims.session_identity !== identity.sessionFingerprint(service.client?.authState?.creds)) fail('nexi_attendance_prepare_authentication_required');
+  if (claims.isolated_operation) {
+    require('./nexi-attendance-isolated.cjs').intent({instanceId:service.instanceId,instance:service.instance},
+      {...claims,...claims.isolated_operation,instance:claims.instance}, claims.intent, now);
+  } else if (process.env.NEXI_ATTENDANCE_ISOLATED_DISPATCH_ENABLED === 'true' && cutoverHeld()) fail('nexi_attendance_cutover_held');
   return claims;
 }
 function decodeCanonicalClaims(encoded) {

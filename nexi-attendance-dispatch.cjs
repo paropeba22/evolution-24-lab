@@ -41,12 +41,14 @@ async function content(source,row,fetchImpl) {
 }
 
 async function dispatch(source, material, fetchImpl = fetch) {
-  if (attendance.cutoverHeld()) fail('nexi_attendance_cutover_held');
+  if (attendance.cutoverHeld() && !material?.grant?.isolated_operation) fail('nexi_attendance_cutover_held');
   const db = source.prismaRepository.nexiAttendancePreparation;
   let row = await db.findUnique({where:{id:material.grant.preparation_id}});
+  if (attendance.cutoverHeld() && !row?.authority?.isolated_operation) fail('nexi_attendance_cutover_held');
   authority.binding(source,row,material);
   if (!authority.physicalDispatchEnabled(source,row)) fail('nexi_attendance_dispatch_unreleased');
   if (row.dispatchStartedAt) return authority.result(row,material);
+  if (row.authority.isolated_operation) require('./nexi-attendance-isolated.cjs').grant(source,row,material);
   const expired = await expiryReadback(source,material);
   if (expired) return expired;
   // Resolve immutable bytes before entering the irreversible lexical boundary.

@@ -186,6 +186,26 @@ async function fixture(t, options = {}) {
       await ingress.testRun(registration, lane, token);
     } };
 }
+test('simultaneous incoming recovery and scoped mocked dispatch retain global HOLD', async t => {
+  const previous=process.env.NEXI_ATTENDANCE_ISOLATED_DISPATCH_ENABLED;
+  process.env.NEXI_ATTENDANCE_ISOLATED_DISPATCH_ENABLED='true';
+  t.after(()=>{if(previous===undefined)delete process.env.NEXI_ATTENDANCE_ISOLATED_DISPATCH_ENABLED;
+    else process.env.NEXI_ATTENDANCE_ISOLATED_DISPATCH_ENABLED=previous;});
+  const incoming=await fixture(t),inboundFetch=global.fetch;
+  const {fixture:outboundFixture,installSocket}=require('./attendance-isolated-test-support.cjs');
+  const outgoing=outboundFixture();
+  const authority=require('./nexi-attendance-authority.cjs'),transport=require('./nexi-attendance-dispatch.cjs');
+  await authority.consumption(outgoing.source,outgoing.claims);
+  const wire=await installSocket(outgoing,t),outboundFetch=global.fetch;
+  global.fetch=(url,...args)=>String(url).startsWith('https://offline.invalid/')?inboundFetch(url,...args):outboundFetch(url,...args);
+  await incoming.admit();
+  await Promise.all([incoming.recover(),transport.dispatch(outgoing.source,outgoing.claims.material)]);
+  assert.equal(incoming.row().state,'succeeded');assert.equal(incoming.app.creates,1);
+  assert.equal(wire.writes,1);assert.equal(attendance.cutoverHeld(),true);
+  await Promise.all([incoming.recover(),transport.dispatch(outgoing.source,outgoing.claims.material)]);
+  assert.equal(incoming.app.creates,1);assert.equal(wire.writes,1);
+});
+
 test('actual eventWhatsapp/SDK POST rejection from chatwoot_inflight must expose HTTP result', async t => {
   const f = await fixture(t, { actualChatwoot: true, post: async () => ({ status: 422, statusText: 'Unprocessable Entity', headers: {},
     data: { error: 'SYNTHETIC_PRIVATE_VALIDATION_BODY' } }) });
