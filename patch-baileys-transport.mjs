@@ -10,7 +10,7 @@ const hashes = {
   'node_modules/baileys/lib/Socket/messages-send.js': '8446ce33f4b512c25870d4ab625b47f4d133fb08ee2190cabbec22c5bdabc957',
   'node_modules/baileys/lib/Socket/messages-recv.js': '173ea6cafc4fe2111576c694cca4c4d95a89fe3c631f2addc530e4359eecd7a2',
   'node_modules/baileys/lib/Socket/chats.js': '2d4cdbcaf5d31547ec121e99b5a923c35e11782b2448eee2b557748777ddd758',
-  'src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts': '4f968359cf1dbaabe7db36bac057b55f61d4fbee61385f73678f48f6abe22ecb',
+  'src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts': 'bbbd6550e820bd92d5d10b9c84ba253d93705f480fafcf41680a56690f0cb2e9',
   'tsup.config.ts': '9b11851f8b12580332577536d5f02cb20f76a2227226b14099dc86ba134eb14e',
 };
 const digest = source => createHash('sha256').update(source).digest('hex');

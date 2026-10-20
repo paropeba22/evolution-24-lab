@@ -491,11 +491,27 @@ test('missing runtime helper fails source preflight before any source mutation',
   }
 });
 
-test('S6 fingerprints reject every changed input and the pre-typefix composition without partial writes', async t => {
+test('S6 fingerprints reject changed inputs and historical compositions without partial writes', async t => {
   const manifest = JSON.parse(fs.readFileSync(path.join(fixture, 'fixtures/baileys-transport-s6.json')));
   const provider = 'src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts';
   const mutations = Object.keys(manifest.inputs).map(file => ({ file, name: file, change: source => source + '\n// synthetic fingerprint drift\n' }));
+  function beforeIngressHotfix(source) {
+    const helper = "require('/evolution/nexi-ingress.cjs')";
+    const historical = source
+      .replace(`(${helper}.current(this) || this.localChatwoot?.enabled)`, 'this.localChatwoot?.enabled')
+      .replace(`(${helper}.current(this) || (this.configService.get<Chatwoot>('CHATWOOT').ENABLED &&\n            this.localChatwoot?.enabled))`,
+        "this.configService.get<Chatwoot>('CHATWOOT').ENABLED &&\n            this.localChatwoot?.enabled")
+      .replace(`} catch (error) {\n              if (${helper}.current(this)) throw error;\n              this.logger.warn('nexi_identity_association_rejected');`,
+        `} catch {\n              if (${helper}.current(this)) throw new Error('nexi_ingress_identity_pending');\n              this.logger.warn('nexi_identity_association_rejected');`)
+      .replace(`} catch (error) {\n                  if (${helper}.current(this)) throw error;\n                  this.logger.warn('nexi_identity_correlation_rejected');`,
+        `} catch {\n                  if (${helper}.current(this)) throw new Error('nexi_ingress_correlation_pending');\n                  this.logger.warn('nexi_identity_correlation_rejected');`);
+    assert.equal(crypto.createHash('sha256').update(historical).digest('hex'),
+      '4f968359cf1dbaabe7db36bac057b55f61d4fbee61385f73678f48f6abe22ecb');
+    return historical;
+  }
+  mutations.push({ file: provider, name: 'historical source which skips mandatory ingress for legacy flags', change: beforeIngressHotfix });
   mutations.push({ file: provider, name: 'historical source without the three accepted type assertions', change(source) {
+    source = beforeIngressHotfix(source);
     assert.equal(source.split('cleanMessage(message as WAMessage,').length - 1, 1);
     assert.equal(source.split('...(message.key as Record<string, unknown>)').length - 1, 2);
     const historical = source.replace('cleanMessage(message as WAMessage,', 'cleanMessage(message,')

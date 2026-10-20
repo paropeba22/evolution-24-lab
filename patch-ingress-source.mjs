@@ -66,10 +66,22 @@ patch('src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts', sourc
           if (${helper}.skipSerial(received)) continue;`);
   section = once(section, "let trustedObservation = require('/evolution/nexi-identity.cjs').take(received, type, requestId);",
     `let trustedObservation = ${helper}.observation(this, received) || require('/evolution/nexi-identity.cjs').take(received, type, requestId);`);
+  // Durable admission is already authenticated and bound to the APP webhook.
+  // Recovery must run its mandatory protocol even when legacy Chatwoot flags
+  // are absent/disabled. Those flags still govern the non-journal path.
+  section = once(section, "if (this.instance.name.startsWith('nexi-wa-') && trustedObservation && this.localChatwoot?.enabled) {",
+    `if (this.instance.name.startsWith('nexi-wa-') && trustedObservation && (${helper}.current(this) || this.localChatwoot?.enabled)) {`);
+  section = once(section, `            this.configService.get<Chatwoot>('CHATWOOT').ENABLED &&
+            this.localChatwoot?.enabled &&
+            !received.key.id.includes('@broadcast')`,
+    `            (${helper}.current(this) || (this.configService.get<Chatwoot>('CHATWOOT').ENABLED &&
+            this.localChatwoot?.enabled)) &&
+            !received.key.id.includes('@broadcast')`);
   section = once(section, "() => require('/evolution/nexi-identity.cjs').managedObservation(this, trustedObservation));",
     `() => ${helper}.observed(this, () => require('/evolution/nexi-identity.cjs').managedObservation(this, trustedObservation)));`);
-  section = once(section, "              this.logger.warn('nexi_identity_association_rejected');",
-    `              if (${helper}.current(this)) throw new Error('nexi_ingress_identity_pending');
+  section = once(section, "            } catch {\n              this.logger.warn('nexi_identity_association_rejected');",
+    `            } catch (error) {
+              if (${helper}.current(this)) throw error;
               this.logger.warn('nexi_identity_association_rejected');`);
   section = once(section, "'chatwoot_http', () => this.chatwootService.eventWhatsapp(",
     `'chatwoot_http', () => ${helper}.chatwoot(this, messageRaw, () => this.chatwootService.eventWhatsapp(`);
@@ -85,8 +97,9 @@ patch('src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts', sourc
     `() => ${helper}.correlated(this, { ...trustedAssociation, message_id: chatwootSentMessage.id },
                       () => require('/evolution/nexi-identity.cjs').managedObservation(this, trustedObservation,
                         { ...trustedAssociation, message_id: chatwootSentMessage.id })));`);
-  section = once(section, "                  this.logger.warn('nexi_identity_correlation_rejected');",
-    `                  if (${helper}.current(this)) throw new Error('nexi_ingress_correlation_pending');
+  section = once(section, "                } catch {\n                  this.logger.warn('nexi_identity_correlation_rejected');",
+    `                } catch (error) {
+                  if (${helper}.current(this)) throw error;
                   this.logger.warn('nexi_identity_correlation_rejected');`);
   section = once(section, "          if (this.configService.get<Openai>('OPENAI').ENABLED && received?.message?.audioMessage) {",
     `          if (${helper}.current(this) && await require('/evolution/nexi-attendance.cjs').timedInbound(nexiInboundSpan,
