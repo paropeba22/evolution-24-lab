@@ -43,13 +43,27 @@ function creationErrorDetails(error) {
     'ERR_INVALID_URL', 'ERR_INVALID_ARG_TYPE', 'ERR_INVALID_ARG_VALUE', 'ERR_BAD_OPTION_VALUE', 'ERR_BAD_OPTION', 'ERR_BAD_REQUEST', 'ERR_BAD_RESPONSE',
     'P1000', 'P1001', 'P1002', 'P1003', 'P1008', 'P1010', 'P1011', 'P1017', 'P2000', 'P2001', 'P2002', 'P2003',
     'P2010', 'P2011', 'P2012', 'P2013', 'P2014', 'P2021', 'P2022', 'P2024', 'P2025', 'P2028', 'P2034'];
-  return { error_name: names.includes(error?.name) ? error.name : 'other',
+  return { ...creationErrorSite(error), error_name: names.includes(error?.name) ? error.name : 'other',
     ...(codes.includes(error?.code) ? { error_code: error.code } : {}), has_http_response: !!error?.response ||
       (error?.name === 'ApiError' && Number.isSafeInteger(error?.status) && error.status >= 100 && error.status <= 599) };
+}
+function creationErrorSite(error) {
+  // Extract only an allowlisted artifact and numeric coordinates. Never emit a
+  // stack, function name, exception text or caller-supplied file path.
+  try {
+    if (typeof error?.stack !== 'string') return {};
+    for (const frame of error.stack.slice(0, 32768).split('\n').slice(1, 25)) {
+      const match = frame.match(/^\s+at .*\/evolution\/(dist\/(?:providers\/(mysql|postgresql|psql_bouncer)\.js|main\.js)|node_modules\/@figuro\/chatwoot-sdk\/dist\/index\.js):([1-9]\d{0,6}):([1-9]\d{0,6})\)?$/);
+      if (match) return { error_artifact: match[1].startsWith('dist/') ? match[2] || 'main' : 'chatwoot_sdk_index',
+        error_line: Number(match[3]), error_column: Number(match[4]) };
+    }
+  } catch { /* A hostile error accessor must not hide the safe name/code. */ }
+  return {};
 }
 function creationStep(step, error) {
   const ctx = context.getStore();
   if (!ctx || ctx.secondary || !ctx.creationTrace || !['client_resolution', 'body_preparation', 'conversation_resolution',
+    'provider_cache_probe', 'provider_cache_read', 'provider_instance_read', 'provider_cache_write', 'provider_bind', 'client_config', 'client_construct', 'client_ready',
     'message_preparation', 'reply_resolution', 'sdk_operation', 'sdk_url', 'sdk_form', 'sdk_body', 'sdk_headers',
     'sdk_send', 'sdk_response', 'sdk_return'].includes(step)) return;
   try {
@@ -58,6 +72,16 @@ function creationStep(step, error) {
       request_started: ctx.creationTrace.requestStarted,
       ...(error ? { error_class: creationError(error, error?.status || error?.response?.status), ...creationErrorDetails(error) } : {}) });
   } catch { /* Diagnostics must not affect SDK preparation. */ }
+}
+function creationClientState(cache, instance, constructor) {
+  const ctx = context.getStore();
+  if (!ctx || ctx.secondary || !ctx.creationTrace) return;
+  try {
+    creationDiagnostic(ctx, 'ingress.creation', { stage: 'client_state', cache_present: cache != null,
+      cache_has_callable: typeof cache?.has === 'function', cache_get_callable: typeof cache?.get === 'function',
+      cache_set_callable: typeof cache?.set === 'function', instance_present: instance != null,
+      provider_lookup_callable: typeof instance?.findChatwoot === 'function', sdk_constructor_callable: typeof constructor === 'function' });
+  } catch { /* Only capability booleans; never log any dependency or config object. */ }
 }
 function ingressRequestDiagnostic(ctx, event, eventId, stage, status, error) {
   if (!['ingress.observed', 'ingress.reconcile', 'ingress.correlated', 'ingress.profile'].includes(event)) return;
@@ -640,6 +664,6 @@ async function cachedContacts(service, jids) {
     jidOptions: [row.pnJid, row.lidJid].filter(Boolean), lid: row.lidJid ? 'lid' : undefined }));
 }
 module.exports = { configure, inheritConfig, trackSocket, capture, skipSerial, observation, register, current, observed, chatwoot, correlated, socket,
-  creationHttp, creationSkipped, creationFailure, creationStep,
+  creationHttp, creationSkipped, creationFailure, creationStep, creationClientState,
   materializePrimary, persistMessage, control, provider, setProvider, cancellable, contactSupplement, cachedContacts, inWorker: () => !!context.getStore(),
   secondaryRuntime: { registrations, context, verify, ownerCheck, log } };

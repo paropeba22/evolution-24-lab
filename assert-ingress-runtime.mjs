@@ -17,6 +17,7 @@ export function assertChatwootSDK(root) {
     'SDK must resolve its pinned nested Axios');
   // request.js hash is the accepted 1.1.17 request after patch-chatwoot-completion.
   const hashes = {
+    'dist/index.js': '41f18559644a5bb659d2735c44b36f6926f6bba3da7886b7a8cda9fe1c4f2057',
     'dist/core/request.js': 'a5c0763b4217451dca743dd42948aac705b9fc48e9ad91c7c3db267033dcfa55',
     'dist/core/CancelablePromise.js': 'c049e0921d4f9b65b1efd8175edbdd3920ae22791fa1497a6f97f07e910248b3',
     'dist/services/Messages.js': '57b9f7157b9ef06c8762c1749b975e6a1fb1b2eca2bc005fefa63bf77b4559dc',

@@ -88,6 +88,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       JSON.parse(fs.readFileSync(path.join(sdk, 'node_modules/axios/package.json'), 'utf8')).version !== '0.27.2')
     throw new Error('Ingress requires pinned SDK 1.1.17 / Axios 0.27.2');
   const hashes = {
+    'dist/index.js': '41f18559644a5bb659d2735c44b36f6926f6bba3da7886b7a8cda9fe1c4f2057',
     'dist/core/request.js': '58cb9323b1e62b35bcb92dc10abd915860608edd3e8b16ef392a4da544ff5bf7',
     'dist/core/CancelablePromise.js': 'c049e0921d4f9b65b1efd8175edbdd3920ae22791fa1497a6f97f07e910248b3',
     'dist/services/Messages.js': '57b9f7157b9ef06c8762c1749b975e6a1fb1b2eca2bc005fefa63bf77b4559dc',

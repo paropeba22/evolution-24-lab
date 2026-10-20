@@ -223,7 +223,7 @@ for (const [label, options, step, name] of [
   ['asynchronous SDK rejection', { sdkCreate: async () => { throw new RangeError('PRIVATE_PREPARATION_SENTINEL'); } }, 'sdk_operation', 'RangeError'],
   ['synchronous URL preparation', { sdkConfig: { encode_path() { throw new URIError('PRIVATE_PREPARATION_SENTINEL'); } } }, 'sdk_url', 'URIError'],
   ['asynchronous header preparation', { sdkConfig: { token: async () => { throw new TypeError('PRIVATE_PREPARATION_SENTINEL'); } } }, 'sdk_headers', 'TypeError'],
-  ['provider resolution', { providerError: async () => { throw new ReferenceError('PRIVATE_PREPARATION_SENTINEL'); } }, 'client_resolution', 'ReferenceError'],
+  ['provider resolution', { providerError: async () => { throw new ReferenceError('PRIVATE_PREPARATION_SENTINEL'); } }, 'provider_instance_read', 'ReferenceError'],
 ]) test(`${label} is classified before Axios without inventing an ACK under HOLD`, async t => {
   const f = await inflight(t, options);
   Object.assign(f.row(), { attempts: 116 });
@@ -259,6 +259,78 @@ test('provider storage failure retains safe Prisma class/code without logging qu
   assert.equal(error.error_class, 'local_persistence_failure'); assert.equal(error.request_started, false);
   assert.equal(f.posts.length, 0); assert.equal(f.row().acknowledgement, undefined);
   assert.ok(!JSON.stringify(f.logs).includes('SENTINEL'));
+});
+
+for (const [label, cache, step, capabilities] of [
+  ['null cache supplied by disabled global integration', null, 'provider_cache_probe', { cache_present: false, cache_has_callable: false }],
+  ['cache without has method', {}, 'provider_cache_probe', { cache_present: true, cache_has_callable: false }],
+  ['cache probe throws', { has() { throw new TypeError('PRIVATE_CACHE_SENTINEL'); } }, 'provider_cache_probe', { cache_present: true, cache_has_callable: true }],
+  ['cache read rejects', { has: async () => true, get: async () => { throw new TypeError('PRIVATE_CACHE_SENTINEL'); } }, 'provider_cache_read', { cache_present: true, cache_get_callable: true }],
+  ['cache write throws', { has: async () => false, set() { throw new TypeError('PRIVATE_CACHE_SENTINEL'); } }, 'provider_cache_write', { cache_present: true, cache_set_callable: true }],
+]) test(`client resolution distinguishes ${label} without inventing a creation`, async t => {
+  const f = await inflight(t, { cache }); Object.assign(f.row(), { attempts: 168 });
+  await f.recover(); await f.recover();
+  assert.equal(f.row().attempts, 170); assert.equal(f.posts.length, 0); assert.equal(f.app.creates, 0);
+  assert.equal(f.row().state, 'result_uncertain'); assert.equal(f.row().lastError, 'nexi_ingress_chatwoot_unconfirmed');
+  assert.equal(f.row().acknowledgement, undefined); assert.equal(f.materializations.length, 0);
+  const error = f.logs.find(item => item?.stage === 'event_whatsapp_error');
+  assert.equal(error.operation_step, step); assert.equal(error.error_name, 'TypeError');
+  assert.equal(error.request_started, false); assert.equal(error.has_http_response, false);
+  const state = f.logs.find(item => item?.stage === 'client_state');
+  for (const [key, value] of Object.entries(capabilities)) assert.equal(state[key], value);
+  assert.equal(state.sdk_constructor_callable, true); assert.equal(state.provider_lookup_callable, true);
+  assert.ok(!JSON.stringify(f.logs).includes('PRIVATE_CACHE_SENTINEL'));
+});
+
+test('configuration access failure differs from constructing an imported non-constructor', async t => {
+  for (const [options, step, constructorCallable] of [
+    [{ provider: { accountId: 1, inboxId: 2, get url() { throw new TypeError('PRIVATE_CONFIGURATION_SENTINEL'); } } }, 'client_config', true],
+    [{ sdkConstructor: {} }, 'client_construct', false],
+  ]) {
+    const f = await inflight(t, options); await f.recover();
+    const error = f.logs.find(item => item?.stage === 'event_whatsapp_error');
+    assert.equal(error.operation_step, step); assert.equal(error.error_name, 'TypeError');
+    assert.equal(error.request_started, false); assert.equal(f.posts.length, 0);
+    assert.equal(f.row().acknowledgement, undefined);
+    assert.equal(f.logs.find(item => item?.stage === 'client_state').sdk_constructor_callable, constructorCallable);
+    assert.ok(!JSON.stringify(f.logs).includes('PRIVATE_CONFIGURATION_SENTINEL'));
+  }
+});
+
+test('complete pinned SDK constructor reaches the real serializer and confirms one reserved Message', async t => {
+  const f = await inflight(t); await f.recover(); await f.recover();
+  assert.equal(f.app.creates, 1); assert.equal(f.posts.length, 1); assert.equal(f.row().state, 'succeeded');
+  assert.equal(f.row().acknowledgement.id, 77); assert.equal(f.materializations.length, 1);
+  assert.ok(f.logs.some(item => item?.operation_step === 'client_ready'));
+  assert.ok(f.logs.some(item => item?.operation_step === 'sdk_return'));
+  for (const state of f.logs.filter(item => item?.stage === 'client_state')) {
+    assert.equal(state.cache_present, true); assert.equal(state.sdk_constructor_callable, true);
+    assert.equal(state.provider_lookup_callable, true);
+    for (const [key, value] of Object.entries(state)) if (!['event', 'stage', 'journal_id', 'attempt'].includes(key)) assert.equal(typeof value, 'boolean');
+  }
+});
+
+test('Linux artifact fault coordinates identify the instruction without copying the exception or stack', async t => {
+  const fault = vm.runInThisContext('(function () {\nthrow new TypeError("PRIVATE_STACK_SENTINEL");\n})',
+    { filename: '/evolution/dist/providers/postgresql.js' });
+  const f = await inflight(t, { providerError: fault }); await f.recover();
+  const error = f.logs.find(item => item?.stage === 'event_whatsapp_error');
+  assert.equal(error.error_artifact, 'postgresql'); assert.equal(error.error_line, 2);
+  assert.ok(Number.isSafeInteger(error.error_column)); assert.equal(error.operation_step, 'provider_instance_read');
+  const logs = JSON.stringify(f.logs);
+  assert.ok(!logs.includes('PRIVATE_STACK_SENTINEL')); assert.ok(!logs.includes('/evolution/'));
+  assert.ok(!logs.includes('stack')); assert.equal(f.posts.length, 0);
+});
+
+for (const hostileAccessor of [false, true]) test(`private or unreadable stack never hides safe error metadata (${hostileAccessor})`, async t => {
+  const error = new TypeError('PRIVATE_ERROR_SENTINEL');
+  if (hostileAccessor) Object.defineProperty(error, 'stack', { get() { throw new Error('PRIVATE_STACK_SENTINEL'); } });
+  else error.stack = 'TypeError: PRIVATE_ERROR_SENTINEL\n    at private (/private/PRIVATE_PATH_SENTINEL:12:13)';
+  const f = await inflight(t, { providerError: async () => { throw error; } }); await f.recover();
+  const metadata = f.logs.find(item => item?.stage === 'event_whatsapp_error');
+  assert.equal(metadata.error_name, 'TypeError'); assert.equal(metadata.error_class, 'local_runtime_failure');
+  assert.equal(metadata.error_artifact, undefined); assert.equal(metadata.error_line, undefined);
+  assert.ok(!JSON.stringify(f.logs).includes('SENTINEL')); assert.equal(f.posts.length, 0);
 });
 
 test('native Axios URL configuration error is safely identifiable without private exception fields', async t => {

@@ -146,6 +146,28 @@ patch('src/api/integrations/chatbot/chatwoot/services/chatwoot.service.ts', sour
   private set provider(value: any) {
     if (!${helper}.setProvider(this, value)) this.nexiLegacyProvider = value;
   }`);
+  const providerStart = source.indexOf('  private async getProvider(');
+  const providerEnd = source.indexOf('  public getClientCwConfig(', providerStart);
+  if (providerStart < 0 || providerEnd <= providerStart) throw new Error('Ingress Chatwoot client resolution boundary changed');
+  let resolution = source.slice(providerStart, providerEnd);
+  for (const [anchor, step] of [
+    ['    if (await this.cache.has(cacheKey)) {', 'provider_cache_probe'],
+    ['      const provider = (await this.cache.get(cacheKey)) as ChatwootModel;', 'provider_cache_read'],
+    ['    const provider = await this.waMonitor.waInstances[instance.instanceName]?.findChatwoot();', 'provider_instance_read'],
+    ['    this.cache.set(cacheKey, provider);', 'provider_cache_write'],
+    ['    this.provider = provider;', 'provider_bind'],
+  ]) resolution = once(resolution, anchor, `${anchor.match(/^ */)[0]}${helper}.creationStep('${step}');\n${anchor}`);
+  resolution = once(resolution, `    ${helper}.creationStep('provider_cache_probe');`,
+    `    ${helper}.creationStep('provider_cache_probe');
+    ${helper}.creationClientState(this.cache, this.waMonitor?.waInstances?.[instance.instanceName], ChatwootClient);`);
+  resolution = once(resolution, `    const client = new ChatwootClient({
+      config: this.getClientCwConfig(),
+    });`, `    ${helper}.creationStep('client_config');
+    const nexiClientConfig = this.getClientCwConfig();
+    ${helper}.creationStep('client_construct');
+    const client = new ChatwootClient({ config: nexiClientConfig });
+    ${helper}.creationStep('client_ready');`);
+  source = source.slice(0, providerStart) + resolution + source.slice(providerEnd);
   const messageStart = source.indexOf('  public async createMessage(');
   const messageEnd = source.indexOf('  public async getOpenConversationByContact(', messageStart);
   const mediaStart = source.indexOf('  private async sendData(');

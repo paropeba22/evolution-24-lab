@@ -14,8 +14,9 @@ function install({ root, ingress, service, repo, app, options, posts }) {
   const sdkRequire = createRequire(path.resolve(sdkRoot, 'dist/core/request.js'));
   const load = (file, dependencies) => {
     const module = { exports: {} };
+    const localRequire = createRequire(path.resolve(sdkRoot, file));
     vm.runInThisContext(`(function(require,module,exports,Buffer) {\n${fs.readFileSync(path.join(sdkRoot, file), 'utf8')}\n})`)(
-      name => name in dependencies ? dependencies[name] : sdkRequire(name), module, module.exports, Buffer);
+      name => name in dependencies ? dependencies[name] : localRequire(name), module, module.exports, Buffer);
     return module.exports;
   };
   function fields(form) {
@@ -43,8 +44,9 @@ function install({ root, ingress, service, repo, app, options, posts }) {
   } };
   const request = load('dist/core/request.js', { axios, '/evolution/nexi-ingress.cjs': ingress });
   const { Messages } = load('dist/services/Messages.js', { '../core/request': request });
-  const ChatwootClient = class { constructor({ config }) {
-    this.messages = new Messages({ config: { ...config, ...options.sdkConfig } });
+  const ActualChatwootClient = load('dist/index.js', { './services/Messages': { Messages } }).default;
+  const ChatwootClient = options.sdkConstructor || class extends ActualChatwootClient { constructor({ config }) {
+    super({ config: { ...config, ...options.sdkConfig } });
     if (options.sdkCreate) this.messages.create = options.sdkCreate;
   } };
   const file = path.join(root, 'src/api/integrations/chatbot/chatwoot/services/chatwoot.service.ts');
@@ -61,11 +63,12 @@ function install({ root, ingress, service, repo, app, options, posts }) {
     name => name === '/evolution/nexi-ingress.cjs' ? ingress : name.startsWith('/evolution/') ? require('./' + path.basename(name)) : sourceRequire(name),
     module, ChatwootClient, { MESSAGES_UPSERT: 'messages.upsert' }, axios, sdkRequire('form-data'), require('node:stream').Readable, path, sourceRequire('mime-types'));
   const client = new module.exports(), cache = new Map();
-  service.findChatwoot = async () => options.providerMissing ? null : { accountId: 1, inboxId: options.foreignInbox ? 99 : 2,
+  service.findChatwoot = async () => options.providerMissing ? null : options.provider || { accountId: 1, inboxId: options.foreignInbox ? 99 : 2,
     url: 'https://offline.invalid', token: 'synthetic-chatwoot-token', ignoreJids: options.ignoreJids || [] };
   Object.assign(client, { waMonitor: { waInstances: { [service.instance.name]: service } },
     prismaRepository: repo, logger: service.logger, cache: { async has(key) { return cache.has(key); },
       async get(key) { return cache.get(key); }, set(key, value) { cache.set(key, value); } } });
+  if ('cache' in options) client.cache = options.cache;
   client.isImportHistoryAvailable = () => false;
   if (options.providerError) service.findChatwoot = options.providerError;
   service.getBase64FromMediaMessage = async () => ({ base64: Buffer.from('SYNTHETIC_MEDIA_BYTES').toString('base64'), mimetype: 'image/jpeg' });
