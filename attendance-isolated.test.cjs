@@ -124,6 +124,10 @@ function composerFixture(index,recipient='5511999999999@s.whatsapp.net') {
     reservation_id:row.reservationId,preparation_id:row.id,external_id:row.externalId});
   f.claims.material.consumption_id=randomUUID();f.claims.request_id=f.claims.material.consumption_id;seal(f);return f;
 }
+function selectOperation(repo,value) {
+  const row=repo.row();for(const key of Object.keys(row))delete row[key];
+  Object.assign(row,structuredClone(value));
+}
 
 test('composer: consecutive and alternating recipients share one socket/epoch with independent one-use operations',async t=>{
   enableComposer(t);const f=composerFixture(0),saved=[];
@@ -135,7 +139,7 @@ test('composer: consecutive and alternating recipients share one socket/epoch wi
   for(const [index,recipient] of ['5511999999999@s.whatsapp.net','5511999999999@s.whatsapp.net',
     '5581888888888@s.whatsapp.net','5511999999999@s.whatsapp.net'].entries()) {
     const operation=index===0?f:composerFixture(index,recipient);
-    if(index)Object.assign(f.repo.row(),structuredClone(operation.repo.row()));
+    if(index)selectOperation(f.repo,operation.repo.row());
     const claims=operation.claims;
     await authority.consumption(f.source,claims);
     const result=await transport.dispatch(f.source,claims.material);
@@ -144,7 +148,7 @@ test('composer: consecutive and alternating recipients share one socket/epoch wi
     saved.push({row:structuredClone(f.repo.row()),claims});
     assert.equal(a.cutoverHeld(),true);
   }
-  Object.assign(f.repo.row(),saved[0].row);
+  selectOperation(f.repo,saved[0].row);
   await transport.dispatch(f.source,saved[0].claims.material);assert.equal(socket.writes,4);
   assert.equal(new Set(saved.map(item=>item.row.authority.writer_epoch)).size,1);
   assert.equal(new Set(saved.map(item=>item.row.authority.isolated_operation.authorization_id)).size,4);
