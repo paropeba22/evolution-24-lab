@@ -1,0 +1,27 @@
+name: S12 isolated review image (no deploy)
+on:
+  push:
+    branches: [candidate/v23-prod-13-s12-isolated-dispatch-review-fix]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  final-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build source-builder tests and final Evolution image, never publish/deploy
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: nexi-s12-evolution-review:local
+      - name: Final image helper load and configuration gate (not service boot)
+        run: |
+          docker run --rm --entrypoint node nexi-s12-evolution-review:local -e "require('/evolution/nexi-attendance.cjs').assertConfiguration()"
+          if docker run --rm -e NEXI_ATTENDANCE_ISOLATED_DISPATCH_ENABLED=true -e NEXI_ATTENDANCE_CUTOVER_HOLD=false --entrypoint node nexi-s12-evolution-review:local -e "require('/evolution/nexi-attendance.cjs').assertConfiguration()"; then exit 1; fi

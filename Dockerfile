@@ -29,12 +29,14 @@ COPY nexi-attendance-snapshot.cjs attendance-snapshot.test.cjs /evolution/
 COPY nexi-attendance-authority.cjs nexi-attendance-storage-guard.cjs attendance-authority.test.cjs attendance-authority-test-support.cjs attendance-test-network-trap.cjs /evolution/
 COPY nexi-attendance-dispatch.cjs attendance-physical-dispatch.test.cjs /evolution/
 COPY nexi-attendance-isolated.cjs attendance-isolated.test.cjs attendance-isolated-test-support.cjs /evolution/
+COPY attendance-isolated-configuration.test.cjs /evolution/
 COPY attendance-socket-test-support.cjs attendance-socket-registration.test.cjs /evolution/
 COPY nexi-attendance-storage-check.cjs /evolution/
 COPY attendance-storage-corrections.test.cjs /evolution/
 COPY fixtures/attendance-authority-v1.json /evolution/fixtures/attendance-authority-v1.json
 COPY fixtures/baileys-send-node-rc13.json /evolution/fixtures/baileys-send-node-rc13.json
 COPY fixtures/attendance-canonical-json-v1.json /evolution/fixtures/attendance-canonical-json-v1.json
+COPY fixtures/attendance-isolated-v1.json /evolution/fixtures/attendance-isolated-v1.json
 COPY Dockerfile /evolution/Dockerfile
 COPY nexi-transport.cjs /evolution/nexi-transport.cjs
 COPY patch-trusted-baileys.mjs patch-managed-retry.mjs patch-webhook-safe-logs.mjs nexi-identity.cjs /evolution/
@@ -84,6 +86,7 @@ RUN node /evolution/patch-chatwoot-completion.mjs /evolution
 RUN node /evolution/patch-ingress-source.mjs /evolution --snapshot
 RUN node /evolution/patch-ingress-integrations.mjs /evolution --snapshot
 RUN node /evolution/patch-baileys-transport.mjs /evolution --snapshot
+RUN node --test attendance-isolated.test.cjs attendance-isolated-configuration.test.cjs
 
 # tsup bakes licensing definitions into each bundle. Empty args retain the
 # pinned upstream source's official-endpoint fallback; no runtime ENV is added.

@@ -206,6 +206,7 @@ function response(source, requestClaims, materialValue, now = Date.now()) {
 async function dispatchStart(source, preparationId, consumptionId, stanza) {
   const groups = require('./nexi-groups.cjs'), owner = groups.lifecycleCapture(source.service);
   const snapshot = await attendance().captureContextSnapshot(source, owner), current = snapshot.context;
+  if (attendance().cutoverHeld() && !current?.isolated_operation) fail('nexi_attendance_cutover_held');
   if (!UUID.test(owner.token || '') || !groups.lifecycleCurrent(owner) || !current?.physical_dispatch)
     fail('nexi_attendance_dispatch_fenced');
   const result = await source.prismaRepository.$transaction(async tx => {

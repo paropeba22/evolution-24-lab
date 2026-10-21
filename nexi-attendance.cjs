@@ -622,17 +622,26 @@ function common(context) {
   return Object.fromEntries(COMMON.map(key => [key, key === 'audience' ? 'nexi-attendance-app' : context[key] ?? null]));
 }
 function cutoverHeld(env = process.env, readRelease = file => require('node:fs').readFileSync(file, 'utf8')) {
+  // Isolated mode never opens the normal lane, including partial rollout.
+  const isolatedFlag = env.NEXI_ATTENDANCE_ISOLATED_DISPATCH_ENABLED;
+  if (isolatedFlag !== undefined && isolatedFlag !== 'false') return true;
   const value = env.NEXI_ATTENDANCE_CUTOVER_HOLD;
   if (value === undefined || value === 'false') return false;
   if (value !== 'true') return true; // Invalid configuration cannot be released.
   // The isolated lane cannot release commercial work via a legacy boot file.
-  if (env.NEXI_ATTENDANCE_ISOLATED_DISPATCH_ENABLED === 'true') return true;
   const boot = env.NEXI_ATTENDANCE_CUTOVER_BOOT_ID;
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(boot || '')) return true;
   try { return readRelease(`/tmp/nexi-attendance-cutover-${boot}.release`) !== `${boot}\n`; }
   catch { return true; }
 }
+function assertConfiguration(env = process.env) {
+  const flag = env.NEXI_ATTENDANCE_ISOLATED_DISPATCH_ENABLED;
+  if ((flag !== undefined && flag !== 'false' && flag !== 'true') ||
+      (flag === 'true' && env.NEXI_ATTENDANCE_CUTOVER_HOLD !== 'true'))
+    fail('nexi_attendance_isolated_configuration_invalid');
+}
 function settings(env = process.env) {
+  assertConfiguration(env);
   const names = { queueItems: 'QUEUE_ITEMS', queueBytes: 'QUEUE_BYTES', concurrent: 'APPEND_CONCURRENCY',
     acquireMs: 'DB_ACQUISITION_TIMEOUT_MS', statementMs: 'DB_STATEMENT_TIMEOUT_MS', lockMs: 'DB_LOCK_TIMEOUT_MS',
     deadlineMs: 'APPEND_DEADLINE_MS', recoveryItems: 'RECOVERY_ITEMS', recoveryBytes: 'RECOVERY_BYTES' };
@@ -1073,6 +1082,7 @@ function inheritConfig(original, completed) {
   require('./nexi-ingress.cjs').inheritConfig(original, completed);
 }
 async function configure(service, config) {
+  assertConfiguration(); // Outside recovery handling: an invalid process must not start a socket.
   // Capture exact socket credentials/lifecycle. Never read replacement creds in
   // callbacks of the old socket, and never assign APP attempt ownership here.
   const source = { prismaRepository: service.prismaRepository, instanceId: service.instanceId,
@@ -1729,6 +1739,7 @@ function wakeOutbox(source) {
   immediate.unref?.();
 }
 function installRoutes(router, monitor, guard, repository) {
+  assertConfiguration(); // Routes are installed before the HTTP listener starts.
   installOutboxDrainer(repository);
   require('./nexi-attendance-authority.cjs').installRoute(router,monitor,guard,repository);
   // No preparation endpoint accepts arbitrary browser/API intent. Later APP
@@ -1826,7 +1837,7 @@ function decodeCanonicalClaims(encoded) {
   if (!Buffer.from(text, 'utf8').equals(buffer)) fail('nexi_attendance_noncanonical_material');
   return canonicalJson.parse(text);
 }
-module.exports = { canonical, digest, eventPayload, settings, publicAttestation, observePublicAccount, verifyPublicAccountSignature,
+module.exports = { canonical, digest, eventPayload, settings, assertConfiguration, publicAttestation, observePublicAccount, verifyPublicAccountSignature,
   normalizeReceipt, normalization, numericNormalization, receiveInbound, observeInbound, enqueueInbound, queueEnqueued, queueStarted, queueEnded,
   beginInbound, resumeIngressDiagnostics, failInbound, endInbound, timedInbound, inboundFailure, clearInstanceDiagnostics, allowDiagnosticTrace,
   configure, sessionObserved, capture, refreshContext, classification, draft, prepare, closeCollision, cutoverHeld,
