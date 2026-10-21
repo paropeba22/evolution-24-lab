@@ -57,9 +57,9 @@ async function registerSocket(f, t, options = {}) {
     const signature = createHmac('sha256', secret).update(`${headers['X-Nexi-Event-Timestamp']}.${headers['X-Nexi-Event-Id']}.${service.instance.name}.${service.instanceId}.${attendance.canonicalBytes(body)}`).digest('hex');
     assert.equal(headers['X-Nexi-Event-Signature'], `sha256=${signature}`);
     if (body.event === 'attendance.writer.context.request') assert.equal(data.socket_owner, registeredToken);
-    const reply = options.context ? options.context({ ...context }) : context;
+    const reply = options.context ? options.context({ ...context }, data) : context;
     const claims = Buffer.from(attendance.canonicalBytes({ ...reply, nonce: data.nonce })).toString('base64url');
-    requests.push({ event: body.event, socket_owner: data.socket_owner });
+    requests.push({ event: body.event, socket_owner: data.socket_owner, isolated_authorization_id: data.isolated_authorization_id });
     const signed = createHmac('sha256', secret).update(`attendance-context:v1:${claims}`).digest('hex');
     return { ok: true, status: 200, json: async () => ({ claims, signature: options.badSignature ? '0'.repeat(64) : signed }) };
   };

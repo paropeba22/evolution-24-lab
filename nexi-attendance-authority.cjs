@@ -205,7 +205,12 @@ function response(source, requestClaims, materialValue, now = Date.now()) {
 }
 async function dispatchStart(source, preparationId, consumptionId, stanza) {
   const groups = require('./nexi-groups.cjs'), owner = groups.lifecycleCapture(source.service);
-  const snapshot = await attendance().captureContextSnapshot(source, owner), current = snapshot.context;
+  // Resolve this operation explicitly. A channel-wide context must never
+  // choose the latest approval when messages/contacts share one writer epoch.
+  const reference = await source.prismaRepository.nexiAttendancePreparation.findUnique({where:{id:preparationId}});
+  const token = reference?.authority?.isolated_operation;
+  const authorizationId = token?.protocol === require('./nexi-attendance-isolated.cjs').COMPOSER_PROTOCOL ? token.authorization_id : null;
+  const snapshot = await attendance().captureContextSnapshot(source, owner, null, authorizationId), current = snapshot.context;
   if (attendance().cutoverHeld() && !current?.isolated_operation) fail('nexi_attendance_cutover_held');
   if (!UUID.test(owner.token || '') || !groups.lifecycleCurrent(owner) || !current?.physical_dispatch)
     fail('nexi_attendance_dispatch_fenced');

@@ -7,6 +7,7 @@ const canonical = require('./nexi-canonical-json.cjs');
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const HASH = /^[0-9a-f]{64}$/;
 const PROTOCOL = 'attendance-single-operation-v1';
+const COMPOSER_PROTOCOL = 'attendance-composer-operation-v2';
 const UUID_KEYS = ['authorization_id','execution_id','request_id','instance_id','instance_lineage_id','sender_account_lineage_id'];
 const INTEGER_KEYS = ['account_id','managed_channel_id','inbox_id','conversation_id','actor_id','contact_id','contact_inbox_id',
   'identity_slot_id','identity_version_id','identity_generation','writer_epoch','binding_generation'];
@@ -17,9 +18,12 @@ function enabled(env = process.env) {
   return env.NEXI_ATTENDANCE_ISOLATED_DISPATCH_ENABLED === 'true' && env.NEXI_ATTENDANCE_CUTOVER_HOLD === 'true' &&
     require('./nexi-attendance.cjs').cutoverHeld(env);
 }
+function composerEnabled(env = process.env) {
+  return enabled(env) && env.NEXI_ATTENDANCE_COMPOSER_DISPATCH_ENABLED === 'true';
+}
 function validate(token, now = Date.now(), {probe = false} = {}) {
   if (!token || typeof token !== 'object' || Array.isArray(token) || Object.keys(token).sort().join(',') !== [...KEYS].sort().join(',') ||
-      token.protocol !== PROTOCOL || !UUID_KEYS.every(key => UUID.test(token[key] || '')) ||
+      ![PROTOCOL,COMPOSER_PROTOCOL].includes(token.protocol) || !UUID_KEYS.every(key => UUID.test(token[key] || '')) ||
       !INTEGER_KEYS.every(key => Number.isSafeInteger(token[key]) && token[key] > 0) ||
       !HASH_KEYS.every(key => HASH.test(token[key] || '')) ||
       !(probe ? token.message_id === null : Number.isSafeInteger(token.message_id) && token.message_id > 0) ||
@@ -30,7 +34,8 @@ function validate(token, now = Date.now(), {probe = false} = {}) {
 }
 function context(source, value, token, now, options = {}) {
   validate(token, now, options);
-  if ((!options.history && !enabled()) || source.instanceId !== token.instance_id || value.instance_id !== token.instance_id ||
+  if ((!options.history && (!enabled() || token.protocol === COMPOSER_PROTOCOL && !composerEnabled())) ||
+      source.instanceId !== token.instance_id || value.instance_id !== token.instance_id ||
       source.instance.name !== value.instance || !['account_id','managed_channel_id','inbox_id','session_identity','writer_epoch',
         'binding_generation','instance_lineage_id','sender_account_lineage_id'].every(key => value[key] === token[key])) fail();
   return token;
@@ -50,4 +55,4 @@ function grant(source, row, material, now = Date.now(), options = {}) {
       material.release.deadline > token.expires_at || g.scope !== 'attendance_dispatch_v1' || g.physical_dispatch !== true) fail();
   return token;
 }
-module.exports = {PROTOCOL,KEYS,UUID_KEYS,INTEGER_KEYS,HASH_KEYS,enabled,validate,context,intent,grant};
+module.exports = {PROTOCOL,COMPOSER_PROTOCOL,KEYS,UUID_KEYS,INTEGER_KEYS,HASH_KEYS,enabled,composerEnabled,validate,context,intent,grant};

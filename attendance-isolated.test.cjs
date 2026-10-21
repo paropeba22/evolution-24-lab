@@ -100,3 +100,109 @@ test('changed fresh writer context cannot borrow a previously frozen authorizati
   const s=await socket(f,t,{context:value=>({...value,isolated_operation:{...value.isolated_operation,authorization_id:'ff000000-1111-4111-8111-111111111111'}})});
   await assert.rejects(transport.dispatch(f.source,f.claims.material));assert.equal(s.writes,0);assert.equal(f.repo.row().dispatchStartedAt,null);
 });
+
+function enableComposer(t) {
+  enable(t);const previous=process.env.NEXI_ATTENDANCE_COMPOSER_DISPATCH_ENABLED;
+  process.env.NEXI_ATTENDANCE_COMPOSER_DISPATCH_ENABLED='true';
+  t.after(()=>{if(previous===undefined)delete process.env.NEXI_ATTENDANCE_COMPOSER_DISPATCH_ENABLED;
+    else process.env.NEXI_ATTENDANCE_COMPOSER_DISPATCH_ENABLED=previous;});
+}
+function composerFixture(index,recipient='5511999999999@s.whatsapp.net') {
+  const f=fixture(),row=f.repo.row(),g=f.claims.material.grant,r=f.claims.material.release;
+  const {randomUUID}=require('node:crypto');
+  const contact=recipient.startsWith('5581')?2:1;
+  Object.assign(f.token,{protocol:isolated.COMPOSER_PROTOCOL,authorization_id:randomUUID(),request_id:randomUUID(),
+    execution_id:randomUUID(),message_id:100+index,conversation_id:200+contact,contact_id:300+contact,contact_inbox_id:400+contact,
+    identity_slot_id:500+contact,identity_version_id:600+contact,recipient_digest:a.digest({recipient})});
+  row.id=randomUUID();row.executionId=f.token.execution_id;row.intent.execution_id=row.executionId;
+  row.recipient=recipient;row.intent.recipient=recipient;row.intent.identity_version_id=f.token.identity_version_id;
+  row.requestId=randomUUID();row.attemptId=randomUUID();row.reservationId=randomUUID();row.externalId='COMPOSER_'+index;
+  Object.assign(g,{grant_id:randomUUID(),admission_id:randomUUID(),request_id:randomUUID(),message_id:f.token.message_id,
+    execution_id:row.executionId,identity_version_id:f.token.identity_version_id,attempt_id:row.attemptId,reservation_id:row.reservationId,
+    preparation_id:row.id,external_id:row.externalId});
+  Object.assign(r,{release_id:randomUUID(),request_id:randomUUID(),grant_id:g.grant_id,attempt_id:row.attemptId,
+    reservation_id:row.reservationId,preparation_id:row.id,external_id:row.externalId});
+  f.claims.material.consumption_id=randomUUID();f.claims.request_id=f.claims.material.consumption_id;seal(f);return f;
+}
+
+test('composer: consecutive and alternating recipients share one socket/epoch with independent one-use operations',async t=>{
+  enableComposer(t);const f=composerFixture(0),saved=[];
+  const socket=await require('./attendance-isolated-test-support.cjs').installSocket(f,t,{context:(_,request)=>{
+    const value={...f.repo.row().authority},token=value.isolated_operation;
+    if(request.isolated_authorization_id===token.authorization_id)return value;
+    delete value.isolated_operation;return {...value,physical_dispatch:false};
+  }});
+  for(const [index,recipient] of ['5511999999999@s.whatsapp.net','5511999999999@s.whatsapp.net',
+    '5581888888888@s.whatsapp.net','5511999999999@s.whatsapp.net'].entries()) {
+    const operation=index===0?f:composerFixture(index,recipient);
+    if(index)Object.assign(f.repo.row(),structuredClone(operation.repo.row()));
+    const claims=operation.claims;
+    await authority.consumption(f.source,claims);
+    const result=await transport.dispatch(f.source,claims.material);
+    assert.equal(result.outcome_unknown,true);assert.equal(socket.writes,index+1);
+    await transport.dispatch(f.source,claims.material);assert.equal(socket.writes,index+1);
+    saved.push({row:structuredClone(f.repo.row()),claims});
+    assert.equal(a.cutoverHeld(),true);
+  }
+  Object.assign(f.repo.row(),saved[0].row);
+  await transport.dispatch(f.source,saved[0].claims.material);assert.equal(socket.writes,4);
+  assert.equal(new Set(saved.map(item=>item.row.authority.writer_epoch)).size,1);
+  assert.equal(new Set(saved.map(item=>item.row.authority.isolated_operation.authorization_id)).size,4);
+  const requests=f.socketRegistration.requests.filter(item=>item.isolated_authorization_id);
+  assert.deepEqual(requests.map(item=>item.isolated_authorization_id),saved.map(item=>item.row.authority.isolated_operation.authorization_id));
+});
+
+test('composer: disabling only the new lane blocks a V2 operation without opening legacy dispatch',async t=>{
+  enableComposer(t);const f=composerFixture(0);
+  process.env.NEXI_ATTENDANCE_COMPOSER_DISPATCH_ENABLED='false';
+  await assert.rejects(authority.consumption(f.source,f.claims));
+  assert.equal(f.repo.row().consumptionId,null);assert.equal(a.cutoverHeld(),true);
+});
+
+test('composer: signed operations consume independently and cannot borrow another message grant',async t=>{
+  enableComposer(t);const first=composerFixture(0),second=composerFixture(1,'5581888888888@s.whatsapp.net');
+  for(const f of [first,second]) {
+    const envelope=a.signEnvelope(f.source,f.claims,'attendance-authority');
+    const claims=authority.claims(f.source,envelope,f.repo.now);
+    await authority.consumption(f.source,claims);
+    assert.equal(f.repo.row().consumptionId,f.claims.material.consumption_id);
+    assert.equal(f.repo.row().dispatchStartedAt,null);
+  }
+  assert.throws(()=>isolated.grant(first.source,first.repo.row(),second.claims.material,first.repo.now));
+  assert.equal(first.repo.row().authority.writer_epoch,second.repo.row().authority.writer_epoch);
+  assert.equal(a.cutoverHeld(),true);
+});
+
+test('composer: another operation context between dispatch CAS and commit does not burn an unsent message',async t=>{
+  enableComposer(t);const f=composerFixture(0),other=composerFixture(1).token;
+  await authority.consumption(f.source,f.claims);
+  const socket=await require('./attendance-isolated-test-support.cjs').installSocket(f,t,{context:(_,request)=>{
+    const value={...f.repo.row().authority};
+    if(request.isolated_authorization_id===f.token.authorization_id)return value;
+    if(request.isolated_authorization_id===other.authorization_id)return {...value,isolated_operation:other};
+    delete value.isolated_operation;return {...value,physical_dispatch:false};
+  }});
+  const transaction=f.repo.$transaction.bind(f.repo);let interleaved=false,otherSnapshot;
+  f.repo.$transaction=(work,...args)=>transaction(async tx=>{
+    const result=await work(tx);
+    if(!interleaved && f.repo.row().dispatchStartedAt) {
+      interleaved=true;
+      const owner=require('./nexi-groups.cjs').lifecycleCapture(f.source.service);
+      otherSnapshot=await a.captureContextSnapshot(f.source,owner,null,other.authorization_id);
+      a.installCaptureContext(otherSnapshot);
+    }
+    return result;
+  },...args);
+  await transport.dispatch(f.source,f.claims.material);
+  assert.equal(interleaved,true);assert.equal(socket.writes,1);
+  assert.equal(otherSnapshot.registration.context.isolated_operation,undefined);
+  assert.equal(otherSnapshot.registration.context.physical_dispatch,false);
+  assert.equal(a.captureContextCurrent(otherSnapshot,true),true);
+});
+
+test('composer: partial or misspelled enablement fails closed',()=>{
+  for(const flag of ['true','TRUE','typo']) {
+    const env={NEXI_ATTENDANCE_COMPOSER_DISPATCH_ENABLED:flag,NEXI_ATTENDANCE_CUTOVER_HOLD:'false'};
+    assert.equal(a.cutoverHeld(env),true);assert.throws(()=>a.assertConfiguration(env),/composer_configuration_invalid/);
+  }
+});

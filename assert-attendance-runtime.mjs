@@ -49,6 +49,8 @@ assert.equal(fs.realpathSync(createRequire(path.join(root, 'nexi-attendance.cjs'
   fs.realpathSync(isolatedPath));
 const isolated = createRequire(import.meta.url)(isolatedPath);
 assert.equal(isolated.PROTOCOL, 'attendance-single-operation-v1');
+assert.equal(isolated.COMPOSER_PROTOCOL, 'attendance-composer-operation-v2');
+assert.equal(isolated.composerEnabled({}), false, 'continuous composer must default closed');
 assert.equal(isolated.enabled({}), false, 'isolated dispatch must default closed');
 const assertProtectedSendNode = createRequire(import.meta.url)('./assert-protected-send-node.cjs');
 const provider = process.env.EVOLUTION_SCHEMA_PROVIDER || process.env.EVOLUTION_PROVIDER || 'postgresql';

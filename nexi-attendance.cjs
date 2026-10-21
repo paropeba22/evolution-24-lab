@@ -622,6 +622,8 @@ function common(context) {
   return Object.fromEntries(COMMON.map(key => [key, key === 'audience' ? 'nexi-attendance-app' : context[key] ?? null]));
 }
 function cutoverHeld(env = process.env, readRelease = file => require('node:fs').readFileSync(file, 'utf8')) {
+  const composerFlag = env.NEXI_ATTENDANCE_COMPOSER_DISPATCH_ENABLED;
+  if (composerFlag !== undefined && composerFlag !== 'false') return true;
   // Isolated mode never opens the normal lane, including partial rollout.
   const isolatedFlag = env.NEXI_ATTENDANCE_ISOLATED_DISPATCH_ENABLED;
   if (isolatedFlag !== undefined && isolatedFlag !== 'false') return true;
@@ -635,6 +637,10 @@ function cutoverHeld(env = process.env, readRelease = file => require('node:fs')
   catch { return true; }
 }
 function assertConfiguration(env = process.env) {
+  const composer = env.NEXI_ATTENDANCE_COMPOSER_DISPATCH_ENABLED;
+  if ((composer !== undefined && composer !== 'false' && composer !== 'true') ||
+      (composer === 'true' && (env.NEXI_ATTENDANCE_ISOLATED_DISPATCH_ENABLED !== 'true' || env.NEXI_ATTENDANCE_CUTOVER_HOLD !== 'true')))
+    fail('nexi_attendance_composer_configuration_invalid');
   const flag = env.NEXI_ATTENDANCE_ISOLATED_DISPATCH_ENABLED;
   if ((flag !== undefined && flag !== 'false' && flag !== 'true') ||
       (flag === 'true' && env.NEXI_ATTENDANCE_CUTOVER_HOLD !== 'true'))
@@ -750,7 +756,7 @@ function verifyContext(source, envelope, nonce, session) {
   if (Object.hasOwn(context, 'isolated_operation')) require('./nexi-attendance-isolated.cjs').context(source, context, context.isolated_operation, Date.now());
   return context;
 }
-async function refreshContext(source, session, fetchImpl = fetch, socketOwner = null, writerProbe = null) {
+async function refreshContext(source, session, fetchImpl = fetch, socketOwner = null, writerProbe = null, authorizationId = null) {
   const destination = await boundary(source);
   const db = source.prismaRepository.nexiManagedTransportContext;
   if (!destination) {
@@ -761,7 +767,8 @@ async function refreshContext(source, session, fetchImpl = fetch, socketOwner = 
   const nonce = randomUUID();
   const envelope = await request(source, { version: 1, canonical_version: CANONICAL_VERSION, audience: 'nexi-attendance-app', provider: 'evolution-baileys',
     account_id: Number(destination.headers['X-Nexi-Chatwoot-Account-Id']), inbox_id: Number(destination.headers['X-Nexi-Chatwoot-Inbox-Id']),
-    nonce, session_identity: session, ...(socketOwner ? {socket_owner:socketOwner} : {}) },
+    nonce, session_identity: session, ...(socketOwner ? {socket_owner:socketOwner} : {}),
+    ...(authorizationId ? {isolated_authorization_id:authorizationId} : {}) },
     socketOwner ? 'attendance.writer.context.request' : 'attendance.context.request', fetchImpl, nonce, writerProbe);
   writerProbe?.attempt('context_authentication');
   const context = verifyContext(source, envelope, nonce, session);
@@ -1142,27 +1149,34 @@ async function sessionObserved(config, attestation) {
     }
   } catch { void trip(registration.source, 'session_observation_unresolved'); }
 }
-async function registrationContext(registration, session, source = registration.source, owner = null, probe = null) {
+async function registrationContext(registration, session, source = registration.source, owner = null, probe = null, authorizationId = null) {
   // Every asynchronous installer shares this socket-local sequence. An older
   // response cannot replace a context installed by a later request.
-  const revision = ++registration.contextRevision;
-  const context = await refreshContext(source, session, fetch, owner?.token || null, probe);
-  return { registration, revision, context, owner };
+  // V2 operation contexts are local signed authority. They must not compete
+  // for the shared receipt context revision when two messages use one socket.
+  const revision = authorizationId ? registration.contextRevision : ++registration.contextRevision;
+  const context = await refreshContext(source, session, fetch, owner?.token || null, probe, authorizationId);
+  return { registration, revision, context, owner, operation:!!authorizationId };
 }
-async function captureContextSnapshot(source, owner, probe = null) {
+async function captureContextSnapshot(source, owner, probe = null, authorizationId = null) {
   const registration = configs.get(sockets.get(owner?.socket));
   if (!registration || registration.source.instanceId !== source.instanceId ||
       registration.source.instance.name !== source.instance.name || !require('./nexi-groups.cjs').lifecycleCurrent(owner))
     fail('nexi_attendance_capture_socket_mismatch');
-  return registrationContext(registration, identity.sessionFingerprint(registration.credentials), source, owner, probe);
+  return registrationContext(registration, identity.sessionFingerprint(registration.credentials), source, owner, probe, authorizationId);
 }
 function captureContextCurrent(snapshot, installed = false) {
-  const { registration, revision, context, owner } = snapshot;
-  return registration.contextRevision === revision && context &&
+  const { registration, revision, context, owner, operation } = snapshot;
+  return (operation || registration.contextRevision === revision) && context &&
     context.instance_id === registration.source.instanceId && context.instance === registration.source.instance.name &&
     context.session_identity === identity.sessionFingerprint(registration.credentials) &&
     (!owner || require('./nexi-groups.cjs').lifecycleCurrent(owner) && configs.get(sockets.get(owner.socket)) === registration) &&
-    (!installed || registration.context === context);
+    (!installed || (operation ? digest(captureMaterial(registration.context)) === digest(captureMaterial(context)) : registration.context === context));
+}
+function captureMaterial(context) {
+  if (!context) return null;
+  const material={...context};delete material.isolated_operation;material.physical_dispatch=false;
+  return material;
 }
 function installCaptureContext(snapshot) {
   if (!captureContextCurrent(snapshot)) fail('nexi_attendance_capture_context_superseded');
@@ -1179,7 +1193,9 @@ function installCaptureContext(snapshot) {
   }
   // capture() dereferences this exact shared registration at receipt arrival.
   // Already queued receipts retain their original immutable evidence/context.
-  registration.context = Object.freeze(context);
+  // Receipt capture never owns one selected operation. Tokens stay in the
+  // immutable preparation/grant and the dispatch call's lexical snapshot.
+  registration.context = Object.freeze(snapshot.operation ? captureMaterial(context) : context);
   registration.ambiguous = false;
 }
 function validateIntent(context, intent) {
@@ -1763,7 +1779,9 @@ function installRoutes(router, monitor, guard, repository) {
         const prepared=await prepare(source,previous);
         return res.json({state:prepared.state,preparation_id:prepared.id,physical_dispatch:prepared.authority.physical_dispatch === true});
       }
-      const context = await refreshContext(source, claims.session_identity, fetch, owner.token);
+      const authorizationId = claims.isolated_operation?.protocol === require('./nexi-attendance-isolated.cjs').COMPOSER_PROTOCOL ?
+        claims.isolated_operation.authorization_id : null;
+      const context = await refreshContext(source, claims.session_identity, fetch, owner.token, null, authorizationId);
       if (!groups.lifecycleCurrent(owner) || identity.sessionFingerprint(service.client?.authState?.creds) !== claims.session_identity)
         fail('nexi_attendance_session_superseded');
       if (context?.managed_channel_id !== claims.managed_channel_id || context.writer_epoch !== claims.writer_epoch)
