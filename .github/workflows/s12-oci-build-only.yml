@@ -1,0 +1,94 @@
+name: S12 Evolution OCI build-only
+on:
+  push:
+    branches:
+      - ops/s12-oci-build-only-20261021
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout exact approved commit
+        uses: actions/checkout@v4
+        with:
+          ref: 4e1d39e012ce72e63b9b5b9aba832e3687078a19
+          persist-credentials: false
+      - name: Verify checkout and Dockerfile
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "4e1d39e012ce72e63b9b5b9aba832e3687078a19"
+          git rev-parse HEAD:Dockerfile > /tmp/dockerfile-blob.txt
+          echo "Checkout matches authorized Evolution commit; Dockerfile blob recorded."
+      - name: Set up ephemeral BuildKit builder
+        uses: docker/setup-buildx-action@v3
+      - name: Build and export OCI archive (no push, no deploy)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out/evolution-candidate
+          docker buildx build \
+            --platform linux/amd64 \
+            --provenance=false --sbom=false \
+            --label "org.opencontainers.image.revision=4e1d39e012ce72e63b9b5b9aba832e3687078a19" \
+            --output "type=oci,dest=out/evolution-candidate/image.oci.tar" \
+            --metadata-file out/evolution-candidate/buildx-metadata.json \
+            --file Dockerfile .
+      - name: Verify OCI identity, platform, and checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import datetime, hashlib, json, os, tarfile
+          expected = "4e1d39e012ce72e63b9b5b9aba832e3687078a19"
+          root = "out/evolution-candidate"
+          archive = os.path.join(root, "image.oci.tar")
+          sha256 = lambda b: hashlib.sha256(b).hexdigest()
+          def read_blob(outer, digest):
+              alg, value = digest.split(":", 1)
+              assert alg == "sha256"
+              member = outer.extractfile(f"blobs/sha256/{value}")
+              assert member is not None, f"missing OCI blob {digest}"
+              data = member.read()
+              assert sha256(data) == value, f"OCI blob checksum mismatch: {digest}"
+              return data
+          with tarfile.open(archive, "r:*") as outer:
+              index = json.load(outer.extractfile("index.json"))
+              descriptors = index["manifests"]
+              chosen = next((d for d in descriptors if d.get("platform", {}).get("os") == "linux" and d.get("platform", {}).get("architecture") == "amd64"), descriptors[0])
+              manifest_bytes = read_blob(outer, chosen["digest"])
+              manifest = json.loads(manifest_bytes)
+              config_bytes = read_blob(outer, manifest["config"]["digest"])
+              config = json.loads(config_bytes)
+              assert config["os"] == "linux" and config["architecture"] == "amd64", (config.get("os"), config.get("architecture"))
+              labels = (config.get("config") or {}).get("Labels") or {}
+              assert labels.get("org.opencontainers.image.revision") == expected, "OCI revision label mismatch"
+              manifest_digest = chosen["digest"]
+              config_digest = manifest["config"]["digest"]
+          with open(archive, "rb") as f:
+              archive_sha = hashlib.sha256(f.read()).hexdigest()
+          meta = {
+              "artifact_name": "evolution-candidate",
+              "source_commit": expected,
+              "platform": "linux/amd64",
+              "oci_manifest_digest": manifest_digest,
+              "oci_config_digest": config_digest,
+              "oci_revision_label": expected,
+              "oci_archive_sha256": "sha256:" + archive_sha,
+              "oci_archive_bytes": os.path.getsize(archive),
+              "verified_at_utc": datetime.datetime.now(datetime.timezone.utc).isoformat()
+          }
+          with open(os.path.join(root, "artifact-metadata.json"), "w", encoding="utf-8") as f:
+              json.dump(meta, f, indent=2)
+              f.write("\n")
+          print(json.dumps(meta, sort_keys=True))
+          PY
+      - name: Preserve OCI archive and verification metadata for 90 days
+        uses: actions/upload-artifact@v4
+        with:
+          name: evolution-candidate-4e1d39e012ce72e63b9b5b9aba832e3687078a19
+          path: out/evolution-candidate/
+          if-no-files-found: error
+          retention-days: 90
