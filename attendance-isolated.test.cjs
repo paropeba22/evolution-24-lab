@@ -129,6 +129,22 @@ function selectOperation(repo,value) {
   Object.assign(row,structuredClone(value));
 }
 
+test('composer: operation reference is a validated UUID only in the exact writer context request',()=>{
+  const {randomUUID}=require('node:crypto');
+  const base={version:1,canonical_version:a.CANONICAL_VERSION,audience:'nexi-attendance-app',provider:'evolution-baileys',
+    account_id:1,inbox_id:2,nonce:randomUUID(),session_identity:'a'.repeat(64)};
+  const writer={...base,socket_owner:randomUUID()},operation={...writer,isolated_authorization_id:randomUUID()};
+  assert.deepEqual(a.eventPayload('attendance.writer.context.request',operation),operation);
+  for(const value of [null,'',123,'not-a-uuid',[operation.isolated_authorization_id],{}])
+    assert.throws(()=>a.eventPayload('attendance.writer.context.request',{...writer,isolated_authorization_id:value}),/contract_invalid/);
+  assert.throws(()=>a.eventPayload('attendance.writer.context.request',{...operation,extra:true}),/contract_unsupported/);
+  assert.throws(()=>a.eventPayload('attendance.context.request',{...base,isolated_authorization_id:operation.isolated_authorization_id}),/contract_unsupported/);
+  assert.throws(()=>a.eventPayload('attendance.writer.context.request',{...operation,socket_owner:null}),/contract_invalid/);
+  // Handling V2 must not widen the shared V1 or ordinary context field lists.
+  assert.deepEqual(a.eventPayload('attendance.writer.context.request',writer),writer);
+  assert.deepEqual(a.eventPayload('attendance.context.request',base),base);
+});
+
 test('composer: consecutive and alternating recipients share one socket/epoch with independent one-use operations',async t=>{
   enableComposer(t);const f=composerFixture(0),saved=[];
   const socket=await require('./attendance-isolated-test-support.cjs').installSocket(f,t,{context:(_,request)=>{

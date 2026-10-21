@@ -552,7 +552,10 @@ function writerProbeTrace(envelope) {
 }
 function eventPayload(event, data) {
   if (!event.startsWith('attendance.')) return null;
-  const fields = FIELDS[event];
+  const operationContext = event === 'attendance.writer.context.request' && data && Object.hasOwn(data, 'isolated_authorization_id');
+  // The UUID selects one operation in the signed APP context exchange; it
+  // grants no authority itself. Keep every other event's exact shape intact.
+  const fields = operationContext ? FIELDS[event].concat('isolated_authorization_id') : FIELDS[event];
   if (!fields || !data || Object.keys(data).sort().join(',') !== [...fields].sort().join(',') ||
       data.version !== 1 || (data.protocol_version !== undefined && data.protocol_version !== 1)) fail('nexi_attendance_contract_unsupported');
   canonicalVersion(data.canonical_version);
@@ -565,6 +568,8 @@ function eventPayload(event, data) {
     if (!positive(data.inbox_id) || !UUID.test(data.nonce || '') || !HASH.test(data.session_identity || ''))
       fail('nexi_attendance_contract_invalid');
     if (event === 'attendance.writer.context.request' && !UUID.test(data.socket_owner || ''))
+      fail('nexi_attendance_contract_invalid');
+    if (operationContext && (typeof data.isolated_authorization_id !== 'string' || !UUID.test(data.isolated_authorization_id)))
       fail('nexi_attendance_contract_invalid');
   } else {
     const observation = event.startsWith('attendance.session.') || event === 'attendance.receipt.observed';
