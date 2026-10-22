@@ -332,7 +332,7 @@ function installRoute(router, monitor, guard, repository) {
           probe?.attempt('writer_registration_validation');
           attendance().writerIsolation(source,context,probe);
           probe?.attempt('capture_context_installation');
-          attendance().installCaptureContext(snapshot);
+          attendance().installCaptureContext(snapshot,probe);
           probe?.attempt('writer_transaction_completion');
         });
         // This separate rejection can occur while the transaction completes.

@@ -13,12 +13,18 @@ async function route(t, options={}) {
   const env=names.map(key=>process.env[key]);names.forEach(key=>{process.env[key]='true';});
   t.after(()=>names.forEach((key,i)=>{if(env[i]===undefined)delete process.env[key];else process.env[key]=env[i];}));
   const f=fixture(),logs=[],warn=console.warn;
-  console.warn=line=>logs.push(JSON.parse(line));t.after(()=>{console.warn=warn;});
+  console.warn=line=>{
+    const event=JSON.parse(line);
+    if(options.failRegressionLogger&&event.event==='attendance.writer_probe.capture_regression')throw Error('PRIVATE_LOGGER');
+    logs.push(event);
+  };t.after(()=>{console.warn=warn;});
   const replace=(object,key,value)=>{const previous=object[key];object[key]=value;t.after(()=>{object[key]=previous;});};
   const owner={token:randomUUID()},context={...f.repo.row().authority,barrier_state:'fencing',physical_dispatch:false};
   delete context.isolated_operation;
+  const previous=options.previous?{...context,...(typeof options.previous==='function'?options.previous(context):options.previous)}:
+    options.regression?{...context,barrier_state:'active'}:null;
   const registration={source:f.source,credentials:f.source.service.client.authState.creds,contextRevision:1,
-    context:options.regression?{...context,barrier_state:'active'}:null};
+    context:previous};
   const snapshot={registration,revision:options.superseded?0:1,context,owner:null,operation:false};
   replace(groups,'lifecycleCapture',()=>owner);
   replace(groups,'lifecycleCurrent',()=>true);
@@ -49,6 +55,49 @@ async function route(t, options={}) {
   return {f,res,logs,envelope};
 }
 const coded=(code,name='Error')=>Object.assign(new Error('PRIVATE_MESSAGE phone/JID/token'),{code,name,meta:{private:'SECRET_META'}});
+
+for(const field of ['account_id','inbox_id','managed_channel_id','writer_epoch','binding_generation','barrier_state',
+  'instance_lineage_id','sender_account_lineage_id','sender_attestation_id']) {
+  test(`capture regression identifies only the rejected ${field} field`,async t=>{
+    const previous=context=>({[field]:field==='barrier_state'?'active':
+      typeof context[field]==='number'?context[field]+1:randomUUID()});
+    const {res,logs,envelope}=await route(t,{previous});assert.equal(res.statusCode,422);
+    const regression=logs.filter(value=>value.event==='attendance.writer_probe.capture_regression');
+    assert.deepEqual(regression,[{event:'attendance.writer_probe.capture_regression',operation:'writer_probe',
+      correlation:a.digest(envelope).slice(0,24),field}]);
+    assert.equal(logs.at(-1).error_code,'nexi_attendance_capture_context_regression');
+    assert.equal(logs.at(-1).failure_stage,'capture_context_installation');
+  });
+}
+test('capture regression preserves the same-epoch gate for stage and lineage checks',async t=>{
+  const {res,logs}=await route(t,{previous:context=>({writer_epoch:context.writer_epoch-1,
+    barrier_state:'active',sender_attestation_id:randomUUID()})});
+  assert.equal(res.statusCode,200);assert.equal(logs.some(value=>value.event==='attendance.writer_probe.capture_regression'),false);
+});
+test('capture regression preserves different-session and previously-null lineage acceptance',async t=>{
+  const {res,logs}=await route(t,{previous:{instance_lineage_id:null,sender_account_lineage_id:null,sender_attestation_id:null}});
+  assert.equal(res.statusCode,200);assert.equal(logs.some(value=>value.event==='attendance.writer_probe.capture_regression'),false);
+  const f=fixture(),context=f.repo.row().authority,previous={...context,session_identity:'DIFFERENT_SESSION',account_id:-1};
+  const registration={source:f.source,credentials:f.source.service.client.authState.creds,contextRevision:1,context:previous};
+  assert.doesNotThrow(()=>a.installCaptureContext({registration,revision:1,context,owner:null,operation:false},
+    {captureRegression(){assert.fail('different session is not compared');}}));
+});
+test('capture regression keeps first-failure short circuit and does not re-read later fields for diagnostics',()=>{
+  const f=fixture(),context=f.repo.row().authority,previous={...context,account_id:context.account_id+1},fields=[];
+  Object.defineProperty(previous,'inbox_id',{get(){throw Error('PRIVATE_UNREACHED_FIELD');}});
+  const registration={source:f.source,credentials:f.source.service.client.authState.creds,contextRevision:1,context:previous};
+  assert.throws(()=>a.installCaptureContext({registration,revision:1,context,owner:null,operation:false},
+    {captureRegression(field){fields.push(field);throw Error('PRIVATE_DIAGNOSTIC');}}),
+  error=>error.code==='nexi_attendance_capture_context_regression');
+  assert.deepEqual(fields,['account_id']);assert.equal(registration.context,previous);
+});
+test('capture regression field allowlist and logger failure cannot leak values or replace the rejection',async t=>{
+  const {res,logs}=await route(t,{regression:true,failRegressionLogger:true});assert.equal(res.statusCode,422);
+  assert.equal(logs.at(-1).error_code,'nexi_attendance_capture_context_regression');
+  const trace=a.writerProbeTrace({claims:Buffer.from(JSON.stringify({action:'writer_probe'})).toString('base64url')});
+  const before=logs.length;trace.captureRegression('PRIVATE_ARBITRARY_FIELD');assert.equal(logs.length,before);
+  assert.equal(JSON.stringify(logs).includes('PRIVATE'),false);
+});
 
 for(const [option,code] of [['superseded','nexi_attendance_capture_context_superseded'],['regression','nexi_attendance_capture_context_regression']]) {
   test(`writer probe reports ${option} after true registration checks without weakening the installer`,async t=>{

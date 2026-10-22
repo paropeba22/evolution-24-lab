@@ -481,6 +481,8 @@ const WRITER_PROBE_RUNTIME_CODES = new Set(['P1001', 'P1002', 'P1008', 'P1017', 
   'P2022', 'P2024', 'P2028', 'P2034', 'ETIMEDOUT', 'ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'EAI_AGAIN',
   'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT', 'UND_ERR_SOCKET', 'MODULE_NOT_FOUND',
   'ERR_MODULE_NOT_FOUND']);
+const WRITER_PROBE_REGRESSION_FIELDS = new Set(['account_id', 'inbox_id', 'managed_channel_id', 'writer_epoch',
+  'binding_generation', 'barrier_state', 'instance_lineage_id', 'sender_account_lineage_id', 'sender_attestation_id']);
 function writerProbeErrorDetails(error) {
   try {
     const name = error?.name, code = error?.code;
@@ -552,6 +554,9 @@ function writerProbeTrace(envelope) {
               typeof item === 'boolean')));
           emit('attendance.writer_probe.attestation', safe);
         } catch { /* Diagnostic state cannot authorize a writer. */ }
+      },
+      captureRegression(field) {
+        if (WRITER_PROBE_REGRESSION_FIELDS.has(field)) emit('attendance.writer_probe.capture_regression', { field });
       },
       failure(error) {
         emit('attendance.writer_probe.rejected', { last_stage: lastStage, failure_stage: phase,
@@ -1203,17 +1208,25 @@ function captureMaterial(context) {
   const material={...context};delete material.isolated_operation;material.physical_dispatch=false;
   return material;
 }
-function installCaptureContext(snapshot) {
+function installCaptureContext(snapshot, writerProbe = null) {
   if (!captureContextCurrent(snapshot)) fail('nexi_attendance_capture_context_superseded');
   const { registration, context } = snapshot, previous = registration.context;
   if (previous?.session_identity === context.session_identity) {
     const stages = ['unresolved', 'staged', 'fencing', 'active', 'pause_requested', 'paused', 'retired'];
-    if (!['account_id', 'inbox_id', 'managed_channel_id'].every(key => previous[key] === context[key]) ||
-        context.writer_epoch < previous.writer_epoch || context.binding_generation < previous.binding_generation ||
+    const regression = (field, rejected) => {
+      if (rejected) {
+        try { writerProbe?.captureRegression(field); }
+        catch { /* Diagnostic failure cannot replace the original guard. */ }
+      }
+      return rejected;
+    };
+    if (!['account_id', 'inbox_id', 'managed_channel_id'].every(key => !regression(key, previous[key] !== context[key])) ||
+        regression('writer_epoch', context.writer_epoch < previous.writer_epoch) ||
+        regression('binding_generation', context.binding_generation < previous.binding_generation) ||
         context.writer_epoch === previous.writer_epoch &&
-          (stages.indexOf(context.barrier_state) < stages.indexOf(previous.barrier_state) ||
+          (regression('barrier_state', stages.indexOf(context.barrier_state) < stages.indexOf(previous.barrier_state)) ||
            ['instance_lineage_id', 'sender_account_lineage_id', 'sender_attestation_id'].some(key =>
-             previous[key] != null && previous[key] !== context[key])))
+             previous[key] != null && regression(key, previous[key] !== context[key]))))
       fail('nexi_attendance_capture_context_regression');
   }
   // capture() dereferences this exact shared registration at receipt arrival.
