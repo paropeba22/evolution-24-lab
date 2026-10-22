@@ -463,14 +463,15 @@ const WRITER_PROBE_STAGES = new Set(['request_received', 'signed_contract_valida
   'context_requested', 'authenticated_context_received', 'binding_fencing_validated', 'storage_guard_executed',
   'writer_isolation_proved', 'proof_response_produced']);
 const WRITER_PROBE_PHASES = new Set(['instance_lookup', 'contract_validation', 'socket_validation', 'context_request_setup',
-  'context_transport', 'context_response', 'context_authentication', 'context_storage', 'binding_validation', 'storage_guard',
+  'context_transport', 'context_response', 'context_authentication', 'context_storage', 'scoped_operation_validation', 'binding_validation', 'storage_guard',
   'writer_isolation', 'response_production']);
 const WRITER_PROBE_FAILURES = new Set(['nexi_attendance_envelope_authentication_required', 'nexi_attendance_noncanonical_material',
   'nexi_attendance_canonical_version_unsupported', 'nexi_attendance_authority_invalid', 'nexi_attendance_writer_unavailable',
   'nexi_attendance_boundary_invalid', 'nexi_attendance_binding_ambiguous', 'nexi_attendance_boundary_unavailable',
   'nexi_attendance_managed_binding_missing', 'nexi_attendance_contract_unsupported', 'nexi_attendance_contract_invalid',
   'nexi_attendance_event_limit', 'nexi_attendance_reservation_conflict', 'nexi_attendance_app_unresolved',
-  'nexi_attendance_context_invalid', 'nexi_attendance_writer_binding_conflict', 'nexi_attendance_writer_isolation_unproved']);
+  'nexi_attendance_context_invalid', 'nexi_attendance_writer_binding_conflict', 'nexi_attendance_writer_isolation_unproved',
+  'nexi_attendance_isolated_authority_invalid']);
 function writerProbeFailure(error) {
   try {
     if (WRITER_PROBE_FAILURES.has(error?.code)) return error.code;
@@ -518,7 +519,8 @@ function writerProbeTrace(envelope) {
             ['database_socket_owner_matched', 'lifecycle_current_after_cas', 'socket_open_after_cas',
               'registration_present', 'registration_instance_id_matches', 'registration_instance_name_matches',
               'context_current_session', 'context_channel_active', 'context_session_matches', 'attestation_present',
-              'attestation_session_matches', 'attestation_provenance_valid', 'lifecycle_current_after_transaction'].includes(key) &&
+              'attestation_session_matches', 'attestation_provenance_valid', 'lifecycle_current_after_transaction',
+              'isolated_dispatch_enabled', 'composer_dispatch_enabled', 'scoped_composer'].includes(key) &&
             typeof value === 'boolean'));
           emit('attendance.writer_probe.isolation_checks', safe);
         } catch { /* Omit unavailable diagnostics; never affect isolation. */ }

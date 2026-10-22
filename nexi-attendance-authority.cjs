@@ -304,7 +304,13 @@ function installRoute(router, monitor, guard, repository) {
         probe?.stage('instance_socket_verified');
         probe?.attempt('context_request_setup');
         const snapshot=await attendance().captureContextSnapshot(source,owner,probe), context=snapshot.context;
-        if (scoped) require('./nexi-attendance-isolated.cjs').context(source,context,scoped,Date.now(),{probe:true});
+        if (scoped) {
+          probe?.attempt('scoped_operation_validation');
+          const isolated=require('./nexi-attendance-isolated.cjs');
+          probe?.isolationChecks(() => ({isolated_dispatch_enabled:isolated.enabled(),
+            composer_dispatch_enabled:isolated.composerEnabled(),scoped_composer:scoped.protocol===isolated.COMPOSER_PROTOCOL}));
+          isolated.context(source,context,scoped,Date.now(),{probe:true});
+        }
         probe?.attempt('binding_validation');
         if (context.managed_channel_id!==m.managed_channel_id || context.session_identity!==m.session_identity || context.barrier_state!=='fencing')
           fail('nexi_attendance_writer_binding_conflict');
