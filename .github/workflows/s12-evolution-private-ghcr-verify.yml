@@ -47,7 +47,7 @@ jobs:
                   status = response.status
           except urllib.error.HTTPError as err:
               challenge = err.headers.get("WWW-Authenticate", "")
-              params = dict(re.findall(r'(\\w+)="([^"]*)"', challenge))
+              params = dict(re.findall(r'([A-Za-z]+)="([^"]*)"', challenge))
               if err.code != 401 or "realm" not in params:
                   status = err.code
               else:
@@ -86,7 +86,7 @@ jobs:
               "anonymous_status": status,
               "prior_transfer_run": 39714611286
           }
-          pathlib.Path("private-package-receipt.json").write_text(json.dumps(receipt, indent=2) + "\\n")
+          pathlib.Path("private-package-receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
           print(json.dumps(receipt, sort_keys=True))
           PY
       - name: Preserve verification receipt
