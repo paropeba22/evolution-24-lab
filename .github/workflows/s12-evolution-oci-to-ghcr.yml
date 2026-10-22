@@ -1,8 +1,8 @@
-name: S12 Evolution OCI artifact to private GHCR
+name: S12 Evolution OCI to private GHCR package
 on:
   push:
     branches:
-      - ops/s12-evolution-ghcr-transfer-fix-20261022
+      - ops/s12-evolution-private-ghcr-20261022
 permissions:
   actions: read
   contents: read
@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - name: Download the already verified build artifact
+      - name: Download already verified Evolution OCI artifact
         uses: actions/download-artifact@v4
         with:
           name: evolution-writer-probe-926e5afef09f1ec62cea8bd14398275e830da34a
@@ -20,7 +20,7 @@ jobs:
           repository: paropeba22/evolution-24-lab
           run-id: 39709211465
           github-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Verify source identity and archive checksum
+      - name: Verify source SHA and archive checksum
         shell: bash
         run: |
           set -euo pipefail
@@ -31,8 +31,7 @@ jobs:
           assert meta["source_commit"] == "926e5afef09f1ec62cea8bd14398275e830da34a"
           assert meta["platform"] == "linux/amd64"
           archive = root / "image.oci.tar"
-          digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-          assert "sha256:" + digest == meta["archive_sha256"]
+          assert "sha256:" + hashlib.sha256(archive.read_bytes()).hexdigest() == meta["archive_sha256"]
           print(json.dumps(meta, sort_keys=True))
           PY
       - name: Install OCI transport tool
@@ -40,57 +39,92 @@ jobs:
           set -euo pipefail
           sudo apt-get update -qq
           sudo apt-get install -y -qq skopeo
-      - name: Authenticate to GHCR with repository token
+      - name: Authenticate to GHCR
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Copy OCI image without changing digests
+      - name: Copy to a new private package without changing image digests
         shell: bash
         run: |
           set -euo pipefail
           skopeo copy --all --preserve-digests \
             oci-archive:artifact/image.oci.tar \
-            docker://ghcr.io/paropeba22/evolution-24-lab:s12-writer-probe-926e5afef09f1ec62cea8bd14398275e830da34a-verified
-      - name: Verify registry manifest digest and retain transfer receipt
+            docker://ghcr.io/paropeba22/evolution-v23-s12-probe-private:sha-926e5afef09f1ec62cea8bd14398275e830da34a
+      - name: Verify registry digest and anonymous access is rejected
         shell: bash
         run: |
           set -euo pipefail
-          skopeo inspect --raw docker://ghcr.io/paropeba22/evolution-24-lab:s12-writer-probe-926e5afef09f1ec62cea8bd14398275e830da34a-verified > registry-manifest.json
+          skopeo inspect --raw docker://ghcr.io/paropeba22/evolution-v23-s12-probe-private:sha-926e5afef09f1ec62cea8bd14398275e830da34a > registry-manifest.json
           python3 - <<'PY'
-          import hashlib, json, pathlib, tarfile
+          import hashlib, json, pathlib, re, tarfile, urllib.error, urllib.parse, urllib.request
           expected_commit = "926e5afef09f1ec62cea8bd14398275e830da34a"
+          registry = "ghcr.io/paropeba22/evolution-v23-s12-probe-private"
+          tag = "sha-926e5afef09f1ec62cea8bd14398275e830da34a"
           with tarfile.open("artifact/image.oci.tar", "r:*") as outer:
               index = json.load(outer.extractfile("index.json"))
               desc = next(d for d in index["manifests"]
                           if d.get("platform", {}).get("os") == "linux"
                           and d.get("platform", {}).get("architecture") == "amd64")
-              manifest_bytes = outer.extractfile("blobs/sha256/" + desc["digest"].split(":", 1)[1]).read()
-              expected_manifest = json.loads(manifest_bytes)
-              config_digest = expected_manifest["config"]["digest"]
-          remote_bytes = pathlib.Path("registry-manifest.json").read_bytes()
-          remote_digest = "sha256:" + hashlib.sha256(remote_bytes).hexdigest()
-          remote = json.loads(remote_bytes)
-          assert remote_digest == desc["digest"], (remote_digest, desc["digest"])
-          assert remote["config"]["digest"] == config_digest
+              local_manifest = outer.extractfile("blobs/sha256/" + desc["digest"].split(":", 1)[1]).read()
+              local_manifest_obj = json.loads(local_manifest)
+              config_digest = local_manifest_obj["config"]["digest"]
+          remote_manifest = pathlib.Path("registry-manifest.json").read_bytes()
+          manifest_digest = "sha256:" + hashlib.sha256(remote_manifest).hexdigest()
+          assert manifest_digest == desc["digest"]
+          assert json.loads(remote_manifest)["config"]["digest"] == config_digest
+          assert remote_manifest == local_manifest
+          url = f"https://{registry}/manifests/{tag}"
+          request = urllib.request.Request(url, headers={"Accept": "application/vnd.oci.image.manifest.v1+json"})
+          try:
+              with urllib.request.urlopen(request, timeout=20) as response:
+                  anonymous_status = response.status
+          except urllib.error.HTTPError as err:
+              challenge = err.headers.get("WWW-Authenticate", "")
+              params = dict(re.findall(r'(\w+)="([^"]*)"', challenge))
+              if err.code != 401 or "realm" not in params:
+                  anonymous_status = err.code
+              else:
+                  token_url = params["realm"] + "?" + urllib.parse.urlencode({
+                      "service": params.get("service", "ghcr.io"),
+                      "scope": params.get("scope", f"repository:{registry}:pull")
+                  })
+                  with urllib.request.urlopen(token_url, timeout=20) as token_response:
+                      token_body = json.load(token_response)
+                  token = token_body.get("token") or token_body.get("access_token")
+                  if not token:
+                      anonymous_status = 401
+                  else:
+                      retry = urllib.request.Request(url, headers={
+                          "Accept": "application/vnd.oci.image.manifest.v1+json",
+                          "Authorization": "Bearer " + token
+                      })
+                      try:
+                          with urllib.request.urlopen(retry, timeout=20) as response:
+                              anonymous_status = response.status
+                      except urllib.error.HTTPError as denied:
+                          anonymous_status = denied.code
+          print("anonymous_manifest_status=" + str(anonymous_status))
+          assert anonymous_status in (401, 403), "Package permits anonymous image pull"
           receipt = {
               "source_commit": expected_commit,
               "platform": "linux/amd64",
-              "registry": "ghcr.io/paropeba22/evolution-24-lab",
-              "tag": "s12-writer-probe-926e5afef09f1ec62cea8bd14398275e830da34a-verified",
-              "manifest_digest": remote_digest,
+              "registry": registry,
+              "tag": tag,
+              "manifest_digest": manifest_digest,
               "config_digest": config_digest,
-              "manifest_bytes_equal": remote_bytes == manifest_bytes
+              "manifest_bytes_equal": True,
+              "anonymous_pull_rejected": True,
+              "anonymous_status": anonymous_status
           }
-          assert receipt["manifest_bytes_equal"], receipt
           pathlib.Path("transfer-receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
           print(json.dumps(receipt, sort_keys=True))
           PY
       - name: Preserve transfer receipt
         uses: actions/upload-artifact@v4
         with:
-          name: evolution-writer-probe-ghcr-transfer-receipt-926e5afef09f1ec62cea8bd14398275e830da34a-verified
+          name: evolution-private-ghcr-transfer-receipt-926e5afef09f1ec62cea8bd14398275e830da34a
           path: transfer-receipt.json
           if-no-files-found: error
           retention-days: 90
