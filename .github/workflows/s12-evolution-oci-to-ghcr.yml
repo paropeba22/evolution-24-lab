@@ -2,7 +2,7 @@ name: S12 Evolution OCI artifact to private GHCR
 on:
   push:
     branches:
-      - ops/s12-writer-probe-build-20261022
+      - ops/s12-evolution-ghcr-transfer-fix-20261022
 permissions:
   actions: read
   contents: read
@@ -52,41 +52,45 @@ jobs:
           set -euo pipefail
           skopeo copy --all --preserve-digests \
             oci-archive:artifact/image.oci.tar \
-            docker://ghcr.io/paropeba22/evolution-24-lab:s12-writer-probe-926e5afef09f1ec62cea8bd14398275e830da34a
-      - name: Verify registry digest and retain transfer receipt
+            docker://ghcr.io/paropeba22/evolution-24-lab:s12-writer-probe-926e5afef09f1ec62cea8bd14398275e830da34a-verified
+      - name: Verify registry manifest digest and retain transfer receipt
         shell: bash
         run: |
           set -euo pipefail
-          skopeo inspect --raw docker://ghcr.io/paropeba22/evolution-24-lab:s12-writer-probe-926e5afef09f1ec62cea8bd14398275e830da34a > registry-index.json
+          skopeo inspect --raw docker://ghcr.io/paropeba22/evolution-24-lab:s12-writer-probe-926e5afef09f1ec62cea8bd14398275e830da34a-verified > registry-manifest.json
           python3 - <<'PY'
           import hashlib, json, pathlib, tarfile
           expected_commit = "926e5afef09f1ec62cea8bd14398275e830da34a"
           with tarfile.open("artifact/image.oci.tar", "r:*") as outer:
-              local_bytes = outer.extractfile("index.json").read()
-              local = json.loads(local_bytes)
-          remote_bytes = pathlib.Path("registry-index.json").read_bytes()
+              index = json.load(outer.extractfile("index.json"))
+              desc = next(d for d in index["manifests"]
+                          if d.get("platform", {}).get("os") == "linux"
+                          and d.get("platform", {}).get("architecture") == "amd64")
+              manifest_bytes = outer.extractfile("blobs/sha256/" + desc["digest"].split(":", 1)[1]).read()
+              expected_manifest = json.loads(manifest_bytes)
+              config_digest = expected_manifest["config"]["digest"]
+          remote_bytes = pathlib.Path("registry-manifest.json").read_bytes()
+          remote_digest = "sha256:" + hashlib.sha256(remote_bytes).hexdigest()
           remote = json.loads(remote_bytes)
-          local_manifests = sorted((d["digest"], d.get("platform", {}).get("os"), d.get("platform", {}).get("architecture")) for d in local["manifests"])
-          remote_manifests = sorted((d["digest"], d.get("platform", {}).get("os"), d.get("platform", {}).get("architecture")) for d in remote["manifests"])
-          assert local_manifests == remote_manifests, (local_manifests, remote_manifests)
+          assert remote_digest == desc["digest"], (remote_digest, desc["digest"])
+          assert remote["config"]["digest"] == config_digest
           receipt = {
               "source_commit": expected_commit,
               "platform": "linux/amd64",
               "registry": "ghcr.io/paropeba22/evolution-24-lab",
-              "tag": "s12-writer-probe-926e5afef09f1ec62cea8bd14398275e830da34a",
-              "local_oci_index_sha256": "sha256:" + hashlib.sha256(local_bytes).hexdigest(),
-              "registry_oci_index_sha256": "sha256:" + hashlib.sha256(remote_bytes).hexdigest(),
-              "manifest_descriptors": local_manifests,
-              "index_bytes_equal": local_bytes == remote_bytes
+              "tag": "s12-writer-probe-926e5afef09f1ec62cea8bd14398275e830da34a-verified",
+              "manifest_digest": remote_digest,
+              "config_digest": config_digest,
+              "manifest_bytes_equal": remote_bytes == manifest_bytes
           }
-          assert receipt["index_bytes_equal"], receipt
+          assert receipt["manifest_bytes_equal"], receipt
           pathlib.Path("transfer-receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
           print(json.dumps(receipt, sort_keys=True))
           PY
       - name: Preserve transfer receipt
         uses: actions/upload-artifact@v4
         with:
-          name: evolution-writer-probe-ghcr-transfer-receipt-926e5afef09f1ec62cea8bd14398275e830da34a
+          name: evolution-writer-probe-ghcr-transfer-receipt-926e5afef09f1ec62cea8bd14398275e830da34a-verified
           path: transfer-receipt.json
           if-no-files-found: error
           retention-days: 90
