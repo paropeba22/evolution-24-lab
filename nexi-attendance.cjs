@@ -464,23 +464,40 @@ const WRITER_PROBE_STAGES = new Set(['request_received', 'signed_contract_valida
   'writer_isolation_proved', 'proof_response_produced']);
 const WRITER_PROBE_PHASES = new Set(['instance_lookup', 'contract_validation', 'socket_validation', 'context_request_setup',
   'context_transport', 'context_response', 'context_authentication', 'context_storage', 'scoped_operation_validation', 'binding_validation', 'storage_guard',
-  'writer_isolation', 'response_production']);
+  'writer_isolation', 'writer_socket_cas', 'writer_registration_validation', 'capture_context_installation',
+  'writer_transaction_completion', 'writer_post_transaction_validation', 'response_production']);
 const WRITER_PROBE_FAILURES = new Set(['nexi_attendance_envelope_authentication_required', 'nexi_attendance_noncanonical_material',
   'nexi_attendance_canonical_version_unsupported', 'nexi_attendance_authority_invalid', 'nexi_attendance_writer_unavailable',
   'nexi_attendance_boundary_invalid', 'nexi_attendance_binding_ambiguous', 'nexi_attendance_boundary_unavailable',
   'nexi_attendance_managed_binding_missing', 'nexi_attendance_contract_unsupported', 'nexi_attendance_contract_invalid',
   'nexi_attendance_event_limit', 'nexi_attendance_reservation_conflict', 'nexi_attendance_app_unresolved',
   'nexi_attendance_context_invalid', 'nexi_attendance_writer_binding_conflict', 'nexi_attendance_writer_isolation_unproved',
-  'nexi_attendance_isolated_authority_invalid']);
+  'nexi_attendance_isolated_authority_invalid', 'nexi_attendance_capture_socket_mismatch',
+  'nexi_attendance_capture_context_superseded', 'nexi_attendance_capture_context_regression']);
+const WRITER_PROBE_ERROR_CLASSES = new Set(['Error', 'TypeError', 'ReferenceError', 'RangeError', 'SyntaxError',
+  'TimeoutError', 'AbortError', 'PrismaClientKnownRequestError', 'PrismaClientUnknownRequestError',
+  'PrismaClientValidationError', 'PrismaClientInitializationError', 'PrismaClientRustPanicError']);
+const WRITER_PROBE_RUNTIME_CODES = new Set(['P1001', 'P1002', 'P1008', 'P1017', 'P2002', 'P2003', 'P2010', 'P2021',
+  'P2022', 'P2024', 'P2028', 'P2034', 'ETIMEDOUT', 'ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'EAI_AGAIN',
+  'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT', 'UND_ERR_SOCKET', 'MODULE_NOT_FOUND',
+  'ERR_MODULE_NOT_FOUND']);
+function writerProbeErrorDetails(error) {
+  try {
+    const name = error?.name, code = error?.code;
+    return { error_class: WRITER_PROBE_ERROR_CLASSES.has(name) ? name : 'OtherError',
+      error_code: WRITER_PROBE_FAILURES.has(code) || WRITER_PROBE_RUNTIME_CODES.has(code) ? code : 'unclassified' };
+  } catch { return { error_class: 'OtherError', error_code: 'unclassified' }; }
+}
 function writerProbeFailure(error) {
   try {
-    if (WRITER_PROBE_FAILURES.has(error?.code)) return error.code;
+    const errorCode = error?.code;
+    if (WRITER_PROBE_FAILURES.has(errorCode)) return errorCode;
     // These existing errors have no code. Match only exact allowlisted literals;
     // never emit the error message itself or classify arbitrary message text.
     const messages = { nexi_attendance_authority_storage_unguarded: 'storage_guard_rejected',
       nexi_event_secret_missing: 'event_authentication_unavailable', nexi_event_instance_missing: 'event_identity_unavailable' };
     if (Object.hasOwn(messages, error?.message)) return messages[error.message];
-    const code = error?.code || error?.cause?.code;
+    const code = errorCode || error?.cause?.code;
     if (['TimeoutError', 'AbortError'].includes(error?.name) ||
         ['ETIMEDOUT', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT'].includes(code)) return 'timeout';
     if (error?.name === 'SyntaxError') return 'invalid_response';
@@ -537,7 +554,8 @@ function writerProbeTrace(envelope) {
         } catch { /* Diagnostic state cannot authorize a writer. */ }
       },
       failure(error) {
-        emit('attendance.writer_probe.rejected', { last_stage: lastStage, failure_stage: phase, category: writerProbeFailure(error) });
+        emit('attendance.writer_probe.rejected', { last_stage: lastStage, failure_stage: phase,
+          category: writerProbeFailure(error), ...writerProbeErrorDetails(error) });
       },
       instanceMissing() {
         emit('attendance.writer_probe.rejected', { last_stage: lastStage, failure_stage: phase, category: 'instance_not_found', http_status: 404 });

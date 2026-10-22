@@ -319,7 +319,7 @@ function installRoute(router, monitor, guard, repository) {
         await repository.$transaction(async tx => {
           await storageGuard(tx);
           probe?.stage('storage_guard_executed');
-          probe?.attempt('writer_isolation');
+          probe?.attempt('writer_socket_cas');
           const current=await tx.instance.updateMany({where:{id:source.instanceId,nexiGroupsSocketOwner:owner.token},
             data:{nexiGroupsSocketOwner:owner.token}});
           // Retain the original evaluation order and omit unreached checks.
@@ -329,10 +329,14 @@ function installRoute(router, monitor, guard, repository) {
             !(checks.socket_open_after_cas=!!source.service.client?.ws?.isOpen);
           probe?.isolationChecks(() => checks);
           if (rejected) fail('nexi_attendance_writer_isolation_unproved');
+          probe?.attempt('writer_registration_validation');
           attendance().writerIsolation(source,context,probe);
+          probe?.attempt('capture_context_installation');
           attendance().installCaptureContext(snapshot);
+          probe?.attempt('writer_transaction_completion');
         });
         // This separate rejection can occur while the transaction completes.
+        probe?.attempt('writer_post_transaction_validation');
         const lifecycleCurrent=groups.lifecycleCurrent(owner);
         probe?.isolationChecks(() => ({lifecycle_current_after_transaction:!!lifecycleCurrent}));
         if (!lifecycleCurrent || !attendance().captureContextCurrent(snapshot,true)) fail('nexi_attendance_writer_isolation_unproved');
