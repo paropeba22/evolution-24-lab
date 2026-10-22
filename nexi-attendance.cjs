@@ -34,6 +34,9 @@ const FIELDS = {
   'attendance.media.request': COMMON.concat(['inbox_id','execution_id','attempt_id','preparation_id','reservation_id','external_id','grant_id','release_id']),
 };
 const configs = new WeakMap();
+// Only a fresh, nonce-bound APP response can authorize capture attestation
+// renewal. Persisted JSON or a copied proof is never this local capability.
+const authenticatedAttestationRenewals = new WeakMap();
 const sockets = new WeakMap();
 const purposes = new WeakMap();
 const internalControls = new WeakMap();
@@ -580,7 +583,9 @@ function eventPayload(event, data) {
   const operationContext = event === 'attendance.writer.context.request' && data && Object.hasOwn(data, 'isolated_authorization_id');
   // The UUID selects one operation in the signed APP context exchange; it
   // grants no authority itself. Keep every other event's exact shape intact.
-  const fields = operationContext ? FIELDS[event].concat('isolated_authorization_id') : FIELDS[event];
+  const renewalContext = event === 'attendance.writer.context.request' && data && Object.hasOwn(data, 'previous_sender_attestation_id');
+  let fields = operationContext ? FIELDS[event].concat('isolated_authorization_id') : FIELDS[event];
+  if (renewalContext) fields = fields.concat('previous_sender_attestation_id');
   if (!fields || !data || Object.keys(data).sort().join(',') !== [...fields].sort().join(',') ||
       data.version !== 1 || (data.protocol_version !== undefined && data.protocol_version !== 1)) fail('nexi_attendance_contract_unsupported');
   canonicalVersion(data.canonical_version);
@@ -595,6 +600,8 @@ function eventPayload(event, data) {
     if (event === 'attendance.writer.context.request' && !UUID.test(data.socket_owner || ''))
       fail('nexi_attendance_contract_invalid');
     if (operationContext && (typeof data.isolated_authorization_id !== 'string' || !UUID.test(data.isolated_authorization_id)))
+      fail('nexi_attendance_contract_invalid');
+    if (renewalContext && (typeof data.previous_sender_attestation_id !== 'string' || !UUID.test(data.previous_sender_attestation_id)))
       fail('nexi_attendance_contract_invalid');
   } else {
     const observation = event.startsWith('attendance.session.') || event === 'attendance.receipt.observed';
@@ -759,7 +766,7 @@ async function request(source, data, event = 'attendance.foundation.request', fe
   try { return await response.json(); }
   catch (error) { probe.contextFailure(error); throw error; }
 }
-function verifyContext(source, envelope, nonce, session) {
+function verifyContext(source, envelope, nonce, session, previousAttestationId = null) {
   if (!envelope || typeof envelope.claims !== 'string' || envelope.claims.length > 8192 ||
       !/^[A-Za-z0-9_-]+$/.test(envelope.claims) || !HASH.test(envelope.signature || '')) fail('nexi_attendance_context_invalid');
   const master = process.env.NEXI_CHANNELS_EVENT_MASTER_SECRET || '';
@@ -771,6 +778,7 @@ function verifyContext(source, envelope, nonce, session) {
   canonicalVersion(context.canonical_version, source);
   const keys = [...COMMON, 'nonce', 'inbox_id', 'instance', 'channel_state', 'current_session', 'physical_dispatch', 'isolation_cutover'];
   if (Object.hasOwn(context, 'isolated_operation')) keys.push('isolated_operation');
+  if (Object.hasOwn(context, 'sender_attestation_renewal')) keys.push('sender_attestation_renewal');
   if (Object.keys(context).sort().join(',') !== keys.sort().join(',') || context.version !== 1 || context.protocol_version !== 1 ||
       context.audience !== 'nexi-attendance-evolution' || context.provider !== 'evolution-baileys' || context.nonce !== nonce ||
       context.instance !== source.instance.name || context.instance_id !== source.instanceId || context.session_identity !== session ||
@@ -784,9 +792,18 @@ function verifyContext(source, envelope, nonce, session) {
       !(context.original_session_identity === null || HASH.test(context.original_session_identity || '')))
     fail('nexi_attendance_context_invalid');
   if (Object.hasOwn(context, 'isolated_operation')) require('./nexi-attendance-isolated.cjs').context(source, context, context.isolated_operation, Date.now());
+  if (Object.hasOwn(context, 'sender_attestation_renewal')) {
+    const proof = context.sender_attestation_renewal, now = Date.now();
+    if (!proof || Object.keys(proof).sort().join(',') !== 'expires_at,from_attestation_id,to_attestation_id,version' ||
+        proof.version !== 1 || !UUID.test(previousAttestationId || '') || proof.from_attestation_id !== previousAttestationId ||
+        !UUID.test(proof.to_attestation_id || '') || proof.to_attestation_id !== context.sender_attestation_id ||
+        proof.from_attestation_id === proof.to_attestation_id || !Number.isSafeInteger(proof.expires_at) ||
+        proof.expires_at <= now || proof.expires_at > now + 60000) fail('nexi_attendance_context_invalid');
+    authenticatedAttestationRenewals.set(context, Object.freeze({...proof}));
+  }
   return context;
 }
-async function refreshContext(source, session, fetchImpl = fetch, socketOwner = null, writerProbe = null, authorizationId = null) {
+async function refreshContext(source, session, fetchImpl = fetch, socketOwner = null, writerProbe = null, authorizationId = null, previousAttestationId = null) {
   const destination = await boundary(source);
   const db = source.prismaRepository.nexiManagedTransportContext;
   if (!destination) {
@@ -798,22 +815,29 @@ async function refreshContext(source, session, fetchImpl = fetch, socketOwner = 
   const envelope = await request(source, { version: 1, canonical_version: CANONICAL_VERSION, audience: 'nexi-attendance-app', provider: 'evolution-baileys',
     account_id: Number(destination.headers['X-Nexi-Chatwoot-Account-Id']), inbox_id: Number(destination.headers['X-Nexi-Chatwoot-Inbox-Id']),
     nonce, session_identity: session, ...(socketOwner ? {socket_owner:socketOwner} : {}),
-    ...(authorizationId ? {isolated_authorization_id:authorizationId} : {}) },
+    ...(authorizationId ? {isolated_authorization_id:authorizationId} : {}),
+    ...(previousAttestationId ? {previous_sender_attestation_id:previousAttestationId} : {}) },
     socketOwner ? 'attendance.writer.context.request' : 'attendance.context.request', fetchImpl, nonce, writerProbe);
   writerProbe?.attempt('context_authentication');
-  const context = verifyContext(source, envelope, nonce, session);
+  const context = verifyContext(source, envelope, nonce, session, previousAttestationId);
   writerProbe?.stage('authenticated_context_received');
   writerProbe?.attempt('context_storage');
   // Nonce authenticates the exchange, not classification identity.
-  const durable = { ...context }; delete durable.nonce;
+  const renewal = authenticatedAttestationRenewals.get(context);
+  const durable = { ...context }; delete durable.nonce; delete durable.sender_attestation_renewal;
   const fingerprint = digest(durable);
   const previous = await db.findUnique({ where: { fingerprint } });
-  if (previous) { canonicalVersion(previous.canonicalVersion, source); return previous.payload; }
-  try { await db.create({ data: { id: randomUUID(), instanceId: source.instanceId, instanceName: source.instance.name,
+  if (previous) canonicalVersion(previous.canonicalVersion, source);
+  else try { await db.create({ data: { id: randomUUID(), instanceId: source.instanceId, instanceName: source.instance.name,
     managedChannelId: String(context.managed_channel_id), sessionIdentity: session, fingerprint, payload: durable,
     canonicalVersion: CANONICAL_VERSION } }); }
   catch (error) { if (error.code !== 'P2002') throw error; }
-  return durable;
+  const result = previous ? previous.payload : durable;
+  if (renewal) {
+    if (digest(result) !== fingerprint) fail('nexi_attendance_context_invalid');
+    authenticatedAttestationRenewals.set(result, Object.freeze({...renewal, context_digest:fingerprint}));
+  }
+  return result;
 }
 
 // No private key, creds object, registration secret or Signal state leaves this
@@ -1185,7 +1209,9 @@ async function registrationContext(registration, session, source = registration.
   // V2 operation contexts are local signed authority. They must not compete
   // for the shared receipt context revision when two messages use one socket.
   const revision = authorizationId ? registration.contextRevision : ++registration.contextRevision;
-  const context = await refreshContext(source, session, fetch, owner?.token || null, probe, authorizationId);
+  const previousAttestationId = probe && owner && registration.context?.session_identity === session &&
+    UUID.test(registration.context.sender_attestation_id || '') ? registration.context.sender_attestation_id : null;
+  const context = await refreshContext(source, session, fetch, owner?.token || null, probe, authorizationId, previousAttestationId);
   return { registration, revision, context, owner, operation:!!authorizationId };
 }
 async function captureContextSnapshot(source, owner, probe = null, authorizationId = null) {
@@ -1205,8 +1231,17 @@ function captureContextCurrent(snapshot, installed = false) {
 }
 function captureMaterial(context) {
   if (!context) return null;
-  const material={...context};delete material.isolated_operation;material.physical_dispatch=false;
+  const material={...context};delete material.isolated_operation;delete material.sender_attestation_renewal;material.physical_dispatch=false;
   return material;
+}
+function attestationRenewalCurrent(previous, context) {
+  try {
+    const proof = authenticatedAttestationRenewals.get(context);
+    return !!proof && proof.expires_at > Date.now() && proof.from_attestation_id === previous.sender_attestation_id &&
+      proof.to_attestation_id === context.sender_attestation_id && proof.context_digest === digest(context) &&
+      ['account_id','inbox_id','managed_channel_id','instance','instance_id','session_identity','instance_lineage_id',
+        'sender_account_lineage_id','writer_epoch','binding_generation','writer_protocol_version'].every(key => previous[key] === context[key]);
+  } catch { return false; }
 }
 function installCaptureContext(snapshot, writerProbe = null) {
   if (!captureContextCurrent(snapshot)) fail('nexi_attendance_capture_context_superseded');
@@ -1226,7 +1261,8 @@ function installCaptureContext(snapshot, writerProbe = null) {
         context.writer_epoch === previous.writer_epoch &&
           (regression('barrier_state', stages.indexOf(context.barrier_state) < stages.indexOf(previous.barrier_state)) ||
            ['instance_lineage_id', 'sender_account_lineage_id', 'sender_attestation_id'].some(key =>
-             previous[key] != null && regression(key, previous[key] !== context[key]))))
+             previous[key] != null && regression(key, previous[key] !== context[key] &&
+               !(key === 'sender_attestation_id' && attestationRenewalCurrent(previous, context))))))
       fail('nexi_attendance_capture_context_regression');
   }
   // capture() dereferences this exact shared registration at receipt arrival.
