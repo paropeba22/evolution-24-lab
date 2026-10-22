@@ -1,0 +1,63 @@
+name: S12 writer probe Evolution OCI build-only
+on:
+  push:
+    branches:
+      - ops/s12-writer-probe-build-20261022
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: 926e5afef09f1ec62cea8bd14398275e830da34a
+          persist-credentials: false
+      - name: Verify source and export OCI
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = 926e5afef09f1ec62cea8bd14398275e830da34a
+          mkdir -p out
+          docker buildx create --use
+          docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
+            --label org.opencontainers.image.revision=926e5afef09f1ec62cea8bd14398275e830da34a \
+            --output type=oci,dest=out/image.oci.tar --file Dockerfile .
+      - name: Verify OCI identity and checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, os, tarfile
+          expected = "926e5afef09f1ec62cea8bd14398275e830da34a"
+          path = "out/image.oci.tar"
+          def digest(data): return hashlib.sha256(data).hexdigest()
+          with tarfile.open(path, "r:*") as outer:
+              index = json.load(outer.extractfile("index.json"))
+              desc = next(d for d in index["manifests"] if d.get("platform", {}).get("os") == "linux" and d.get("platform", {}).get("architecture") == "amd64")
+              def blob(d):
+                  alg, value = d.split(":", 1)
+                  assert alg == "sha256"
+                  data = outer.extractfile("blobs/sha256/" + value).read()
+                  assert digest(data) == value
+                  return data
+              manifest = json.loads(blob(desc["digest"]))
+              config = json.loads(blob(manifest["config"]["digest"]))
+              assert config["os"] == "linux" and config["architecture"] == "amd64"
+              labels = (config.get("config") or {}).get("Labels") or {}
+              assert labels.get("org.opencontainers.image.revision") == expected
+              meta = {"source_commit": expected, "platform": "linux/amd64", "manifest_digest": desc["digest"],
+                      "config_digest": manifest["config"]["digest"], "archive_sha256": "sha256:" + digest(open(path, "rb").read()),
+                      "archive_bytes": os.path.getsize(path)}
+          with open("out/artifact-metadata.json", "w") as f: json.dump(meta, f, indent=2)
+          print(json.dumps(meta, sort_keys=True))
+          PY
+      - name: Preserve OCI artifact for 90 days
+        uses: actions/upload-artifact@v4
+        with:
+          name: evolution-writer-probe-926e5afef09f1ec62cea8bd14398275e830da34a
+          path: out/
+          if-no-files-found: error
+          retention-days: 90
