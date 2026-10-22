@@ -1,0 +1,98 @@
+name: Verify private S12 Evolution GHCR package
+on:
+  push:
+    branches:
+      - ops/s12-evolution-private-ghcr-verify-20261022
+permissions:
+  contents: read
+  packages: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Install OCI inspection tool
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq skopeo
+      - name: Authenticate to private GHCR package
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify authenticated digest and anonymous denial
+        shell: bash
+        run: |
+          set -euo pipefail
+          ref=ghcr.io/paropeba22/evolution-v23-s12-probe-private:sha-926e5afef09f1ec62cea8bd14398275e830da34a
+          skopeo inspect --raw "docker://$ref" > remote-manifest.json
+          python3 - <<'PY'
+          import hashlib, json, pathlib, re, urllib.error, urllib.parse, urllib.request
+          source = "926e5afef09f1ec62cea8bd14398275e830da34a"
+          manifest_expected = "sha256:63a4469d396aa649ee64d84d21f0f617f42e7da5b2d430d27ee5e6eb19308435"
+          config_expected = "sha256:93f1844667c7cf88496258edb91813522d84a57e9b64d73082d53d93bb7c250c"
+          image = "ghcr.io/paropeba22/evolution-v23-s12-probe-private"
+          tag = "sha-926e5afef09f1ec62cea8bd14398275e830da34a"
+          raw = pathlib.Path("remote-manifest.json").read_bytes()
+          manifest_digest = "sha256:" + hashlib.sha256(raw).hexdigest()
+          config_digest = json.loads(raw)["config"]["digest"]
+          assert manifest_digest == manifest_expected, manifest_digest
+          assert config_digest == config_expected, config_digest
+          url = f"https://{image}/manifests/{tag}"
+          request = urllib.request.Request(url, headers={"Accept":"application/vnd.oci.image.manifest.v1+json"})
+          try:
+              with urllib.request.urlopen(request, timeout=20) as response:
+                  status = response.status
+          except urllib.error.HTTPError as err:
+              challenge = err.headers.get("WWW-Authenticate", "")
+              params = dict(re.findall(r'(\\w+)="([^"]*)"', challenge))
+              if err.code != 401 or "realm" not in params:
+                  status = err.code
+              else:
+                  token_url = params["realm"] + "?" + urllib.parse.urlencode({
+                      "service": params.get("service", "ghcr.io"),
+                      "scope": params.get("scope", f"repository:{image}:pull")
+                  })
+                  with urllib.request.urlopen(token_url, timeout=20) as response:
+                      payload = json.load(response)
+                  token = payload.get("token") or payload.get("access_token")
+                  if not token:
+                      status = 401
+                  else:
+                      req = urllib.request.Request(url, headers={
+                          "Accept":"application/vnd.oci.image.manifest.v1+json",
+                          "Authorization":"Bearer " + token
+                      })
+                      try:
+                          with urllib.request.urlopen(req, timeout=20) as response:
+                              status = response.status
+                      except urllib.error.HTTPError as denied:
+                          status = denied.code
+          print(f"authenticated_manifest_digest={manifest_digest}")
+          print(f"authenticated_config_digest={config_digest}")
+          print(f"anonymous_manifest_status={status}")
+          assert status in (401, 403, 404), f"Anonymous pull unexpectedly succeeded: {status}"
+          receipt = {
+              "source_commit": source,
+              "platform": "linux/amd64",
+              "registry": image,
+              "tag": tag,
+              "manifest_digest": manifest_digest,
+              "config_digest": config_digest,
+              "authenticated_pull": True,
+              "anonymous_pull_rejected": True,
+              "anonymous_status": status,
+              "prior_transfer_run": 39714611286
+          }
+          pathlib.Path("private-package-receipt.json").write_text(json.dumps(receipt, indent=2) + "\\n")
+          print(json.dumps(receipt, sort_keys=True))
+          PY
+      - name: Preserve verification receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: evolution-private-ghcr-verification-926e5afef09f1ec62cea8bd14398275e830da34a
+          path: private-package-receipt.json
+          if-no-files-found: error
+          retention-days: 90
