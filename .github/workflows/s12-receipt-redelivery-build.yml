@@ -1,0 +1,89 @@
+name: S12 Evolution receipt redelivery OCI
+on:
+  push:
+    branches:
+      - ops/s12-receipt-redelivery-build-20261023
+permissions:
+  contents: read
+  packages: write
+jobs:
+  build-and-preserve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 884b5bcdc980a84bceca38c05ab96b62baba0a42
+          persist-credentials: false
+      - name: Verify exact source
+        run: test "$(git rev-parse HEAD)" = 884b5bcdc980a84bceca38c05ab96b62baba0a42
+      - uses: docker/setup-buildx-action@v3
+      - name: Build linux amd64 OCI archive
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
+            --label org.opencontainers.image.revision=884b5bcdc980a84bceca38c05ab96b62baba0a42 \
+            --output type=oci,dest=out/image.oci.tar --metadata-file out/buildx-metadata.json \
+            --file Dockerfile .
+      - name: Verify OCI identity and compute digests
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import datetime, hashlib, json, os, tarfile
+          sha=lambda b:hashlib.sha256(b).hexdigest()
+          def blob(t,d):
+              alg,value=d.split(':',1); assert alg=='sha256'
+              b=t.extractfile('blobs/sha256/'+value).read(); assert sha(b)==value
+              return b
+          with tarfile.open('out/image.oci.tar','r:*') as t:
+              index=json.load(t.extractfile('index.json'))
+              desc=[d for d in index['manifests'] if d.get('platform',{}).get('os')=='linux' and d.get('platform',{}).get('architecture')=='amd64']
+              assert len(desc)==1
+              manifest=json.loads(blob(t,desc[0]['digest']))
+              config=json.loads(blob(t,manifest['config']['digest']))
+              assert config['os']=='linux' and config['architecture']=='amd64'
+              expected='884b5bcdc980a84bceca38c05ab96b62baba0a42'
+              labels=(config.get('config') or {}).get('Labels') or {}
+              assert labels.get('org.opencontainers.image.revision')==expected
+              md=desc[0]['digest']; cd=manifest['config']['digest']
+          ah=sha(open('out/image.oci.tar','rb').read())
+          meta={'source_commit':expected,'platform':'linux/amd64','manifest_digest':md,'config_digest':cd,'archive_sha256':'sha256:'+ah,'archive_bytes':os.path.getsize('out/image.oci.tar'),'verified_at_utc':datetime.datetime.now(datetime.timezone.utc).isoformat()}
+          json.dump(meta,open('out/artifact-metadata.json','w'),indent=2); print(json.dumps(meta,sort_keys=True))
+          PY
+      - name: Install OCI transport tool
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq skopeo
+      - name: Publish to new private GHCR package and verify immutable identity
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REGISTRY_USER: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          auth="$RUNNER_TEMP/ghcr-auth.json"
+          printf '%s' "$REGISTRY_TOKEN" | skopeo login --authfile "$auth" --username "$REGISTRY_USER" --password-stdin ghcr.io
+          image=ghcr.io/paropeba22/nexi-evolution-s12-receipt-redelivery:884b5bcdc980a84bceca38c05ab96b62baba0a42
+          skopeo copy --all --preserve-digests --authfile "$auth" oci-archive:out/image.oci.tar "docker://$image"
+          skopeo inspect --raw --authfile "$auth" "docker://$image" > out/registry-manifest.json
+          skopeo inspect --override-os linux --override-arch amd64 --authfile "$auth" "docker://$image" > out/registry-inspect.json
+          python3 - <<'PY'
+          import hashlib,json,pathlib
+          meta=json.loads(pathlib.Path('out/artifact-metadata.json').read_text())
+          raw=pathlib.Path('out/registry-manifest.json').read_bytes()
+          remote=json.loads(raw); ins=json.loads(pathlib.Path('out/registry-inspect.json').read_text())
+          digest='sha256:'+hashlib.sha256(raw).hexdigest()
+          assert digest==meta['manifest_digest']==ins['Digest'],(digest,meta['manifest_digest'],ins.get('Digest'))
+          assert remote['config']['digest']==meta['config_digest']
+          assert ins['Os']=='linux' and ins['Architecture']=='amd64'
+          pathlib.Path('out/transfer-receipt.json').write_text(json.dumps({'source_commit':meta['source_commit'],'platform':meta['platform'],'package':'ghcr.io/paropeba22/nexi-evolution-s12-receipt-redelivery','tag':meta['source_commit'],'manifest_digest':digest,'config_digest':remote['config']['digest'],'archive_sha256':meta['archive_sha256']},indent=2)+'\n')
+          PY
+          printf '{}' > "$RUNNER_TEMP/anonymous-auth.json"
+          if out=$(skopeo inspect --raw --authfile "$RUNNER_TEMP/anonymous-auth.json" "docker://$image" 2>&1); then echo 'Anonymous GHCR access unexpectedly succeeded.'; exit 1; else case "$out" in *unauthorized*|*denied*|*authentication\ required*) echo 'Anonymous access rejected by GHCR.';; *) echo "$out"; exit 1;; esac; fi
+      - name: Preserve transfer metadata only (repo is public; image stays private in GHCR)
+        uses: actions/upload-artifact@v4
+        with:
+          name: evolution-receipt-redelivery-metadata-884b5bcdc980a84bceca38c05ab96b62baba0a42
+          path: out/artifact-metadata.json
+          if-no-files-found: error
+          retention-days: 90
