@@ -1,8 +1,8 @@
-name: S12 Evolution OCI artifact to private GHCR
+name: S12 Evolution transport-return OCI to new private GHCR package
 on:
   push:
     branches:
-      - ops/s12-writer-probe-build-20261022
+      - ops/s12-transport-return-build-20261023
 permissions:
   actions: read
   contents: read
@@ -12,15 +12,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - name: Download the already verified build artifact
+      - name: Download verified build artifact
         uses: actions/download-artifact@v4
         with:
-          name: evolution-writer-probe-926e5afef09f1ec62cea8bd14398275e830da34a
+          name: evolution-writer-probe-54ba18e26c1dfb216b06059f421cdcf68ff8d206
           path: artifact
           repository: paropeba22/evolution-24-lab
-          run-id: 39709211465
+          run-id: 39905293947
           github-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Verify source identity and archive checksum
+      - name: Verify source, platform, and archive checksum
         shell: bash
         run: |
           set -euo pipefail
@@ -28,10 +28,9 @@ jobs:
           import hashlib, json, pathlib
           root = pathlib.Path("artifact")
           meta = json.loads((root / "artifact-metadata.json").read_text())
-          assert meta["source_commit"] == "926e5afef09f1ec62cea8bd14398275e830da34a"
+          assert meta["source_commit"] == "54ba18e26c1dfb216b06059f421cdcf68ff8d206"
           assert meta["platform"] == "linux/amd64"
-          archive = root / "image.oci.tar"
-          digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+          digest = hashlib.sha256((root / "image.oci.tar").read_bytes()).hexdigest()
           assert "sha256:" + digest == meta["archive_sha256"]
           print(json.dumps(meta, sort_keys=True))
           PY
@@ -40,53 +39,43 @@ jobs:
           set -euo pipefail
           sudo apt-get update -qq
           sudo apt-get install -y -qq skopeo
-      - name: Authenticate to GHCR with repository token
+      - name: Authenticate to GHCR
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Copy OCI image without changing digests
+      - name: Copy immutable OCI image
         shell: bash
         run: |
           set -euo pipefail
-          skopeo copy --all --preserve-digests \
-            oci-archive:artifact/image.oci.tar \
-            docker://ghcr.io/paropeba22/evolution-24-lab:s12-writer-probe-926e5afef09f1ec62cea8bd14398275e830da34a
-      - name: Verify registry digest and retain transfer receipt
+          skopeo copy --all --preserve-digests oci-archive:artifact/image.oci.tar docker://ghcr.io/paropeba22/nexi-evolution-s12-transport-return:54ba18e26c1dfb216b06059f421cdcf68ff8d206
+      - name: Verify registry manifest and retain receipt
         shell: bash
         run: |
           set -euo pipefail
-          skopeo inspect --raw docker://ghcr.io/paropeba22/evolution-24-lab:s12-writer-probe-926e5afef09f1ec62cea8bd14398275e830da34a > registry-index.json
+          skopeo inspect --raw docker://ghcr.io/paropeba22/nexi-evolution-s12-transport-return:54ba18e26c1dfb216b06059f421cdcf68ff8d206 > registry-index.json
           python3 - <<'PY'
           import hashlib, json, pathlib, tarfile
-          expected_commit = "926e5afef09f1ec62cea8bd14398275e830da34a"
-          with tarfile.open("artifact/image.oci.tar", "r:*") as outer:
-              local_bytes = outer.extractfile("index.json").read()
+          with tarfile.open("artifact/image.oci.tar", "r:*") as archive:
+              local_bytes = archive.extractfile("index.json").read()
               local = json.loads(local_bytes)
           remote_bytes = pathlib.Path("registry-index.json").read_bytes()
           remote = json.loads(remote_bytes)
-          local_manifests = sorted((d["digest"], d.get("platform", {}).get("os"), d.get("platform", {}).get("architecture")) for d in local["manifests"])
-          remote_manifests = sorted((d["digest"], d.get("platform", {}).get("os"), d.get("platform", {}).get("architecture")) for d in remote["manifests"])
-          assert local_manifests == remote_manifests, (local_manifests, remote_manifests)
-          receipt = {
-              "source_commit": expected_commit,
-              "platform": "linux/amd64",
-              "registry": "ghcr.io/paropeba22/evolution-24-lab",
-              "tag": "s12-writer-probe-926e5afef09f1ec62cea8bd14398275e830da34a",
-              "local_oci_index_sha256": "sha256:" + hashlib.sha256(local_bytes).hexdigest(),
-              "registry_oci_index_sha256": "sha256:" + hashlib.sha256(remote_bytes).hexdigest(),
-              "manifest_descriptors": local_manifests,
-              "index_bytes_equal": local_bytes == remote_bytes
-          }
-          assert receipt["index_bytes_equal"], receipt
-          pathlib.Path("transfer-receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
-          print(json.dumps(receipt, sort_keys=True))
+          descs = lambda x: sorted((d["digest"], d.get("platform",{}).get("os"), d.get("platform",{}).get("architecture")) for d in x["manifests"])
+          assert descs(local) == descs(remote)
+          assert local_bytes == remote_bytes
+          receipt = {"source_commit":"54ba18e26c1dfb216b06059f421cdcf68ff8d206","platform":"linux/amd64",
+            "registry":"ghcr.io/paropeba22/nexi-evolution-s12-transport-return",
+            "tag":"54ba18e26c1dfb216b06059f421cdcf68ff8d206",
+            "index_sha256":"sha256:"+hashlib.sha256(remote_bytes).hexdigest(),"index_bytes_equal":True}
+          pathlib.Path("transfer-receipt.json").write_text(json.dumps(receipt,indent=2)+"\n")
+          print(json.dumps(receipt,sort_keys=True))
           PY
       - name: Preserve transfer receipt
         uses: actions/upload-artifact@v4
         with:
-          name: evolution-writer-probe-ghcr-transfer-receipt-926e5afef09f1ec62cea8bd14398275e830da34a
+          name: evolution-transport-return-ghcr-transfer-receipt-54ba18e26c1dfb216b06059f421cdcf68ff8d206
           path: transfer-receipt.json
           if-no-files-found: error
           retention-days: 90

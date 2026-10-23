@@ -2,7 +2,7 @@ name: S12 writer probe Evolution OCI build-only
 on:
   push:
     branches:
-      - ops/s12-transport-return-build-20261023
+      - ops/s12-transport-return-build-disabled-20261023
 permissions:
   contents: read
 jobs:
