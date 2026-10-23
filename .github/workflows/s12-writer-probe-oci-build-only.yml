@@ -2,7 +2,7 @@ name: S12 writer probe Evolution OCI build-only
 on:
   push:
     branches:
-      - ops/s12-writer-probe-build-20261022
+      - ops/s12-transport-return-build-20261023
 permissions:
   contents: read
 jobs:
@@ -13,17 +13,17 @@ jobs:
       - name: Checkout exact candidate
         uses: actions/checkout@v4
         with:
-          ref: 926e5afef09f1ec62cea8bd14398275e830da34a
+          ref: 54ba18e26c1dfb216b06059f421cdcf68ff8d206
           persist-credentials: false
       - name: Verify source and export OCI
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = 926e5afef09f1ec62cea8bd14398275e830da34a
+          test "$(git rev-parse HEAD)" = 54ba18e26c1dfb216b06059f421cdcf68ff8d206
           mkdir -p out
           docker buildx create --use
           docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
-            --label org.opencontainers.image.revision=926e5afef09f1ec62cea8bd14398275e830da34a \
+            --label org.opencontainers.image.revision=54ba18e26c1dfb216b06059f421cdcf68ff8d206 \
             --output type=oci,dest=out/image.oci.tar --file Dockerfile .
       - name: Verify OCI identity and checksum
         shell: bash
@@ -31,7 +31,7 @@ jobs:
           set -euo pipefail
           python3 - <<'PY'
           import hashlib, json, os, tarfile
-          expected = "926e5afef09f1ec62cea8bd14398275e830da34a"
+          expected = "54ba18e26c1dfb216b06059f421cdcf68ff8d206"
           path = "out/image.oci.tar"
           def digest(data): return hashlib.sha256(data).hexdigest()
           with tarfile.open(path, "r:*") as outer:
@@ -57,7 +57,7 @@ jobs:
       - name: Preserve OCI artifact for 90 days
         uses: actions/upload-artifact@v4
         with:
-          name: evolution-writer-probe-926e5afef09f1ec62cea8bd14398275e830da34a
+          name: evolution-writer-probe-54ba18e26c1dfb216b06059f421cdcf68ff8d206
           path: out/
           if-no-files-found: error
           retention-days: 90
