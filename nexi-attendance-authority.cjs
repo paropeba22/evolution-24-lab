@@ -112,6 +112,19 @@ function result(row, m) {
     dispatch_started_at:row?.dispatchStartedAt ? +row.dispatchStartedAt : null,
     outcome_unknown:row?.outcomeUnknown || false, physical_dispatch:m.grant.physical_dispatch };
 }
+function readbackResult(row, m) {
+  const observed = result(row, m), returned = row.transportReturn;
+  if (returned == null) return observed;
+  // Only the immutable local method result is exposed. This is never a
+  // WhatsApp ACK/receipt, delivery claim or authority for a second dispatch.
+  if (!exact(returned, ['boundary_returned','succeeded']) || returned.boundary_returned !== true ||
+      typeof returned.succeeded !== 'boolean' || observed.physical_dispatch !== true || observed.outcome_unknown !== true ||
+      !Number.isSafeInteger(observed.consumed_at) || observed.consumed_at <= 0 ||
+      !Number.isSafeInteger(observed.dispatch_started_at) || observed.dispatch_started_at < observed.consumed_at ||
+      observed.state !== (returned.succeeded ? 'transport_returned' : 'outcome_unknown'))
+    fail('nexi_attendance_transport_return_unproved');
+  return {...observed, transport_return:{boundary_returned:true, succeeded:returned.succeeded}};
+}
 function replay(row, m) {
   if (row.consumptionId !== m.consumption_id || row.consumptionDigest !== canonical.digest(m) ||
       row.grantId !== m.grant.grant_id || row.grantDigest !== m.grant_digest || row.releaseId !== m.release.release_id ||
@@ -134,7 +147,10 @@ async function consumption(source, authorityClaims) {
     let row = await db.findUnique({ where:{ id:m.grant.preparation_id } });
     if (!row) fail('nexi_attendance_consumption_preparation_unresolved');
     binding(source, row, m);
-    if (row.consumptionId) { replay(row, m); return result(row, m); }
+    if (row.consumptionId) {
+      replay(row, m);
+      return authorityClaims.action === 'consumption_readback' ? readbackResult(row, m) : result(row, m);
+    }
     if (authorityClaims.action === 'consumption_readback') return result(null, m);
     const now = await clock(tx);
     if (m.grant.isolated_operation) require('./nexi-attendance-isolated.cjs').grant(source, row, m, now);
