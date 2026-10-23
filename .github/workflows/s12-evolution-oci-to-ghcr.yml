@@ -81,7 +81,8 @@ jobs:
             "single_manifest_verified":True}
           pathlib.Path("transfer-receipt.json").write_text(json.dumps(receipt,indent=2)+"\n")
           print(json.dumps(receipt,sort_keys=True))
-          PY      - name: Preserve transfer receipt
+          PY
+      - name: Preserve transfer receipt
         uses: actions/upload-artifact@v4
         with:
           name: evolution-transport-return-ghcr-transfer-receipt-54ba18e26c1dfb216b06059f421cdcf68ff8d206
