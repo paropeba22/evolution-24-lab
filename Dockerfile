@@ -28,6 +28,7 @@ COPY nexi-canonical-json.cjs attendance-canonical.test.cjs attendance-correction
 COPY nexi-attendance-snapshot.cjs attendance-snapshot.test.cjs /evolution/
 COPY nexi-attendance-authority.cjs nexi-attendance-storage-guard.cjs attendance-authority.test.cjs attendance-authority-test-support.cjs attendance-test-network-trap.cjs /evolution/
 COPY nexi-attendance-dispatch.cjs attendance-physical-dispatch.test.cjs /evolution/
+COPY nexi-attendance-receipt-redelivery.cjs /evolution/
 COPY nexi-attendance-isolated.cjs attendance-isolated.test.cjs attendance-isolated-test-support.cjs /evolution/
 COPY attendance-isolated-configuration.test.cjs /evolution/
 COPY attendance-socket-test-support.cjs attendance-socket-registration.test.cjs /evolution/
@@ -148,6 +149,7 @@ COPY --from=source-builder /evolution/nexi-canonical-json.cjs /evolution/nexi-ca
 COPY --from=source-builder /evolution/nexi-attendance-snapshot.cjs /evolution/nexi-attendance-snapshot.cjs
 COPY --from=source-builder /evolution/nexi-attendance-authority.cjs /evolution/nexi-attendance-authority.cjs
 COPY --from=source-builder /evolution/nexi-attendance-dispatch.cjs /evolution/nexi-attendance-dispatch.cjs
+COPY --from=source-builder /evolution/nexi-attendance-receipt-redelivery.cjs /evolution/nexi-attendance-receipt-redelivery.cjs
 COPY --from=source-builder /evolution/nexi-attendance-isolated.cjs /evolution/nexi-attendance-isolated.cjs
 COPY --from=source-builder /evolution/nexi-attendance-storage-guard.cjs /evolution/nexi-attendance-storage-guard.cjs
 COPY --from=source-builder /evolution/nexi-attendance-storage-check.cjs /evolution/nexi-attendance-storage-check.cjs

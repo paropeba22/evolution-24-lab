@@ -48,7 +48,8 @@ function claims(source, envelope, now = Date.now()) {
       value.audience !== 'nexi-attendance-evolution' || value.provider !== 'evolution-baileys' ||
       value.instance !== source.instance.name || value.instance_id !== source.instanceId || ![true,false].includes(value.physical_dispatch) ||
       !UUID.test(value.request_id || '') || !Number.isSafeInteger(value.expires_at) || value.expires_at <= now || value.expires_at > now + 60000 ||
-      !['consume','consumption_readback','preparation_readback','writer_probe'].includes(value.action)) fail('nexi_attendance_authority_invalid');
+      !['consume','consumption_readback','preparation_readback','writer_probe','receipt_redelivery'].includes(value.action))
+    fail('nexi_attendance_authority_invalid');
   if (value.physical_dispatch !== (value.material?.grant?.physical_dispatch === true)) fail('nexi_attendance_authority_invalid');
   return value;
 }
@@ -367,6 +368,8 @@ function installRoute(router, monitor, guard, repository) {
         probe?.stage('proof_response_produced');
         return res.json(proof);
       }
+      if (value.action==='receipt_redelivery') return res.json(response(source,value,
+        await require('./nexi-attendance-receipt-redelivery.cjs').perform(source,value)));
       if (value.action==='preparation_readback') return res.json(response(source,value,
         {...await preparationReadback(source,value),request_digest:canonical.digest(value.material)}));
       let observed=await consumption(source,value);
