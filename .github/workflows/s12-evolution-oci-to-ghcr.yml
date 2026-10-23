@@ -54,25 +54,34 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          skopeo inspect --raw docker://ghcr.io/paropeba22/nexi-evolution-s12-transport-return:54ba18e26c1dfb216b06059f421cdcf68ff8d206 > registry-index.json
+          image=ghcr.io/paropeba22/nexi-evolution-s12-transport-return:54ba18e26c1dfb216b06059f421cdcf68ff8d206
+          skopeo inspect --raw "docker://$image" > registry-manifest.json
+          skopeo inspect --override-os linux --override-arch amd64 "docker://$image" > registry-inspect.json
           python3 - <<'PY'
           import hashlib, json, pathlib, tarfile
+          meta = json.loads(pathlib.Path("artifact/artifact-metadata.json").read_text())
           with tarfile.open("artifact/image.oci.tar", "r:*") as archive:
-              local_bytes = archive.extractfile("index.json").read()
-              local = json.loads(local_bytes)
-          remote_bytes = pathlib.Path("registry-index.json").read_bytes()
+              local = json.loads(archive.extractfile("index.json").read())
+          assert len(local["manifests"]) == 1
+          descriptor = local["manifests"][0]
+          assert descriptor.get("platform", {}).get("os") == "linux"
+          assert descriptor.get("platform", {}).get("architecture") == "amd64"
+          remote_bytes = pathlib.Path("registry-manifest.json").read_bytes()
           remote = json.loads(remote_bytes)
-          descs = lambda x: sorted((d["digest"], d.get("platform",{}).get("os"), d.get("platform",{}).get("architecture")) for d in x["manifests"])
-          assert descs(local) == descs(remote)
-          assert local_bytes == remote_bytes
-          receipt = {"source_commit":"54ba18e26c1dfb216b06059f421cdcf68ff8d206","platform":"linux/amd64",
+          remote_digest = "sha256:" + hashlib.sha256(remote_bytes).hexdigest()
+          inspect = json.loads(pathlib.Path("registry-inspect.json").read_text())
+          assert remote_digest == descriptor["digest"] == meta["manifest_digest"]
+          assert remote["config"]["digest"] == meta["config_digest"]
+          assert inspect["Digest"] == remote_digest
+          assert inspect["Os"] == "linux" and inspect["Architecture"] == "amd64"
+          receipt = {"source_commit":meta["source_commit"],"platform":meta["platform"],
             "registry":"ghcr.io/paropeba22/nexi-evolution-s12-transport-return",
-            "tag":"54ba18e26c1dfb216b06059f421cdcf68ff8d206",
-            "index_sha256":"sha256:"+hashlib.sha256(remote_bytes).hexdigest(),"index_bytes_equal":True}
+            "tag":meta["source_commit"],"manifest_digest":remote_digest,
+            "config_digest":remote["config"]["digest"],"archive_sha256":meta["archive_sha256"],
+            "single_manifest_verified":True}
           pathlib.Path("transfer-receipt.json").write_text(json.dumps(receipt,indent=2)+"\n")
           print(json.dumps(receipt,sort_keys=True))
-          PY
-      - name: Preserve transfer receipt
+          PY      - name: Preserve transfer receipt
         uses: actions/upload-artifact@v4
         with:
           name: evolution-transport-return-ghcr-transfer-receipt-54ba18e26c1dfb216b06059f421cdcf68ff8d206
