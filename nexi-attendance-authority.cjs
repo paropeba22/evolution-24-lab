@@ -302,15 +302,22 @@ async function transportReturned(source, preparationId, consumptionId, succeeded
     const addressed = row.intent?.addressing_protocol_version === 2;
     if (addressed && (succeeded && (transportIdentity?.message_id !== row.externalId || transportIdentity?.remote_jid !== row.recipient) ||
         !succeeded && transportIdentity !== null)) fail('nexi_attendance_transport_return_identity_conflict');
-    if (row.transportReturn) return row;
+    if (row.transportReturn) {
+      if (addressed && row.transportReturn.succeeded === true)
+        await attendance().promotePendingReceipts(tx,source,row);
+      return row;
+    }
     // Json? filters reject bare null. The read above and revision/state CAS
     // already fence a concurrent return without a provider-specific JSON filter.
-    await db.updateMany({where:{id:row.id,revision:row.revision,state:'dispatch_started'},
+    const changed=await db.updateMany({where:{id:row.id,revision:row.revision,state:'dispatch_started'},
       data:{state:succeeded?'transport_returned':'outcome_unknown',transportReturn:addressed ?
         {boundary_returned:true,succeeded:!!succeeded,message_id:succeeded?transportIdentity.message_id:null,
           remote_jid:succeeded?transportIdentity.remote_jid:null} : {boundary_returned:true,succeeded:!!succeeded},
         outcomeUnknown:true,revision:{increment:1}}});
-    return db.findUnique({where:{id:row.id}});
+    if (changed.count !== 1) fail('nexi_attendance_transport_return_conflict');
+    const returned=await db.findUnique({where:{id:row.id}});
+    if (addressed && succeeded) await attendance().promotePendingReceipts(tx,source,returned);
+    return returned;
   });
 }
 function installRoute(router, monitor, guard, repository) {

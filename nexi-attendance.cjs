@@ -18,7 +18,7 @@ const ADDRESSING_PROTOCOL_VERSION = 2;
 const ADDRESSING_FIELDS = ['addressing_protocol_version', 'transport_recipient', 'addressing_representation'];
 const DISPATCH_PROOF_KEYS = ['version','protocol','preparation_id','execution_id','attempt_id','reservation_id','grant_id','release_id',
   'consumption_id','external_id','stanza_id','stanza_recipient','transport_recipient','addressing_representation',
-  'identity_version_id','session_identity','dispatch_started_at','transport_response'];
+  'identity_version_id','session_identity','dispatch_started_at','receipt_remote_jid','transport_response'];
 const COMMON = ['version', 'protocol_version', 'canonical_version', 'audience', 'provider', 'account_id', 'managed_channel_id', 'instance_id',
   'instance_lineage_id', 'session_identity', 'original_session_identity', 'sender_account_lineage_id', 'sender_attestation_id',
   'binding_generation', 'writer_epoch', 'writer_protocol_version', 'barrier_state'];
@@ -670,7 +670,8 @@ function validDispatchProof(data) {
       !(proof.addressing_representation === 'pn' && PN.test(proof.transport_recipient || '') ||
         proof.addressing_representation === 'lid' && LID.test(proof.transport_recipient || '')) ||
       !positiveInteger(proof.identity_version_id) || proof.session_identity !== data.session_identity ||
-      !Number.isSafeInteger(proof.dispatch_started_at) || proof.dispatch_started_at <= 0) return false;
+      !Number.isSafeInteger(proof.dispatch_started_at) || proof.dispatch_started_at <= 0 ||
+      proof.receipt_remote_jid !== data.remote_jid || ![PN,LID].some(pattern => pattern.test(proof.receipt_remote_jid || ''))) return false;
   const returned = proof.transport_response;
   return returned && typeof returned === 'object' && !Array.isArray(returned) &&
     Object.keys(returned).sort().join(',') === 'message_id,remote_jid' && returned.message_id === data.external_id &&
@@ -976,10 +977,11 @@ function normalization(type) {
 function numericNormalization(status) {
   return Number.isInteger(status) ? ['ERROR', 'PENDING', 'SERVER_ACK', 'DELIVERY_ACK', 'READ', 'PLAYED'][status] || 'UNKNOWN' : 'UNKNOWN';
 }
-function dispatchProof(row, context, externalId) {
+function dispatchProof(row, context, externalId, observedRemoteJid) {
   const intent = row?.intent, released = row?.releasedAuthority, grant = released?.grant, release = released?.release;
   if (!row?.dispatchStartedAt || !row.outcomeUnknown || !['dispatch_started','transport_returned','outcome_unknown'].includes(row.state) ||
       intent?.addressing_protocol_version !== ADDRESSING_PROTOCOL_VERSION || !validAddressing(intent) ||
+      ![PN,LID].some(pattern => pattern.test(observedRemoteJid || '')) ||
       row.externalId !== externalId || row.recipient !== intent.transport_recipient || row.sessionIdentity !== context.session_identity ||
       row.consumptionId !== released?.consumption_id || canonicalJson.digest(grant) !== released?.grant_digest ||
       canonicalJson.digest(release) !== released?.release_digest ||
@@ -999,14 +1001,14 @@ function dispatchProof(row, context, externalId) {
     consumption_id:row.consumptionId,external_id:row.externalId,stanza_id:row.externalId,stanza_recipient:row.recipient,
     transport_recipient:intent.transport_recipient,addressing_representation:intent.addressing_representation,
     identity_version_id:intent.identity_version_id,session_identity:row.sessionIdentity,
-    dispatch_started_at:+row.dispatchStartedAt,transport_response:transportResponse};
+    dispatch_started_at:+row.dispatchStartedAt,receipt_remote_jid:observedRemoteJid,transport_response:transportResponse};
 }
-async function receiptDispatchProofs(source, ids, context) {
+async function receiptDispatchProofs(source, ids, context, observedRemoteJid) {
   const externalIds = [...new Set(ids)].filter(id => typeof id === 'string' && /^[A-Za-z0-9_-]{1,512}$/.test(id));
   if (!externalIds.length) return new Map();
   const rows = await source.prismaRepository.nexiAttendancePreparation.findMany({where:{
     instanceId:source.instanceId,externalId:{in:externalIds},dispatchStartedAt:{not:null}}});
-  return new Map(rows.map(row => [row.externalId, dispatchProof(row, context, row.externalId)]).filter(([,proof]) => proof));
+  return new Map(rows.map(row => [row.externalId, dispatchProof(row, context, row.externalId, observedRemoteJid)]).filter(([,proof]) => proof));
 }
 function normalizeReceipt(context, attrs, key, ids, capturedAt = Date.now(), dispatchProofs = new Map()) {
   if (!context || !HASH.test(context.session_identity || '') || ![PN, LID].some(r => r.test(jid(key.remoteJid) || '')) ||
@@ -1052,6 +1054,43 @@ async function trip(source, reason) {
   try { await work; } catch { /* explicit gap remains */ }
   finally { healthWrites.delete(source.instanceId); }
 }
+async function persistPromotedReceipt(tx, source, preparation, journal) {
+  const original = journal?.evidence;
+  if (!original || original.dispatch_proof !== null || original.from_me !== true ||
+      original.external_id !== preparation.externalId || original.session_identity !== preparation.sessionIdentity ||
+      journal.instanceId !== source.instanceId || journal.externalId !== preparation.externalId ||
+      journal.sessionIdentity !== preparation.sessionIdentity || journal.fingerprint !== digest(original) ||
+      ![PN,LID].some(pattern => pattern.test(original.remote_jid || ''))) return null;
+  const proof = dispatchProof(preparation, original, original.external_id, original.remote_jid);
+  if (!proof) return null;
+  // Promotion creates new immutable evidence. The original null-proof journal
+  // remains the durable receipt captured before the transport method returned.
+  const material = {...original,journal_id:null,dispatch_proof:proof};
+  const sourceKey = digest({...material,captured_at:null});
+  const previous = await tx.nexiReceiptJournal.findUnique({where:{instanceId_sourceKey:{
+    instanceId:source.instanceId,sourceKey}}});
+  if (previous) { canonicalVersion(previous.canonicalVersion, source); return previous; }
+  const id=randomUUID(), evidence={...material,journal_id:id};
+  const promoted=await tx.nexiReceiptJournal.create({data:{id,canonicalVersion:CANONICAL_VERSION,instanceId:source.instanceId,
+    sessionIdentity:preparation.sessionIdentity,sourceKey,fingerprint:digest(evidence),externalId:evidence.external_id,
+    normalizedStatus:evidence.normalized_status,evidence}});
+  await enqueue(tx,source,original,'attendance.receipt.observed',evidence,sourceKey);
+  return promoted;
+}
+async function promotePendingReceipts(tx, source, preparation, candidates = null) {
+  if (preparation?.intent?.addressing_protocol_version !== ADDRESSING_PROTOCOL_VERSION ||
+      preparation?.transportReturn?.boundary_returned !== true || preparation.transportReturn.succeeded !== true ||
+      preparation.transportReturn.message_id !== preparation.externalId ||
+      preparation.transportReturn.remote_jid !== preparation.recipient) return [];
+  const journals=candidates || await tx.nexiReceiptJournal.findMany({where:{instanceId:source.instanceId,
+    externalId:preparation.externalId},orderBy:{createdAt:'asc'},take:128});
+  const promoted=[];
+  for (const journal of journals) {
+    const result=await persistPromotedReceipt(tx,source,preparation,journal);
+    if (result) promoted.push(result);
+  }
+  return promoted;
+}
 async function append(source, context, item, limits) {
   const repo = source.receiptRepository;
   if (!repo) fail('nexi_attendance_receipt_repository_unavailable');
@@ -1066,14 +1105,27 @@ async function append(source, context, item, limits) {
       await tx.$executeRawUnsafe(`SET LOCAL statement_timeout = ${limits.statementMs}`);
       await tx.$executeRawUnsafe(`SET LOCAL lock_timeout = ${limits.lockMs}`);
     }
+    let preparation=await tx.nexiAttendancePreparation.findUnique({where:{instanceId_externalId:{
+      instanceId:source.instanceId,externalId:item.evidence.external_id}}});
+    if (preparation?.intent?.addressing_protocol_version === ADDRESSING_PROTOCOL_VERSION) {
+      // A no-value-change UPDATE takes the preparation row lock. It serializes
+      // receipt persistence with transportReturned, closing both race orders.
+      await tx.nexiAttendancePreparation.updateMany({where:{id:preparation.id},data:{revision:{increment:0}}});
+      preparation=await tx.nexiAttendancePreparation.findUnique({where:{id:preparation.id}});
+    }
     const previous = await tx.nexiReceiptJournal.findUnique({ where: { instanceId_sourceKey: {
       instanceId: source.instanceId, sourceKey: item.sourceKey } } });
-    if (previous) { canonicalVersion(previous.canonicalVersion, source); return previous; }
+    if (previous) {
+      canonicalVersion(previous.canonicalVersion, source);
+      if (preparation) await promotePendingReceipts(tx,source,preparation,[previous]);
+      return previous;
+    }
     const id = randomUUID(), evidence = { ...item.evidence, journal_id: id };
     const row = await tx.nexiReceiptJournal.create({ data: { id, canonicalVersion: CANONICAL_VERSION, instanceId: source.instanceId,
       sessionIdentity: context.session_identity, sourceKey: item.sourceKey, fingerprint: digest(evidence),
       externalId: evidence.external_id, normalizedStatus: evidence.normalized_status, evidence } });
     await enqueue(tx, source, context, 'attendance.receipt.observed', evidence, item.sourceKey);
+    if (preparation) await promotePendingReceipts(tx,source,preparation,[row]);
     return row;
   }, { maxWait: limits.acquireMs, timeout: Math.min(limits.statementMs, limits.deadlineMs) });
 }
@@ -1182,7 +1234,7 @@ async function capture(config, attrs, key, ids, normalize = normalizeReceipt) {
   }
   let evidence;
   let dispatchProofs = new Map();
-  try { dispatchProofs = await receiptDispatchProofs(source, ids, context); }
+  try { dispatchProofs = await receiptDispatchProofs(source, ids, context, jid(key?.remoteJid)); }
   catch { receiptTrace(source, 'pre_buffer', { reason: 'dispatch_proof_unavailable' }); }
   try { evidence = normalize(context, attrs, key, ids, Date.now(), dispatchProofs); }
   catch (error) { receiptTrace(source, 'pre_buffer', { reason: 'normalization_failed' }); throw error; }
@@ -2016,5 +2068,6 @@ module.exports = { canonical, digest, eventPayload, settings, assertConfiguratio
   drain, installRoutes, requestMaterial, common, prepareClaims, rawNodeForInstance, rawNodeForSocket, trackSocket, writerIsolation, writerProbeTrace,
   captureContextSnapshot, captureContextCurrent, installCaptureContext,
   append, enqueue, inheritConfig, boundedMariaDb, recoverPreparation, semanticPurpose, markInternalControl,
+  promotePendingReceipts,
   normalizeBadAck, captureBadAck, canonicalBytes, CANONICAL_VERSION, ID_PREFIX,
   beginRelay, encodingInput, patchEncoding, encodeMessage, snapshotFrame, signEnvelope, verifyEnvelope, releasedGrantCapability, boundary, envelopeSecret };
