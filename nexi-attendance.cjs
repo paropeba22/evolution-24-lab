@@ -1110,9 +1110,12 @@ async function append(source, context, item, limits) {
     let preparation=await tx.nexiAttendancePreparation.findUnique({where:{instanceId_externalId:{
       instanceId:source.instanceId,externalId:item.evidence.external_id}}});
     if (preparation?.intent?.addressing_protocol_version === ADDRESSING_PROTOCOL_VERSION) {
-      // A no-value-change UPDATE takes the preparation row lock. It serializes
-      // receipt persistence with transportReturned, closing both race orders.
-      await tx.nexiAttendancePreparation.updateMany({where:{id:preparation.id},data:{revision:{increment:0}}});
+      // Use the same provider-aware row lock as dispatchStart/expiryReadback.
+      // The immutable preparation guard rejects every UPDATE without revision+1.
+      const locked=await tx.$queryRawUnsafe(provider === 'mysql' ?
+        'SELECT id FROM NexiAttendancePreparation WHERE id=? FOR UPDATE' :
+        'SELECT id FROM "NexiAttendancePreparation" WHERE id=$1 FOR UPDATE',preparation.id);
+      if (!Array.isArray(locked) || locked.length !== 1) fail('nexi_attendance_receipt_preparation_unresolved');
       preparation=await tx.nexiAttendancePreparation.findUnique({where:{id:preparation.id}});
     }
     const previous = await tx.nexiReceiptJournal.findUnique({ where: { instanceId_sourceKey: {
