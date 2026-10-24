@@ -13,6 +13,9 @@ const GRANT_KEYS = ['grant_id','admission_id','request_id','request_digest','aut
   'execution_id','message_id','transport_unit_index','attempt_id','reservation_id','external_id','preparation_id','preparation_digest',
   'prepared_content_digest','identity_version_id','instance_lineage_id','sender_account_lineage_id','session_identity','writer_epoch',
   'binding_generation','expires_at','scope','physical_dispatch'];
+const ADDRESSING_GRANT_KEYS = ['addressing_protocol_version','transport_recipient','addressing_representation'];
+const PN = /^[1-9]\d{7,14}@s\.whatsapp\.net$/;
+const LID = /^\d{1,20}@lid$/;
 const RELEASE_KEYS = ['release_id','request_id','request_digest','grant_id','grant_digest','attempt_id','reservation_id','external_id',
   'preparation_id','preparation_digest','deadline','decision','grant_state'];
 function attendance() { return require('./nexi-attendance.cjs'); }
@@ -54,8 +57,11 @@ function claims(source, envelope, now = Date.now()) {
   return value;
 }
 function material(value) {
+  const addressed = Object.hasOwn(value?.grant || {}, 'addressing_protocol_version');
+  const grantKeys = [...GRANT_KEYS,...(addressed ? ADDRESSING_GRANT_KEYS : []),
+    ...(Object.hasOwn(value?.grant || {}, 'isolated_operation') ? ['isolated_operation'] : [])];
   if (!exact(value, ['consumption_id','grant','grant_digest','release','release_digest']) || !UUID.test(value.consumption_id || '') ||
-      !exact(value.grant, Object.hasOwn(value.grant || {}, 'isolated_operation') ? [...GRANT_KEYS,'isolated_operation'] : GRANT_KEYS) || !exact(value.release, RELEASE_KEYS) ||
+      !exact(value.grant, grantKeys) || !exact(value.release, RELEASE_KEYS) ||
       canonical.digest(value.grant) !== value.grant_digest || canonical.digest(value.release) !== value.release_digest)
     fail('nexi_attendance_authority_material_conflict');
   const g = value.grant, r = value.release;
@@ -67,6 +73,9 @@ function material(value) {
       typeof g.external_id !== 'string' || !g.external_id.length || Buffer.byteLength(g.external_id) > 512 || g.external_id.includes('\0') ||
       !((g.scope === 'attendance_release_v1' && g.physical_dispatch === false) ||
         (g.scope === 'attendance_dispatch_v1' && g.physical_dispatch === true)) ||
+      addressed && !(g.addressing_protocol_version === 2 &&
+        (g.addressing_representation === 'pn' && PN.test(g.transport_recipient || '') ||
+         g.addressing_representation === 'lid' && LID.test(g.transport_recipient || ''))) ||
       !UUID.test(r.release_id || '') || !UUID.test(r.request_id || '') || !HASH.test(r.request_digest || '') ||
       r.decision !== 'released' || r.grant_state !== 'release_committed' || !Number.isSafeInteger(r.deadline) || r.deadline <= 0 || r.deadline > g.expires_at ||
       !['grant_id','attempt_id','reservation_id','external_id','preparation_id','preparation_digest'].every(k => r[k] === g[k]) || r.grant_digest !== value.grant_digest ||
@@ -76,6 +85,7 @@ function material(value) {
 }
 function binding(source, row, m) {
   const g = m.grant, a = row.authority;
+  const addressed = Object.hasOwn(g, 'addressing_protocol_version');
   if (row.canonicalVersion !== canonical.VERSION || row.instanceId !== source.instanceId || row.instanceName !== source.instance.name ||
       row.id !== g.preparation_id || row.executionId !== g.execution_id || row.transportUnit !== g.transport_unit_index ||
       row.attemptId !== g.attempt_id || row.reservationId !== g.reservation_id || row.externalId !== g.external_id ||
@@ -83,6 +93,9 @@ function binding(source, row, m) {
       row.preparationDigest !== g.preparation_digest || row.contentDigest !== g.prepared_content_digest ||
       (g.physical_dispatch && !physicalDispatchEnabled(source, {...row,releasedAuthority:m})) ||
       row.intent.identity_version_id !== g.identity_version_id || !row.frozenAt ||
+      addressed && (row.intent.addressing_protocol_version !== g.addressing_protocol_version ||
+        row.intent.transport_recipient !== g.transport_recipient || row.intent.addressing_representation !== g.addressing_representation ||
+        row.recipient !== g.transport_recipient) ||
       !['account_id','managed_channel_id','instance_lineage_id','sender_account_lineage_id','session_identity','writer_epoch','binding_generation'].every(k => a[k] === g[k]) ||
       row.contentDigest !== canonical.digest({ intent:row.intent, attempt_id:row.attemptId, reservation_id:row.reservationId,
         external_id:row.externalId, authority:a }) || row.preparationDigest !== canonical.digest({ content_digest:row.contentDigest,
@@ -118,13 +131,18 @@ function readbackResult(row, m) {
   if (returned == null) return observed;
   // Only the immutable local method result is exposed. This is never a
   // WhatsApp ACK/receipt, delivery claim or authority for a second dispatch.
-  if (!exact(returned, ['boundary_returned','succeeded']) || returned.boundary_returned !== true ||
+  const addressed = Object.hasOwn(m.grant, 'addressing_protocol_version');
+  const keys = addressed ? ['boundary_returned','succeeded','message_id','remote_jid'] : ['boundary_returned','succeeded'];
+  if (!exact(returned, keys) || returned.boundary_returned !== true ||
       typeof returned.succeeded !== 'boolean' || observed.physical_dispatch !== true || observed.outcome_unknown !== true ||
       !Number.isSafeInteger(observed.consumed_at) || observed.consumed_at <= 0 ||
       !Number.isSafeInteger(observed.dispatch_started_at) || observed.dispatch_started_at < observed.consumed_at ||
-      observed.state !== (returned.succeeded ? 'transport_returned' : 'outcome_unknown'))
+      observed.state !== (returned.succeeded ? 'transport_returned' : 'outcome_unknown') ||
+      addressed && !((!returned.succeeded && returned.message_id === null && returned.remote_jid === null) ||
+        (returned.succeeded && returned.message_id === m.grant.external_id && returned.remote_jid === m.grant.transport_recipient)))
     fail('nexi_attendance_transport_return_unproved');
-  return {...observed, transport_return:{boundary_returned:true, succeeded:returned.succeeded}};
+  return {...observed, transport_return:addressed ? {boundary_returned:true,succeeded:returned.succeeded,
+    message_id:returned.message_id,remote_jid:returned.remote_jid} : {boundary_returned:true, succeeded:returned.succeeded}};
 }
 function replay(row, m) {
   if (row.consumptionId !== m.consumption_id || row.consumptionDigest !== canonical.digest(m) ||
@@ -275,17 +293,22 @@ async function dispatchStart(source, preparationId, consumptionId, stanza) {
   if (result.started && !attendance().captureContextCurrent(snapshot, true)) fail('nexi_attendance_capture_context_superseded');
   return result;
 }
-async function transportReturned(source, preparationId, consumptionId, succeeded) {
+async function transportReturned(source, preparationId, consumptionId, succeeded, transportIdentity = null) {
   // A method return/error is separate evidence, never SERVER_ACK/not-sent.
   return source.prismaRepository.$transaction(async tx => {
     await storageGuard(tx);
     const db=tx.nexiAttendancePreparation, row=await db.findUnique({where:{id:preparationId}});
     if (!row?.dispatchStartedAt || row.consumptionId!==consumptionId) fail('nexi_attendance_transport_return_unstarted');
+    const addressed = row.intent?.addressing_protocol_version === 2;
+    if (addressed && (succeeded && (transportIdentity?.message_id !== row.externalId || transportIdentity?.remote_jid !== row.recipient) ||
+        !succeeded && transportIdentity !== null)) fail('nexi_attendance_transport_return_identity_conflict');
     if (row.transportReturn) return row;
     // Json? filters reject bare null. The read above and revision/state CAS
     // already fence a concurrent return without a provider-specific JSON filter.
     await db.updateMany({where:{id:row.id,revision:row.revision,state:'dispatch_started'},
-      data:{state:succeeded?'transport_returned':'outcome_unknown',transportReturn:{boundary_returned:true,succeeded:!!succeeded},
+      data:{state:succeeded?'transport_returned':'outcome_unknown',transportReturn:addressed ?
+        {boundary_returned:true,succeeded:!!succeeded,message_id:succeeded?transportIdentity.message_id:null,
+          remote_jid:succeeded?transportIdentity.remote_jid:null} : {boundary_returned:true,succeeded:!!succeeded},
         outcomeUnknown:true,revision:{increment:1}}});
     return db.findUnique({where:{id:row.id}});
   });

@@ -14,6 +14,11 @@ const LID = /^\d{1,20}@lid$/;
 const ID_PREFIX = '3EB0A77E1B'; // Denial marker; never permission to send/retry.
 const MAX_ATTEMPTS = 12; // Accepted persistent Groups outbox retry ceiling.
 const BARRIER_STATES = ['staged', 'fencing', 'active', 'pause_requested', 'paused', 'retired', 'unresolved'];
+const ADDRESSING_PROTOCOL_VERSION = 2;
+const ADDRESSING_FIELDS = ['addressing_protocol_version', 'transport_recipient', 'addressing_representation'];
+const DISPATCH_PROOF_KEYS = ['version','protocol','preparation_id','execution_id','attempt_id','reservation_id','grant_id','release_id',
+  'consumption_id','external_id','stanza_id','stanza_recipient','transport_recipient','addressing_representation',
+  'identity_version_id','session_identity','dispatch_started_at','transport_response'];
 const COMMON = ['version', 'protocol_version', 'canonical_version', 'audience', 'provider', 'account_id', 'managed_channel_id', 'instance_id',
   'instance_lineage_id', 'session_identity', 'original_session_identity', 'sender_account_lineage_id', 'sender_attestation_id',
   'binding_generation', 'writer_epoch', 'writer_protocol_version', 'barrier_state'];
@@ -30,7 +35,7 @@ const FIELDS = {
     'external_id', 'recipient', 'identity_version_id', 'preparation_id', 'preparation_nonce', 'revision', 'content_digest',
     'authority_digest', 'preparation_digest', 'observed_at']),
   'attendance.receipt.observed': COMMON.concat(['journal_id', 'external_id', 'remote_jid', 'participant', 'from_me',
-    'direction', 'semantic_class', 'normalized_status', 'receipt_timestamp', 'captured_at', 'protocol_metadata']),
+    'direction', 'semantic_class', 'normalized_status', 'receipt_timestamp', 'captured_at', 'protocol_metadata', 'dispatch_proof']),
   'attendance.media.request': COMMON.concat(['inbox_id','execution_id','attempt_id','preparation_id','reservation_id','external_id','grant_id','release_id']),
 };
 const configs = new WeakMap();
@@ -586,6 +591,9 @@ function eventPayload(event, data) {
   const renewalContext = event === 'attendance.writer.context.request' && data && Object.hasOwn(data, 'previous_sender_attestation_id');
   let fields = operationContext ? FIELDS[event].concat('isolated_authorization_id') : FIELDS[event];
   if (renewalContext) fields = fields.concat('previous_sender_attestation_id');
+  const addressed = (event === 'attendance.foundation.request' || event === 'attendance.transport.prepared') &&
+    data && Object.hasOwn(data, 'addressing_protocol_version');
+  if (addressed) fields = fields.concat(ADDRESSING_FIELDS);
   if (!fields || !data || Object.keys(data).sort().join(',') !== [...fields].sort().join(',') ||
       data.version !== 1 || (data.protocol_version !== undefined && data.protocol_version !== 1)) fail('nexi_attendance_contract_unsupported');
   canonicalVersion(data.canonical_version);
@@ -616,7 +624,8 @@ function eventPayload(event, data) {
     if (event === 'attendance.foundation.request' || event === 'attendance.transport.prepared') {
       if (!UUID.test(data.execution_id || '') || !Number.isSafeInteger(data.transport_unit) || data.transport_unit < 0 ||
           !UUID.test(data.preparation_id || '') || !external(data.external_id) || !PN.test(data.recipient || '') ||
-          !positive(data.identity_version_id) || !HASH.test(data.authority_digest || '')) fail('nexi_attendance_contract_invalid');
+          !positive(data.identity_version_id) || !HASH.test(data.authority_digest || '') ||
+          addressed && !validAddressing(data)) fail('nexi_attendance_contract_invalid');
       if (event === 'attendance.foundation.request') {
         if (!['attempt', 'reserve', 'readback', 'close_collision'].includes(data.action) || !UUID.test(data.request_id || '') ||
             !(data.action === 'attempt' && data.attempt_id === null || UUID.test(data.attempt_id || '')) ||
@@ -638,12 +647,36 @@ function eventPayload(event, data) {
         data.direction !== (data.from_me ? 'outgoing' : 'incoming') || !['ERROR', 'SERVER_ACK', 'DELIVERY_ACK', 'READ', 'PLAYED', 'UNKNOWN'].includes(data.normalized_status) ||
         (!data.from_me && data.normalized_status !== 'UNKNOWN') || !/^[a-z-]{1,32}$/.test(data.semantic_class || '') ||
         !(data.receipt_timestamp === null || Number.isSafeInteger(data.receipt_timestamp) && data.receipt_timestamp >= 0) ||
-        !positive(data.captured_at) || !receiptMetadata(data))
+        !positive(data.captured_at) || !receiptMetadata(data) || !validDispatchProof(data))
       fail('nexi_attendance_contract_invalid');
   }
   if (Buffer.byteLength(JSON.stringify(normalized)) > 16384) fail('nexi_attendance_event_limit');
   return normalized;
 }
+function validAddressing(value) {
+  const recipient = value.transport_recipient, representation = value.addressing_representation;
+  return value.addressing_protocol_version === ADDRESSING_PROTOCOL_VERSION && recipient === value.recipient &&
+    (representation === 'pn' && PN.test(recipient || '') || representation === 'lid' && LID.test(recipient || ''));
+}
+function validDispatchProof(data) {
+  const proof = data.dispatch_proof;
+  if (proof === null) return true;
+  if (!data.from_me || !proof || typeof proof !== 'object' || Array.isArray(proof) ||
+      Object.keys(proof).sort().join(',') !== [...DISPATCH_PROOF_KEYS].sort().join(',') || proof.version !== 1 ||
+      proof.protocol !== 'nexi-attendance-dispatch-binding-v2' ||
+      !['preparation_id','execution_id','attempt_id','reservation_id','grant_id','release_id','consumption_id'].every(k => UUID.test(proof[k] || '')) ||
+      proof.external_id !== data.external_id || proof.stanza_id !== data.external_id ||
+      proof.stanza_recipient !== proof.transport_recipient || !['pn','lid'].includes(proof.addressing_representation) ||
+      !(proof.addressing_representation === 'pn' && PN.test(proof.transport_recipient || '') ||
+        proof.addressing_representation === 'lid' && LID.test(proof.transport_recipient || '')) ||
+      !positiveInteger(proof.identity_version_id) || proof.session_identity !== data.session_identity ||
+      !Number.isSafeInteger(proof.dispatch_started_at) || proof.dispatch_started_at <= 0) return false;
+  const returned = proof.transport_response;
+  return returned && typeof returned === 'object' && !Array.isArray(returned) &&
+    Object.keys(returned).sort().join(',') === 'message_id,remote_jid' && returned.message_id === data.external_id &&
+    returned.remote_jid === proof.transport_recipient;
+}
+function positiveInteger(value) { return Number.isSafeInteger(value) && value > 0; }
 function receiptMetadata(data) {
   const metadata = data.protocol_metadata;
   if (!metadata || metadata.protocol !== 'baileys-7.0.0-rc13') return false;
@@ -943,7 +976,39 @@ function normalization(type) {
 function numericNormalization(status) {
   return Number.isInteger(status) ? ['ERROR', 'PENDING', 'SERVER_ACK', 'DELIVERY_ACK', 'READ', 'PLAYED'][status] || 'UNKNOWN' : 'UNKNOWN';
 }
-function normalizeReceipt(context, attrs, key, ids, capturedAt = Date.now()) {
+function dispatchProof(row, context, externalId) {
+  const intent = row?.intent, released = row?.releasedAuthority, grant = released?.grant, release = released?.release;
+  if (!row?.dispatchStartedAt || !row.outcomeUnknown || !['dispatch_started','transport_returned','outcome_unknown'].includes(row.state) ||
+      intent?.addressing_protocol_version !== ADDRESSING_PROTOCOL_VERSION || !validAddressing(intent) ||
+      row.externalId !== externalId || row.recipient !== intent.transport_recipient || row.sessionIdentity !== context.session_identity ||
+      row.consumptionId !== released?.consumption_id || canonicalJson.digest(grant) !== released?.grant_digest ||
+      canonicalJson.digest(release) !== released?.release_digest ||
+      !['preparation_id','execution_id','attempt_id','reservation_id','grant_id'].every(key => UUID.test(grant?.[key] || '')) ||
+      !UUID.test(release?.release_id || '') || !UUID.test(row.consumptionId || '') ||
+      grant.preparation_id !== row.id || grant.execution_id !== row.executionId || grant.attempt_id !== row.attemptId ||
+      grant.reservation_id !== row.reservationId || grant.external_id !== row.externalId || release.external_id !== row.externalId ||
+      release.preparation_id !== row.id || release.attempt_id !== row.attemptId || release.reservation_id !== row.reservationId ||
+      grant.identity_version_id !== intent.identity_version_id || grant.session_identity !== row.sessionIdentity ||
+      ADDRESSING_FIELDS.some(key => grant[key] !== intent[key])) return null;
+  const returned = row.transportReturn;
+  if (returned?.boundary_returned !== true || returned.succeeded !== true || returned.message_id !== row.externalId ||
+      returned.remote_jid !== row.recipient) return null;
+  const transportResponse = {message_id:returned.message_id,remote_jid:returned.remote_jid};
+  return {version:1,protocol:'nexi-attendance-dispatch-binding-v2',preparation_id:row.id,execution_id:row.executionId,
+    attempt_id:row.attemptId,reservation_id:row.reservationId,grant_id:grant.grant_id,release_id:release.release_id,
+    consumption_id:row.consumptionId,external_id:row.externalId,stanza_id:row.externalId,stanza_recipient:row.recipient,
+    transport_recipient:intent.transport_recipient,addressing_representation:intent.addressing_representation,
+    identity_version_id:intent.identity_version_id,session_identity:row.sessionIdentity,
+    dispatch_started_at:+row.dispatchStartedAt,transport_response:transportResponse};
+}
+async function receiptDispatchProofs(source, ids, context) {
+  const externalIds = [...new Set(ids)].filter(id => typeof id === 'string' && /^[A-Za-z0-9_-]{1,512}$/.test(id));
+  if (!externalIds.length) return new Map();
+  const rows = await source.prismaRepository.nexiAttendancePreparation.findMany({where:{
+    instanceId:source.instanceId,externalId:{in:externalIds},dispatchStartedAt:{not:null}}});
+  return new Map(rows.map(row => [row.externalId, dispatchProof(row, context, row.externalId)]).filter(([,proof]) => proof));
+}
+function normalizeReceipt(context, attrs, key, ids, capturedAt = Date.now(), dispatchProofs = new Map()) {
   if (!context || !HASH.test(context.session_identity || '') || ![PN, LID].some(r => r.test(jid(key.remoteJid) || '')) ||
       typeof key.fromMe !== 'boolean' || !Array.isArray(ids) || ids.length > 128) return [];
   const semantic = attrs.type == null ? 'no-type' : /^[a-z-]{1,32}$/.test(attrs.type) ? attrs.type : 'unrecognized';
@@ -954,16 +1019,17 @@ function normalizeReceipt(context, attrs, key, ids, capturedAt = Date.now()) {
       participant: participant && [PN, LID].some(r => r.test(participant)) ? participant : null, from_me: key.fromMe,
       direction: key.fromMe ? 'outgoing' : 'incoming', semantic_class: semantic,
       normalized_status: key.fromMe ? normalization(attrs.type) : 'UNKNOWN', receipt_timestamp: timestamp,
-      captured_at: capturedAt, protocol_metadata: { origin: 'baileys.handleReceipt.pre_buffer', protocol: 'baileys-7.0.0-rc13' } };
+      captured_at: capturedAt, protocol_metadata: { origin: 'baileys.handleReceipt.pre_buffer', protocol: 'baileys-7.0.0-rc13' },
+      dispatch_proof: key.fromMe ? dispatchProofs.get(externalId) || null : null };
     // Capture time/UUID do not alter source dedupe. Missing timestamp stays
     // explicit; neither a direction guess nor numeric fallback promotes ACK.
     const sourceKey = digest({ ...evidence, journal_id: null, captured_at: null });
     return { sourceKey, evidence };
   });
 }
-function normalizeBadAck(context, attrs, key, ids, capturedAt = Date.now()) {
+function normalizeBadAck(context, attrs, key, ids, capturedAt = Date.now(), dispatchProofs = new Map()) {
   if (!attrs.error) return [];
-  return normalizeReceipt(context, attrs, key, ids, capturedAt).map(item => {
+  return normalizeReceipt(context, attrs, key, ids, capturedAt, dispatchProofs).map(item => {
     const evidence = { ...item.evidence, semantic_class: 'message-ack-error',
       normalized_status: key.fromMe ? 'ERROR' : 'UNKNOWN', protocol_metadata: {
         origin: 'baileys.handleBadAck.pre_buffer', protocol: 'baileys-7.0.0-rc13',
@@ -1115,7 +1181,10 @@ async function capture(config, attrs, key, ids, normalize = normalizeReceipt) {
     }
   }
   let evidence;
-  try { evidence = normalize(context, attrs, key, ids); }
+  let dispatchProofs = new Map();
+  try { dispatchProofs = await receiptDispatchProofs(source, ids, context); }
+  catch { receiptTrace(source, 'pre_buffer', { reason: 'dispatch_proof_unavailable' }); }
+  try { evidence = normalize(context, attrs, key, ids, Date.now(), dispatchProofs); }
   catch (error) { receiptTrace(source, 'pre_buffer', { reason: 'normalization_failed' }); throw error; }
   if (ids.length > 128) worker.gap('receipt_packet_limit');
   if (ids.length && !evidence.length) receiptTrace(source, 'pre_buffer', { reason: 'normalization_empty' });
@@ -1275,18 +1344,26 @@ function installCaptureContext(snapshot, writerProbe = null) {
 function validateIntent(context, intent) {
   canonicalVersion(context?.canonical_version);
   canonicalVersion(intent?.canonical_version);
-  const fields = ['canonical_version', 'execution_id', 'transport_unit', 'authority_digest', 'payload_digest', 'identity_version_id', 'recipient', 'payload'];
+  const addressed = intent && Object.hasOwn(intent, 'addressing_protocol_version');
+  const fields = ['canonical_version', 'execution_id', 'transport_unit', 'authority_digest', 'payload_digest', 'identity_version_id', 'recipient', 'payload']
+    .concat(addressed ? ADDRESSING_FIELDS : []);
   if (intent && digest(intent.payload) !== intent.payload_digest) {
     log({}, 'attendance.canonical_digest.mismatch'); fail('nexi_attendance_intent_digest_conflict');
   }
   if (!intent || Object.keys(intent).sort().join(',') !== fields.sort().join(',') || !UUID.test(intent.execution_id || '') ||
       !Number.isSafeInteger(intent.transport_unit) || intent.transport_unit < 0 || !HASH.test(intent.authority_digest || '') ||
       !HASH.test(intent.payload_digest || '') || digest(intent.payload) !== intent.payload_digest || !PN.test(intent.recipient || '') ||
+      addressed && !validAddressing(intent) ||
       !Number.isSafeInteger(intent.identity_version_id) || intent.identity_version_id <= 0 ||
       !UUID.test(context.instance_lineage_id || '') || !UUID.test(context.sender_account_lineage_id || '') ||
       !UUID.test(context.sender_attestation_id || '') || context.current_session !== true || context.channel_state !== 'active' ||
       !['staged', 'active'].includes(context.barrier_state) || !Number.isSafeInteger(context.writer_epoch) ||
       context.writer_epoch <= 0 || Buffer.byteLength(JSON.stringify(intent)) > 1048576) fail('nexi_attendance_intent_unresolved');
+}
+function addressingMaterial(intent) {
+  if (!intent || !Object.hasOwn(intent, 'addressing_protocol_version')) return {};
+  if (!validAddressing(intent)) fail('nexi_attendance_intent_unresolved');
+  return Object.fromEntries(ADDRESSING_FIELDS.map(key => [key, intent[key]]));
 }
 function requestMaterial(row, action) {
   return { ...common(row.authority), action, request_id: row.requests[action], execution_id: row.executionId,
@@ -1294,7 +1371,7 @@ function requestMaterial(row, action) {
     attempt_id: action === 'attempt' ? null : row.attemptId, transport_unit: row.transportUnit,
     external_id: row.externalId, authority_digest: row.authorityDigest, payload_digest: row.payloadDigest,
     preparation_id: row.id, preparation_nonce_digest: digest(row.preparationNonce), recipient: row.recipient,
-    identity_version_id: row.intent.identity_version_id };
+    identity_version_id: row.intent.identity_version_id, ...addressingMaterial(row.intent) };
 }
 async function compareUpdate(db, row, changes) {
   const updated = await db.updateMany({ where: { id: row.id, revision: row.revision, state: row.state },
@@ -1359,6 +1436,7 @@ async function prepare(source, row, requestImpl = request) {
     if (result.outcome !== 'attempt_registered' || !UUID.test(result.attempt_id || '') || result.external_id !== row.externalId ||
         result.authority_digest !== row.authorityDigest || result.payload_digest !== row.payloadDigest ||
         result.recipient !== row.recipient || result.identity_version_id !== row.intent.identity_version_id ||
+        Object.entries(addressingMaterial(row.intent)).some(([key,value]) => result[key] !== value) ||
         result.preparation_id !== row.id || result.physical_dispatch !== false)
       fail('nexi_attendance_attempt_response_conflict');
     row = await compareUpdate(db, row, { attemptId: result.attempt_id });
@@ -1402,6 +1480,7 @@ async function prepare(source, row, requestImpl = request) {
       original_session_identity: row.sessionIdentity,
       execution_id: row.executionId, attempt_id: row.attemptId, transport_unit: row.transportUnit, reservation_id: row.reservationId,
       external_id: row.externalId, recipient: row.recipient, identity_version_id: row.intent.identity_version_id,
+      ...addressingMaterial(row.intent),
       preparation_id: row.id, preparation_nonce: row.preparationNonce, revision: row.preparationRevision,
       content_digest: contentDigest, authority_digest: row.authorityDigest, preparation_digest: preparationDigest,
       observed_at: +current.frozenAt }, digest(['preparation', row.id]));

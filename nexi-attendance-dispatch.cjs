@@ -58,18 +58,20 @@ async function dispatch(source, material, fetchImpl = fetch) {
   if (quote && (typeof quote.id !== 'string' || !/^[A-Za-z0-9_-]{1,512}$/.test(quote.id) ||
       typeof quote.from_me !== 'boolean' || typeof quote.body !== 'string')) fail('nexi_attendance_reply_invalid');
   const quoted = quote ? {key:{id:quote.id,remoteJid:row.recipient,fromMe:quote.from_me},message:{conversation:quote.body}} : undefined;
+  let transportIdentity = null;
   try {
     await attendance.releasedGrantCapability(source,row.id,material.consumption_id,async () => {
       const returned = await source.service.client.sendMessage(row.recipient,message,{messageId:row.externalId,...(quoted?{quoted}:{})});
       if (returned?.key?.id !== row.externalId || returned?.key?.remoteJid !== row.recipient) fail('nexi_attendance_transport_identity_conflict');
+      transportIdentity = {message_id:returned.key.id,remote_jid:returned.key.remoteJid};
     });
     row = await db.findUnique({where:{id:row.id}});
     if (!row.dispatchStartedAt) fail('nexi_attendance_dispatch_boundary_missing');
-    await authority.transportReturned(source,row.id,material.consumption_id,true);
+    await authority.transportReturned(source,row.id,material.consumption_id,true,transportIdentity);
   } catch (error) {
     row = await db.findUnique({where:{id:row.id}});
     if (!row.dispatchStartedAt) throw error;
-    await authority.transportReturned(source,row.id,material.consumption_id,false);
+    await authority.transportReturned(source,row.id,material.consumption_id,false,null);
   }
   row = await db.findUnique({where:{id:row.id}});
   // HTTP/method completion never manufactures SERVER_ACK, delivered or read.
