@@ -13,7 +13,8 @@ const GRANT_KEYS = ['grant_id','admission_id','request_id','request_digest','aut
   'execution_id','message_id','transport_unit_index','attempt_id','reservation_id','external_id','preparation_id','preparation_digest',
   'prepared_content_digest','identity_version_id','instance_lineage_id','sender_account_lineage_id','session_identity','writer_epoch',
   'binding_generation','expires_at','scope','physical_dispatch'];
-const ADDRESSING_GRANT_KEYS = ['addressing_protocol_version','transport_recipient','addressing_representation'];
+const ADDRESSING_GRANT_KEYS = ['addressing_protocol_version','transport_recipient','addressing_representation',
+  'identity_pn_jid','identity_lid_jid'];
 const PN = /^[1-9]\d{7,14}@s\.whatsapp\.net$/;
 const LID = /^\d{1,20}@lid$/;
 const RELEASE_KEYS = ['release_id','request_id','request_digest','grant_id','grant_digest','attempt_id','reservation_id','external_id',
@@ -73,7 +74,9 @@ function material(value) {
       typeof g.external_id !== 'string' || !g.external_id.length || Buffer.byteLength(g.external_id) > 512 || g.external_id.includes('\0') ||
       !((g.scope === 'attendance_release_v1' && g.physical_dispatch === false) ||
         (g.scope === 'attendance_dispatch_v1' && g.physical_dispatch === true)) ||
-      addressed && !(g.addressing_protocol_version === 2 &&
+      addressed && !(g.addressing_protocol_version === 2 && PN.test(g.identity_pn_jid || '') &&
+        (g.identity_lid_jid === null || LID.test(g.identity_lid_jid || '')) &&
+        g.transport_recipient === (g.addressing_representation === 'pn' ? g.identity_pn_jid : g.identity_lid_jid) &&
         (g.addressing_representation === 'pn' && PN.test(g.transport_recipient || '') ||
          g.addressing_representation === 'lid' && LID.test(g.transport_recipient || ''))) ||
       !UUID.test(r.release_id || '') || !UUID.test(r.request_id || '') || !HASH.test(r.request_digest || '') ||
@@ -95,6 +98,7 @@ function binding(source, row, m) {
       row.intent.identity_version_id !== g.identity_version_id || !row.frozenAt ||
       addressed && (row.intent.addressing_protocol_version !== g.addressing_protocol_version ||
         row.intent.transport_recipient !== g.transport_recipient || row.intent.addressing_representation !== g.addressing_representation ||
+        row.intent.identity_pn_jid !== g.identity_pn_jid || row.intent.identity_lid_jid !== g.identity_lid_jid ||
         row.recipient !== g.transport_recipient) ||
       !['account_id','managed_channel_id','instance_lineage_id','sender_account_lineage_id','session_identity','writer_epoch','binding_generation'].every(k => a[k] === g[k]) ||
       row.contentDigest !== canonical.digest({ intent:row.intent, attempt_id:row.attemptId, reservation_id:row.reservationId,

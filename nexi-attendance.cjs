@@ -15,9 +15,11 @@ const ID_PREFIX = '3EB0A77E1B'; // Denial marker; never permission to send/retry
 const MAX_ATTEMPTS = 12; // Accepted persistent Groups outbox retry ceiling.
 const BARRIER_STATES = ['staged', 'fencing', 'active', 'pause_requested', 'paused', 'retired', 'unresolved'];
 const ADDRESSING_PROTOCOL_VERSION = 2;
-const ADDRESSING_FIELDS = ['addressing_protocol_version', 'transport_recipient', 'addressing_representation'];
+const ADDRESSING_FIELDS = ['addressing_protocol_version', 'transport_recipient', 'addressing_representation',
+  'identity_pn_jid', 'identity_lid_jid'];
 const DISPATCH_PROOF_KEYS = ['version','protocol','preparation_id','execution_id','attempt_id','reservation_id','grant_id','release_id',
   'consumption_id','external_id','stanza_id','stanza_recipient','transport_recipient','addressing_representation',
+  'identity_pn_jid','identity_lid_jid',
   'identity_version_id','session_identity','dispatch_started_at','receipt_remote_jid','receipt_remote_jid_semantics','transport_response'];
 const COMMON = ['version', 'protocol_version', 'canonical_version', 'audience', 'provider', 'account_id', 'managed_channel_id', 'instance_id',
   'instance_lineage_id', 'session_identity', 'original_session_identity', 'sender_account_lineage_id', 'sender_attestation_id',
@@ -655,7 +657,9 @@ function eventPayload(event, data) {
 }
 function validAddressing(value) {
   const recipient = value.transport_recipient, representation = value.addressing_representation;
-  return value.addressing_protocol_version === ADDRESSING_PROTOCOL_VERSION && recipient === value.recipient &&
+  return value.addressing_protocol_version === ADDRESSING_PROTOCOL_VERSION && PN.test(value.identity_pn_jid || '') &&
+    (value.identity_lid_jid === null || LID.test(value.identity_lid_jid || '')) && recipient === value.recipient &&
+    recipient === (representation === 'pn' ? value.identity_pn_jid : value.identity_lid_jid) &&
     (representation === 'pn' && PN.test(recipient || '') || representation === 'lid' && LID.test(recipient || ''));
 }
 function validDispatchProof(data) {
@@ -667,12 +671,15 @@ function validDispatchProof(data) {
       !['preparation_id','execution_id','attempt_id','reservation_id','grant_id','release_id','consumption_id'].every(k => UUID.test(proof[k] || '')) ||
       proof.external_id !== data.external_id || proof.stanza_id !== data.external_id ||
       proof.stanza_recipient !== proof.transport_recipient || !['pn','lid'].includes(proof.addressing_representation) ||
+      !PN.test(proof.identity_pn_jid || '') || !(proof.identity_lid_jid === null || LID.test(proof.identity_lid_jid || '')) ||
+      proof.transport_recipient !== (proof.addressing_representation === 'pn' ? proof.identity_pn_jid : proof.identity_lid_jid) ||
       !(proof.addressing_representation === 'pn' && PN.test(proof.transport_recipient || '') ||
         proof.addressing_representation === 'lid' && LID.test(proof.transport_recipient || '')) ||
       !positiveInteger(proof.identity_version_id) || proof.session_identity !== data.session_identity ||
       !Number.isSafeInteger(proof.dispatch_started_at) || proof.dispatch_started_at <= 0 ||
       proof.receipt_remote_jid !== data.remote_jid || ![PN,LID].some(pattern => pattern.test(proof.receipt_remote_jid || '')) ||
-      proof.receipt_remote_jid_semantics !== 'opaque_authenticated_socket_observation') return false;
+      ![proof.identity_pn_jid,proof.identity_lid_jid].filter(Boolean).includes(proof.receipt_remote_jid) ||
+      proof.receipt_remote_jid_semantics !== 'immutable_identity_version_alias') return false;
   const returned = proof.transport_response;
   return returned && typeof returned === 'object' && !Array.isArray(returned) &&
     Object.keys(returned).sort().join(',') === 'message_id,remote_jid' && returned.message_id === data.external_id &&
@@ -982,7 +989,7 @@ function dispatchProof(row, context, externalId, observedRemoteJid) {
   const intent = row?.intent, released = row?.releasedAuthority, grant = released?.grant, release = released?.release;
   if (!row?.dispatchStartedAt || !row.outcomeUnknown || !['dispatch_started','transport_returned','outcome_unknown'].includes(row.state) ||
       intent?.addressing_protocol_version !== ADDRESSING_PROTOCOL_VERSION || !validAddressing(intent) ||
-      ![PN,LID].some(pattern => pattern.test(observedRemoteJid || '')) ||
+      ![intent?.identity_pn_jid,intent?.identity_lid_jid].filter(Boolean).includes(observedRemoteJid) ||
       row.externalId !== externalId || row.recipient !== intent.transport_recipient || row.sessionIdentity !== context.session_identity ||
       row.consumptionId !== released?.consumption_id || canonicalJson.digest(grant) !== released?.grant_digest ||
       canonicalJson.digest(release) !== released?.release_digest ||
@@ -1001,9 +1008,10 @@ function dispatchProof(row, context, externalId, observedRemoteJid) {
     attempt_id:row.attemptId,reservation_id:row.reservationId,grant_id:grant.grant_id,release_id:release.release_id,
     consumption_id:row.consumptionId,external_id:row.externalId,stanza_id:row.externalId,stanza_recipient:row.recipient,
     transport_recipient:intent.transport_recipient,addressing_representation:intent.addressing_representation,
+    identity_pn_jid:intent.identity_pn_jid,identity_lid_jid:intent.identity_lid_jid,
     identity_version_id:intent.identity_version_id,session_identity:row.sessionIdentity,
     dispatch_started_at:+row.dispatchStartedAt,receipt_remote_jid:observedRemoteJid,
-    receipt_remote_jid_semantics:'opaque_authenticated_socket_observation',transport_response:transportResponse};
+    receipt_remote_jid_semantics:'immutable_identity_version_alias',transport_response:transportResponse};
 }
 async function receiptDispatchProofs(source, ids, context, observedRemoteJid) {
   const externalIds = [...new Set(ids)].filter(id => typeof id === 'string' && /^[A-Za-z0-9_-]{1,512}$/.test(id));
@@ -1107,17 +1115,16 @@ async function append(source, context, item, limits) {
       await tx.$executeRawUnsafe(`SET LOCAL statement_timeout = ${limits.statementMs}`);
       await tx.$executeRawUnsafe(`SET LOCAL lock_timeout = ${limits.lockMs}`);
     }
-    let preparation=await tx.nexiAttendancePreparation.findUnique({where:{instanceId_externalId:{
-      instanceId:source.instanceId,externalId:item.evidence.external_id}}});
-    if (preparation?.intent?.addressing_protocol_version === ADDRESSING_PROTOCOL_VERSION) {
-      // Use the same provider-aware row lock as dispatchStart/expiryReadback.
-      // The immutable preparation guard rejects every UPDATE without revision+1.
-      const locked=await tx.$queryRawUnsafe(provider === 'mysql' ?
-        'SELECT id FROM NexiAttendancePreparation WHERE id=? FOR UPDATE' :
-        'SELECT id FROM "NexiAttendancePreparation" WHERE id=$1 FOR UPDATE',preparation.id);
-      if (!Array.isArray(locked) || locked.length !== 1) fail('nexi_attendance_receipt_preparation_unresolved');
-      preparation=await tx.nexiAttendancePreparation.findUnique({where:{id:preparation.id}});
-    }
+    // Lock the unique operation before the first consistent read. InnoDB's
+    // default REPEATABLE READ would otherwise let a pre-lock findUnique pin an
+    // older transportReturn snapshot and strand an early receipt forever.
+    const locked=await tx.$queryRawUnsafe(provider === 'mysql' ?
+      'SELECT id FROM NexiAttendancePreparation WHERE instanceId=? AND externalId=? FOR UPDATE' :
+      'SELECT id FROM "NexiAttendancePreparation" WHERE "instanceId"=$1 AND "externalId"=$2 FOR UPDATE',
+      source.instanceId,item.evidence.external_id);
+    if (!Array.isArray(locked) || locked.length > 1) fail('nexi_attendance_receipt_preparation_unresolved');
+    const preparation=locked.length === 1 ?
+      await tx.nexiAttendancePreparation.findUnique({where:{id:locked[0].id}}) : null;
     const previous = await tx.nexiReceiptJournal.findUnique({ where: { instanceId_sourceKey: {
       instanceId: source.instanceId, sourceKey: item.sourceKey } } });
     if (previous) {
