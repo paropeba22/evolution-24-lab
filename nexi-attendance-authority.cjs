@@ -300,6 +300,16 @@ async function dispatchStart(source, preparationId, consumptionId, stanza) {
 async function transportReturned(source, preparationId, consumptionId, succeeded, transportIdentity = null) {
   // A method return/error is separate evidence, never SERVER_ACK/not-sent.
   return source.prismaRepository.$transaction(async tx => {
+    // Serialize with receipt append before the first preparation read. Under
+    // MySQL REPEATABLE READ, a pre-lock findUnique could pin a snapshot that
+    // misses the receipt journal committed while this return waits. This is
+    // deliberately the transaction's first DB read; storageGuard follows the
+    // lock so its catalog reads cannot establish an earlier snapshot.
+    const mysql=process.env.DATABASE_PROVIDER === 'mysql';
+    const locked=await tx.$queryRawUnsafe(mysql ?
+      'SELECT id FROM NexiAttendancePreparation WHERE id=? FOR UPDATE' :
+      'SELECT id FROM "NexiAttendancePreparation" WHERE id=$1 FOR UPDATE',preparationId);
+    if (!Array.isArray(locked) || locked.length!==1) fail('nexi_attendance_transport_return_unstarted');
     await storageGuard(tx);
     const db=tx.nexiAttendancePreparation, row=await db.findUnique({where:{id:preparationId}});
     if (!row?.dispatchStartedAt || row.consumptionId!==consumptionId) fail('nexi_attendance_transport_return_unstarted');
