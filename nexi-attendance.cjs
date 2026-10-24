@@ -18,7 +18,7 @@ const ADDRESSING_PROTOCOL_VERSION = 2;
 const ADDRESSING_FIELDS = ['addressing_protocol_version', 'transport_recipient', 'addressing_representation'];
 const DISPATCH_PROOF_KEYS = ['version','protocol','preparation_id','execution_id','attempt_id','reservation_id','grant_id','release_id',
   'consumption_id','external_id','stanza_id','stanza_recipient','transport_recipient','addressing_representation',
-  'identity_version_id','session_identity','dispatch_started_at','receipt_remote_jid','transport_response'];
+  'identity_version_id','session_identity','dispatch_started_at','receipt_remote_jid','receipt_remote_jid_semantics','transport_response'];
 const COMMON = ['version', 'protocol_version', 'canonical_version', 'audience', 'provider', 'account_id', 'managed_channel_id', 'instance_id',
   'instance_lineage_id', 'session_identity', 'original_session_identity', 'sender_account_lineage_id', 'sender_attestation_id',
   'binding_generation', 'writer_epoch', 'writer_protocol_version', 'barrier_state'];
@@ -671,7 +671,8 @@ function validDispatchProof(data) {
         proof.addressing_representation === 'lid' && LID.test(proof.transport_recipient || '')) ||
       !positiveInteger(proof.identity_version_id) || proof.session_identity !== data.session_identity ||
       !Number.isSafeInteger(proof.dispatch_started_at) || proof.dispatch_started_at <= 0 ||
-      proof.receipt_remote_jid !== data.remote_jid || ![PN,LID].some(pattern => pattern.test(proof.receipt_remote_jid || ''))) return false;
+      proof.receipt_remote_jid !== data.remote_jid || ![PN,LID].some(pattern => pattern.test(proof.receipt_remote_jid || '')) ||
+      proof.receipt_remote_jid_semantics !== 'opaque_authenticated_socket_observation') return false;
   const returned = proof.transport_response;
   return returned && typeof returned === 'object' && !Array.isArray(returned) &&
     Object.keys(returned).sort().join(',') === 'message_id,remote_jid' && returned.message_id === data.external_id &&
@@ -1001,7 +1002,8 @@ function dispatchProof(row, context, externalId, observedRemoteJid) {
     consumption_id:row.consumptionId,external_id:row.externalId,stanza_id:row.externalId,stanza_recipient:row.recipient,
     transport_recipient:intent.transport_recipient,addressing_representation:intent.addressing_representation,
     identity_version_id:intent.identity_version_id,session_identity:row.sessionIdentity,
-    dispatch_started_at:+row.dispatchStartedAt,receipt_remote_jid:observedRemoteJid,transport_response:transportResponse};
+    dispatch_started_at:+row.dispatchStartedAt,receipt_remote_jid:observedRemoteJid,
+    receipt_remote_jid_semantics:'opaque_authenticated_socket_observation',transport_response:transportResponse};
 }
 async function receiptDispatchProofs(source, ids, context, observedRemoteJid) {
   const externalIds = [...new Set(ids)].filter(id => typeof id === 'string' && /^[A-Za-z0-9_-]{1,512}$/.test(id));
