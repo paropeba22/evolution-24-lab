@@ -34,7 +34,7 @@ const FIELDS = {
   'attendance.media.request': COMMON.concat(['inbox_id','execution_id','attempt_id','preparation_id','reservation_id','external_id','grant_id','release_id']),
 };
 const RECEIPT_ADDRESSING_FIELDS = [
-  'addressing_proof_version', 'addressing_mode', 'recipient_pn', 'recipient_lid'
+  'addressing_observation_version', 'addressing_mode', 'recipient_pn', 'recipient_lid'
 ];
 const configs = new WeakMap();
 // Only a fresh, nonce-bound APP response can authorize capture attestation
@@ -590,7 +590,7 @@ function eventPayload(event, data) {
   let fields = operationContext ? FIELDS[event].concat('isolated_authorization_id') : FIELDS[event];
   if (renewalContext) fields = fields.concat('previous_sender_attestation_id');
   const receiptAddressing = event === 'attendance.receipt.observed' && data &&
-    Object.hasOwn(data, 'addressing_proof_version');
+    Object.hasOwn(data, 'addressing_observation_version');
   if (receiptAddressing) fields = fields.concat(RECEIPT_ADDRESSING_FIELDS);
   if (!fields || !data || Object.keys(data).sort().join(',') !== [...fields].sort().join(',') ||
       data.version !== 1 || (data.protocol_version !== undefined && data.protocol_version !== 1)) fail('nexi_attendance_contract_unsupported');
@@ -645,15 +645,15 @@ function eventPayload(event, data) {
         !['ERROR', 'SERVER_ACK', 'DELIVERY_ACK', 'READ', 'PLAYED', 'UNKNOWN'].includes(data.normalized_status) ||
         (!data.from_me && data.normalized_status !== 'UNKNOWN') || !/^[a-z-]{1,32}$/.test(data.semantic_class || '') ||
         !(data.receipt_timestamp === null || Number.isSafeInteger(data.receipt_timestamp) && data.receipt_timestamp >= 0) ||
-        !positive(data.captured_at) || !receiptMetadata(data) || !receiptAddressingProof(data, receiptAddressing))
+        !positive(data.captured_at) || !receiptMetadata(data) || !receiptAddressingObservation(data, receiptAddressing))
       fail('nexi_attendance_contract_invalid');
   }
   if (Buffer.byteLength(JSON.stringify(normalized)) > 16384) fail('nexi_attendance_event_limit');
   return normalized;
 }
-function receiptAddressingProof(data, present) {
+function receiptAddressingObservation(data, present) {
   if (!present) return true;
-  if (data.addressing_proof_version !== 1 || !Object.hasOwn(data, 'addressing_mode') ||
+  if (data.addressing_observation_version !== 1 || !Object.hasOwn(data, 'addressing_mode') ||
       !Object.hasOwn(data, 'recipient_pn') || !Object.hasOwn(data, 'recipient_lid')) return false;
   if (data.addressing_mode === null) return data.recipient_pn === null && data.recipient_lid === null;
   if (data.addressing_mode === 'lid') return LID.test(data.remote_jid || '') && data.recipient_lid === null &&
@@ -961,9 +961,10 @@ function numericNormalization(status) {
   return Number.isInteger(status) ? ['ERROR', 'PENDING', 'SERVER_ACK', 'DELIVERY_ACK', 'READ', 'PLAYED'][status] || 'UNKNOWN' : 'UNKNOWN';
 }
 function receiptAddressing(attrs, key, remote) {
-  const absent = { addressing_proof_version: 1, addressing_mode: null, recipient_pn: null, recipient_lid: null };
+  const absent = { addressing_observation_version: 1, addressing_mode: null, recipient_pn: null, recipient_lid: null };
   // Only Baileys' own-message recipient path binds attrs.recipient to
-  // key.remoteJid. Missing or malformed alternate addresses stay explicit.
+  // key.remoteJid. These raw observations are authenticated telemetry only;
+  // no rc13 receipt contract establishes PN/LID equivalence from them.
   if (key.fromMe !== true || jid(attrs.recipient) !== remote) return absent;
   if (attrs.addressing_mode === 'lid' && LID.test(remote || '')) {
     const recipient = jid(attrs.recipient_pn);
