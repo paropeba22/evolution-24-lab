@@ -247,6 +247,9 @@ async function retain(service, cutoff) {
         state: 'succeeded', payloadPrunedAt: null, completedAt: { lt: cutoff }, ...(after ? { id: { gt: after } } : {}) },
         orderBy: { id: 'asc' }, take: 100 });
       for (const row of rows) await repo.$transaction(async tx => {
+        // Quarantine is permanent evidence. No payload/result pruning of a
+        // frozen generation; other lanes retain their normal retention path.
+        if (await require('./nexi-ingress-owner-generation.cjs').frozen(tx, row.laneId)) return;
         // Active effects need their exact recovery payload. Uncertain/blocked
         // effects are never replayed and retain their audit/proof metadata.
         if (await tx.nexiIngressEffect.count({ where: { journalId: row.id, state: { notIn: terminal } } })) return;

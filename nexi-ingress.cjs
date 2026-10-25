@@ -6,6 +6,7 @@ const canonical = require('./nexi-canonical-json.cjs');
 const identity = require('./nexi-identity.cjs');
 const groups = require('./nexi-groups.cjs');
 const transport = require('./nexi-transport.cjs');
+const ownerGeneration = require('./nexi-ingress-owner-generation.cjs');
 const configs = new WeakMap(), captured = new WeakSet(), context = new AsyncLocalStorage();
 const registrations = new Map();
 const instanceRunning = new Map();
@@ -145,25 +146,33 @@ async function reconcileCreation(ctx, stage) {
     throw error;
   }
 }
-function key(name) {
+function key(name, version = 1) {
   const master = process.env.NEXI_CHANNELS_EVENT_MASTER_SECRET || '';
   if (Buffer.byteLength(master) < 32) fail('nexi_ingress_secret_missing');
-  return createHmac('sha256', master).update(`ingress:v1:${name}`).digest();
+  if (![1, 2].includes(version)) fail('nexi_ingress_proof_invalid');
+  return createHmac('sha256', master).update(`ingress:v${version}:${name}`).digest();
 }
-function proof(claims) { return createHmac('sha256', key(claims.instance_name)).update(canonical.bytes(claims)).digest('hex'); }
+function proof(claims) { return createHmac('sha256', key(claims.instance_name, claims.version)).update(canonical.bytes(claims)).digest('hex'); }
 function verify(row, metadataOnly = false) {
   const { claims, signature } = row.envelope || {};
   const expected = claims && proof(claims);
   if (!/^[a-f0-9]{64}$/.test(signature || '') || !expected ||
       !timingSafeEqual(Buffer.from(signature, 'hex'), Buffer.from(expected, 'hex')) ||
-      claims.version !== 1 || claims.provider !== 'evolution' || claims.journal_id !== row.id ||
+      ![1, 2].includes(claims.version) || claims.provider !== 'evolution' || claims.journal_id !== row.id ||
       claims.instance_id !== row.instanceId || claims.observation.session_identity !== row.sessionIdentity ||
       (!(metadataOnly && row.state === 'succeeded' && row.payloadPrunedAt) &&
         claims.payload_digest !== hash(Buffer.from(row.payload, 'base64'))) ||
       row.dedupKey !== canonical.digest(['evolution', claims.account_id, claims.inbox_id, row.instanceId,
         row.sessionIdentity, claims.observation.external_message_id]) ||
       row.scopeId !== canonical.digest(['evolution', claims.account_id, claims.inbox_id, row.instanceId]) ||
-      row.laneId !== canonical.digest([row.scopeId, row.sessionIdentity, claims.observation.pn_jid])) fail('nexi_ingress_proof_invalid');
+      !ownerGeneration.verifyClaims(row, claims)) fail('nexi_ingress_proof_invalid');
+  if (claims.version === 2) {
+    const original = verify({ ...row, laneId: canonical.digest([row.scopeId,row.sessionIdentity,claims.observation.pn_jid]),
+      sequence: BigInt(claims.source_sequence), envelope: claims.source_proof }, metadataOnly);
+    if (['journal_id','instance_id','instance_name','account_id','inbox_id','accepted_at','payload_digest']
+      .some(field => original[field] !== claims[field]) || canonical.digest(original.observation) !== canonical.digest(claims.observation))
+      fail('nexi_ingress_owner_source_invalid');
+  }
   return claims;
 }
 async function binding(service) {
@@ -197,7 +206,6 @@ async function append(service, owner, observation, encoded) {
   const bytes = Buffer.from(encoded);
   if (bytes.length > MAX_BYTES) fail('nexi_ingress_payload_backpressure');
   const scopeId = canonical.digest(['evolution', target.account, target.inbox, service.instanceId]);
-  const laneId = canonical.digest([scopeId, observation.session_identity, observation.pn_jid]);
   const dedupKey = canonical.digest(['evolution', target.account, target.inbox, service.instanceId,
     observation.session_identity, observation.external_message_id]);
   const repository = service.prismaRepository;
@@ -205,13 +213,19 @@ async function append(service, owner, observation, encoded) {
   const claims = { version: 1, provider: 'evolution', journal_id: id, instance_id: service.instanceId,
     instance_name: service.instance.name, account_id: target.account, inbox_id: target.inbox,
     accepted_at: new Date().toISOString(), observation, payload_digest: hash(bytes) };
-  const envelope = { claims, signature: proof(claims) };
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
       const row = await repository.$transaction(async tx => {
-        const previous = await tx.nexiIngressJournal.findUnique({ where: { dedupKey } });
+        const scope = await tx.nexiIngressScope.upsert({ where: { id: scopeId }, create: { id: scopeId }, update: {} });
+        const held = await tx.nexiIngressScope.updateMany({ where: { id:scopeId,revision:scope.revision },
+          data:{revision:{increment:1}} });
+        if (held.count!==1) fail('nexi_ingress_cas_retry');
+        // One scope lock serializes the shared dedup domain across old journals
+        // and newly accepted immutable sources, including mixed-image races.
+        const source = ownerGeneration.enabled() ? await tx.nexiIngressOwnerSource.findUnique({where:{dedupKey}}) : null;
+        const previous = source || await tx.nexiIngressJournal.findUnique({ where: { dedupKey } });
         if (previous) {
-          const old = verify(previous, true);
+          const old = verify(source ? {...source,laneId:source.rootLaneId} : previous, true);
           // Delivery duplicates may carry different timestamps; authenticated
           // identity must remain exact. Never replace the original payload.
           if (old.observation.pn_jid !== observation.pn_jid || old.observation.lid_jid !== observation.lid_jid)
@@ -222,18 +236,22 @@ async function append(service, owner, observation, encoded) {
           if (oldPayload.content_digest !== incomingPayload.content_digest) fail('nexi_ingress_content_conflict');
           return previous;
         }
-        const scope = await tx.nexiIngressScope.upsert({ where: { id: scopeId },
-          create: { id: scopeId }, update: {} });
         if (scope.pending >= LIMIT) fail('nexi_ingress_capacity_backpressure');
-        const reserved = await tx.nexiIngressScope.updateMany({ where: { id: scopeId, revision: scope.revision },
-          data: { revision: { increment: 1 }, nextSequence: { increment: 1 }, pending: { increment: 1 } } });
-        if (reserved.count !== 1) fail('nexi_ingress_cas_retry');
+        await tx.nexiIngressScope.update({ where: { id: scopeId },
+          data: { nextSequence: { increment: 1 }, pending: { increment: 1 } } });
+        const generation = await ownerGeneration.appendRoot(tx, scopeId, service, observation, scope.nextSequence, verify);
+        const laneId = generation?.laneId || canonical.digest([scopeId, observation.session_identity, observation.pn_jid]);
+        const sourceSequence = scope.nextSequence + 1n;
+        const envelope = { claims, signature: proof(claims) };
+        if (generation?.stage) return ownerGeneration.stage(tx,generation,{id,dedupKey,scopeId,
+          instanceId:service.instanceId,sessionIdentity:observation.session_identity,sequence:sourceSequence,
+          envelope,payload:bytes.toString('base64')},observation,verify);
         await tx.nexiIngressLane.upsert({ where: { id: laneId }, create: { id: laneId, scopeId,
           instanceId: service.instanceId, sessionIdentity: observation.session_identity, pending: 1 },
           update: { pending: { increment: 1 } } });
         return tx.nexiIngressJournal.create({ data: { id, dedupKey, scopeId, laneId,
           instanceId: service.instanceId, sessionIdentity: observation.session_identity,
-          sequence: scope.nextSequence + 1n, envelope, payload: bytes.toString('base64') } });
+          sequence: sourceSequence, envelope, payload: bytes.toString('base64') } });
       });
       groups.lifecycleCheck(owner);
       wake();
@@ -289,6 +307,7 @@ function register(service, decode, process, effects, policy) {
   wake();
 }
 async function check(ctx) {
+  await ownerGeneration.assertWritable(ctx.service.prismaRepository, ctx.row, ctx.claims);
   if (ctx.secondary) return require('./nexi-ingress-dispatch.cjs').guard();
   if (ctx.lost) fail('nexi_ingress_lease_lost');
   if (ctx.service.instanceId !== ctx.row.instanceId || ctx.service.instance.name !== ctx.claims.instance_name)
@@ -599,15 +618,48 @@ async function pump() {
       if ((instanceRunning.get(service.instanceId) || 0) >= PER_INSTANCE || registration.socket !== service.client) continue;
       const owner = groups.lifecycleCapture(service);
       if (!groups.lifecycleCurrent(owner) || !owner.socket?.ws?.isOpen) continue;
+      // Identity proposals are delivered independently of the blocked primary
+      // lane. Their witness was durably accepted; they never create a Message.
+      await ownerGeneration.tick(service, {
+        verify, proof, check: session => ownerCheck(service,owner,session),
+        event: async (event, data, discriminator) => {
+          await ownerCheck(service, owner, data.observation?.session_identity || data.witness?.session_identity);
+          const target = await binding(service);
+          const witness=data.observation || data.witness;
+          if (target.account!==witness.account_id || target.inbox!==witness.inbox_id) fail('nexi_ingress_binding_fenced');
+          const prepared = transport.prepareEvent(target.headers, { event, instance: service.instance.name, data },
+            service.instance.name, service.instanceId);
+          const eventHash = canonical.digest([event, discriminator]);
+          prepared.headers['X-Nexi-Event-Id'] = `${eventHash.slice(0, 8)}-${eventHash.slice(8, 12)}-${eventHash.slice(12, 16)}-${eventHash.slice(16, 20)}-${eventHash.slice(20, 32)}`;
+          const response = await fetch(target.url, { method: 'POST', redirect: 'error',
+            headers: transport.freshEventHeaders(prepared.headers, prepared.body), body: JSON.stringify(prepared.body),
+            signal: AbortSignal.timeout(10000) });
+          if (!response.ok) fail('nexi_ingress_owner_remote_rejected');
+          const result = await response.json();
+          await ownerCheck(service, owner, data.observation?.session_identity || data.witness?.session_identity);
+          return result;
+        },
+      }).catch(() => log(service, 'ingress.owner_generation_pending', null, 'authorization_or_registration_pending'));
       const now = new Date();
+      const frozenLanes = ownerGeneration.enabled() ? await service.prismaRepository.nexiIngressOwnerGeneration.findMany({
+        where: { instanceId: service.instanceId, frozenLaneId: { not: null } }, select: { frozenLaneId: true } }) : [];
       const lanes = await service.prismaRepository.nexiIngressLane.findMany({ where: { instanceId: service.instanceId,
+        ...(frozenLanes.length ? { id: { notIn: frozenLanes.map(item => item.frozenLaneId) } } : {}),
         pending: { gt: 0 }, nextAttemptAt: { lte: now }, OR: [{ leaseUntil: null }, { leaseUntil: { lte: now } }] },
         orderBy: [{ servedAt: 'asc' }, { id: 'asc' }], take: PER_INSTANCE });
       for (const lane of lanes) {
         if (running >= CONCURRENT || (instanceRunning.get(service.instanceId) || 0) >= PER_INSTANCE) break;
         const token = randomUUID();
-        const claimed = await service.prismaRepository.nexiIngressLane.updateMany({ where: { id: lane.id,
-          OR: [{ leaseUntil: null }, { leaseUntil: { lte: now } }] }, data: { leaseToken: token, leaseUntil: new Date(Date.now() + LEASE_MS) } });
+        const claimed = await service.prismaRepository.$transaction(async tx => {
+          // Same scope lock as append and generation installation. An old
+          // worker cannot acquire a lease after its prefix was frozen.
+          if (ownerGeneration.enabled()) {
+            await tx.nexiIngressScope.update({ where: { id: lane.scopeId }, data: { revision: { increment: 1 } } });
+            if (await ownerGeneration.frozen(tx, lane.id)) return { count: 0 };
+          }
+          return tx.nexiIngressLane.updateMany({ where: { id: lane.id,
+            OR: [{ leaseUntil: null }, { leaseUntil: { lte: now } }] }, data: { leaseToken: token, leaseUntil: new Date(Date.now() + LEASE_MS) } });
+        });
         if (claimed.count !== 1) continue;
         running++;
         instanceRunning.set(service.instanceId, (instanceRunning.get(service.instanceId) || 0) + 1);

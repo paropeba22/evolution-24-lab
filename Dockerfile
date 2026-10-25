@@ -41,7 +41,7 @@ COPY fixtures/attendance-isolated-v1.json /evolution/fixtures/attendance-isolate
 COPY Dockerfile /evolution/Dockerfile
 COPY nexi-transport.cjs /evolution/nexi-transport.cjs
 COPY patch-trusted-baileys.mjs patch-managed-retry.mjs patch-webhook-safe-logs.mjs nexi-identity.cjs /evolution/
-COPY patch-ingress-source.mjs ingress-models.prisma nexi-ingress.cjs /evolution/
+COPY patch-ingress-source.mjs ingress-models.prisma nexi-ingress.cjs nexi-ingress-owner-generation.cjs /evolution/
 COPY patch-chatwoot-completion.mjs nexi-ingress-effects.cjs ingress-effects.ts.inc /evolution/
 COPY patch-ingress-integrations.mjs ingress-event-adapters.ts.inc nexi-ingress-dispatch.cjs /evolution/
 COPY patch-baileys-transport.mjs assert-baileys-transport-runtime.mjs nexi-baileys-transport.cjs nexi-baileys-device-cache.cjs /evolution/
@@ -74,6 +74,7 @@ COPY prisma/postgresql-migrations/20261015000001_nexi_ingress_secondary /evoluti
 COPY prisma/mysql-migrations/20261015000001_nexi_ingress_secondary /evolution/prisma/mysql-migrations/20261015000001_nexi_ingress_secondary
 COPY prisma/postgresql-migrations/20261015000002_nexi_ingress_contact_cache /evolution/prisma/postgresql-migrations/20261015000002_nexi_ingress_contact_cache
 COPY prisma/mysql-migrations/20261015000002_nexi_ingress_contact_cache /evolution/prisma/mysql-migrations/20261015000002_nexi_ingress_contact_cache
+COPY prisma/postgresql-migrations/20261025000000_nexi_ingress_owner_generations /evolution/prisma/postgresql-migrations/20261025000000_nexi_ingress_owner_generations
 
 # The schema change must precede Prisma generation and tsup's bundled client.
 RUN node /tmp/patch-prisma-binding.mjs
@@ -138,6 +139,7 @@ COPY --from=source-builder /evolution/nexi-baileys-device-cache.cjs /evolution/n
 COPY --from=source-builder /evolution/nexi-financial-transport.cjs /evolution/nexi-financial-transport.cjs
 COPY --from=source-builder /evolution/nexi-identity.cjs /evolution/nexi-identity.cjs
 COPY --from=source-builder /evolution/nexi-ingress.cjs /evolution/nexi-ingress.cjs
+COPY --from=source-builder /evolution/nexi-ingress-owner-generation.cjs /evolution/nexi-ingress-owner-generation.cjs
 COPY --from=source-builder /evolution/nexi-ingress-effects.cjs /evolution/nexi-ingress-effects.cjs
 COPY --from=source-builder /evolution/nexi-ingress-dispatch.cjs /evolution/nexi-ingress-dispatch.cjs
 # SDK is external in tsup. Ship the actual instrumented SDK and its pinned

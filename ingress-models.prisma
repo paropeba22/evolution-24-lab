@@ -105,3 +105,69 @@ model NexiIngressContactCache {
   @@unique([scopeId, sessionIdentity, lidJid], map: "NexiIngressContactCache_lid_key")
   @@index([instanceId, expiresAt])
 }
+
+// Receive ownership metadata only. Historical lanes/journals are never moved.
+model NexiIngressOwnerRoot {
+  id String @id @db.VarChar(64)
+  scopeId String @db.VarChar(64)
+  instanceId String @db.VarChar(100)
+  sessionIdentity String @db.VarChar(64)
+  pnJid String @db.VarChar(64)
+  revision Int @default(0)
+  activeGenerationId String? @db.VarChar(36)
+  sourceFloorSequence BigInt?
+}
+
+model NexiIngressOwnerGeneration {
+  id String @id @db.VarChar(36)
+  candidateId String @unique @db.VarChar(36)
+  rootLaneId String @db.VarChar(64)
+  oldLaneId String @db.VarChar(64)
+  newLaneId String @unique @db.VarChar(64)
+  scopeId String @db.VarChar(64)
+  instanceId String @db.VarChar(100)
+  sessionIdentity String @db.VarChar(64)
+  rootRevision Int
+  cutoffSequence BigInt
+  cutover Json JSON_TYPE
+  cutoverDigest String @db.VarChar(64)
+  witness Json JSON_TYPE
+  snapshot Json JSON_TYPE
+  // This unique marker freezes only an installed generation's old lane.
+  frozenLaneId String? @unique @db.VarChar(64)
+  approval Json? JSON_TYPE
+  installedAt DateTime?
+  registration Json? JSON_TYPE
+  registeredAt DateTime?
+  createdAt DateTime @default(now())
+  @@index([instanceId, createdAt])
+  @@index([rootLaneId, rootRevision])
+}
+
+// New raw intake only. A legacy journal is never copied into this table.
+model NexiIngressOwnerSource {
+  id String @id @db.VarChar(36)
+  dedupKey String @unique @db.VarChar(64)
+  rootLaneId String @db.VarChar(64)
+  scopeId String @db.VarChar(64)
+  instanceId String @db.VarChar(100)
+  sessionIdentity String @db.VarChar(64)
+  sequence BigInt
+  envelope Json JSON_TYPE
+  payload String LARGE_TEXT
+  createdAt DateTime @default(now())
+  delivery NexiIngressOwnerDelivery?
+  @@unique([rootLaneId, sequence])
+  @@index([instanceId, sequence])
+}
+
+// One source, one delivery journal, one immutable source/delivery sequence pair.
+model NexiIngressOwnerDelivery {
+  sourceJournalId String @id @db.VarChar(36)
+  deliveryJournalId String @unique @db.VarChar(36)
+  generationId String @db.VarChar(36)
+  sourceSequence BigInt
+  deliverySequence BigInt
+  sourceProofDigest String @db.VarChar(64)
+  source NexiIngressOwnerSource @relation(fields: [sourceJournalId], references: [id], onDelete: Restrict)
+}
