@@ -171,11 +171,15 @@ BEGIN
   IF TG_OP='TRUNCATE' THEN RAISE EXCEPTION 'nexi_ingress_history_permanent'; END IF;
   IF TG_TABLE_NAME='NexiIngressJournal' AND TG_OP='DELETE'
   THEN RAISE EXCEPTION 'nexi_ingress_history_permanent'; END IF;
-  IF TG_TABLE_NAME='NexiIngressJournal' AND TG_OP='UPDATE' AND
-    ROW(NEW."id",NEW."dedupKey",NEW."scopeId",NEW."laneId",NEW."instanceId",NEW."sessionIdentity",NEW."sequence",NEW."envelope")
-      IS DISTINCT FROM
-    ROW(OLD."id",OLD."dedupKey",OLD."scopeId",OLD."laneId",OLD."instanceId",OLD."sessionIdentity",OLD."sequence",OLD."envelope")
-  THEN RAISE EXCEPTION 'nexi_ingress_original_proof_immutable'; END IF;
+  -- Separate expressions by table: a Lane NEW record has no journal fields.
+  -- Boolean short-circuiting does not protect PL/pgSQL record-field binding.
+  IF TG_TABLE_NAME='NexiIngressJournal' THEN
+    IF TG_OP='UPDATE' AND
+      ROW(NEW."id",NEW."dedupKey",NEW."scopeId",NEW."laneId",NEW."instanceId",NEW."sessionIdentity",NEW."sequence",NEW."envelope")
+        IS DISTINCT FROM
+      ROW(OLD."id",OLD."dedupKey",OLD."scopeId",OLD."laneId",OLD."instanceId",OLD."sessionIdentity",OLD."sequence",OLD."envelope")
+    THEN RAISE EXCEPTION 'nexi_ingress_original_proof_immutable'; END IF;
+  END IF;
   IF TG_TABLE_NAME='NexiIngressLane' THEN lane:=OLD."id";
   ELSIF TG_OP='INSERT' THEN
     -- Baseline APPEND uses this same scope lock. Even an older provider image
