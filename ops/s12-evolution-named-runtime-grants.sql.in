@@ -1,0 +1,117 @@
+-- PREPARED ONLY. Source-complete supported API contract; deployment profiles unresolved.
+\set ON_ERROR_STOP on
+\echo 'STOP: select the deployed profiles and reconcile exact catalogs/artifacts before grants.'
+\quit 3
+
+-- profile=core_api; source evidence in s12-evolution-runtime-contract.json
+GRANT DELETE,INSERT,SELECT,UPDATE ON TABLE public."Instance" TO nexi_evolution_runtime;
+-- profile=core_api; source evidence in s12-evolution-runtime-contract.json
+GRANT DELETE,INSERT,SELECT,UPDATE ON TABLE public."Session" TO nexi_evolution_runtime;
+-- profile=core_api; source evidence in s12-evolution-runtime-contract.json
+GRANT DELETE,INSERT,SELECT,UPDATE ON TABLE public."Chat" TO nexi_evolution_runtime;
+-- profile=core_api; source evidence in s12-evolution-runtime-contract.json
+GRANT DELETE,INSERT,SELECT,UPDATE ON TABLE public."Contact" TO nexi_evolution_runtime;
+-- profile=core_api; source evidence in s12-evolution-runtime-contract.json
+GRANT DELETE,INSERT,SELECT,UPDATE ON TABLE public."Message" TO nexi_evolution_runtime;
+-- profile=core_api; source evidence in s12-evolution-runtime-contract.json
+GRANT DELETE,INSERT,SELECT ON TABLE public."MessageUpdate" TO nexi_evolution_runtime;
+-- profile=core_api; source evidence in s12-evolution-runtime-contract.json
+GRANT DELETE,INSERT,SELECT,UPDATE ON TABLE public."Webhook" TO nexi_evolution_runtime;
+-- profile=core_api; source evidence in s12-evolution-runtime-contract.json
+GRANT DELETE,INSERT,SELECT,UPDATE ON TABLE public."Chatwoot" TO nexi_evolution_runtime;
+-- profile=core_api; source evidence in s12-evolution-runtime-contract.json
+GRANT DELETE,INSERT,SELECT,UPDATE ON TABLE public."Label" TO nexi_evolution_runtime;
+-- profile=core_api; source evidence in s12-evolution-runtime-contract.json
+GRANT DELETE,INSERT,SELECT,UPDATE ON TABLE public."Proxy" TO nexi_evolution_runtime;
+-- profile=core_api; source evidence in s12-evolution-runtime-contract.json
+GRANT DELETE,INSERT,SELECT,UPDATE ON TABLE public."Setting" TO nexi_evolution_runtime;
+-- profile=event_integrations; source evidence in s12-evolution-runtime-contract.json
+GRANT DELETE,INSERT,SELECT,UPDATE ON TABLE public."Rabbitmq" TO nexi_evolution_runtime;
+-- profile=event_integrations; source evidence in s12-evolution-runtime-contract.json
+GRANT DELETE,INSERT,SELECT,UPDATE ON TABLE public."Nats" TO nexi_evolution_runtime;
+-- profile=event_integrations; source evidence in s12-evolution-runtime-contract.json
+GRANT DELETE,INSERT,SELECT,UPDATE ON TABLE public."Sqs" TO nexi_evolution_runtime;
+-- profile=event_integrations; source evidence in s12-evolution-runtime-contract.json
+GRANT INSERT,SELECT,UPDATE ON TABLE public."Kafka" TO nexi_evolution_runtime;
+-- profile=event_integrations; source evidence in s12-evolution-runtime-contract.json
+GRANT DELETE,INSERT,SELECT,UPDATE ON TABLE public."Websocket" TO nexi_evolution_runtime;
+-- profile=event_integrations; source evidence in s12-evolution-runtime-contract.json
+GRANT INSERT,SELECT,UPDATE ON TABLE public."Pusher" TO nexi_evolution_runtime;
+-- profile=chatbot_integrations; source evidence in s12-evolution-runtime-contract.json
+GRANT DELETE,INSERT,SELECT,UPDATE ON TABLE public."Typebot" TO nexi_evolution_runtime;
+-- profile=chatbot_integrations; source evidence in s12-evolution-runtime-contract.json
+GRANT INSERT,SELECT,UPDATE ON TABLE public."TypebotSetting" TO nexi_evolution_runtime;
+-- profile=core_api; source evidence in s12-evolution-runtime-contract.json
+GRANT INSERT,SELECT,UPDATE ON TABLE public."Media" TO nexi_evolution_runtime;
+-- profile=chatbot_integrations; source evidence in s12-evolution-runtime-contract.json
+GRANT DELETE,INSERT,SELECT ON TABLE public."OpenaiCreds" TO nexi_evolution_runtime;
+-- profile=chatbot_integrations; source evidence in s12-evolution-runtime-contract.json
+GRANT DELETE,INSERT,SELECT,UPDATE ON TABLE public."OpenaiBot" TO nexi_evolution_runtime;
+-- profile=chatbot_integrations; source evidence in s12-evolution-runtime-contract.json
+GRANT DELETE,INSERT,SELECT,UPDATE ON TABLE public."IntegrationSession" TO nexi_evolution_runtime;
+-- profile=chatbot_integrations; source evidence in s12-evolution-runtime-contract.json
+GRANT INSERT,SELECT,UPDATE ON TABLE public."OpenaiSetting" TO nexi_evolution_runtime;
+-- profile=core_api; source evidence in s12-evolution-runtime-contract.json
+GRANT DELETE,INSERT,SELECT ON TABLE public."Template" TO nexi_evolution_runtime;
+-- profile=chatbot_integrations; source evidence in s12-evolution-runtime-contract.json
+GRANT DELETE,INSERT,SELECT,UPDATE ON TABLE public."Dify" TO nexi_evolution_runtime;
+-- profile=chatbot_integrations; source evidence in s12-evolution-runtime-contract.json
+GRANT INSERT,SELECT,UPDATE ON TABLE public."DifySetting" TO nexi_evolution_runtime;
+-- profile=chatbot_integrations; source evidence in s12-evolution-runtime-contract.json
+GRANT DELETE,INSERT,SELECT,UPDATE ON TABLE public."EvolutionBot" TO nexi_evolution_runtime;
+-- profile=chatbot_integrations; source evidence in s12-evolution-runtime-contract.json
+GRANT INSERT,SELECT,UPDATE ON TABLE public."EvolutionBotSetting" TO nexi_evolution_runtime;
+-- profile=chatbot_integrations; source evidence in s12-evolution-runtime-contract.json
+GRANT DELETE,INSERT,SELECT,UPDATE ON TABLE public."Flowise" TO nexi_evolution_runtime;
+-- profile=chatbot_integrations; source evidence in s12-evolution-runtime-contract.json
+GRANT INSERT,SELECT,UPDATE ON TABLE public."FlowiseSetting" TO nexi_evolution_runtime;
+-- profile=core_api; source evidence in s12-evolution-runtime-contract.json
+GRANT INSERT,SELECT,UPDATE ON TABLE public."IsOnWhatsapp" TO nexi_evolution_runtime;
+-- profile=chatbot_integrations; source evidence in s12-evolution-runtime-contract.json
+GRANT DELETE,INSERT,SELECT,UPDATE ON TABLE public."N8n" TO nexi_evolution_runtime;
+-- profile=chatbot_integrations; source evidence in s12-evolution-runtime-contract.json
+GRANT INSERT,SELECT,UPDATE ON TABLE public."N8nSetting" TO nexi_evolution_runtime;
+-- profile=chatbot_integrations; source evidence in s12-evolution-runtime-contract.json
+GRANT DELETE,INSERT,SELECT,UPDATE ON TABLE public."Evoai" TO nexi_evolution_runtime;
+-- profile=chatbot_integrations; source evidence in s12-evolution-runtime-contract.json
+GRANT INSERT,SELECT,UPDATE ON TABLE public."EvoaiSetting" TO nexi_evolution_runtime;
+-- profile=core_api; source evidence in s12-evolution-runtime-contract.json
+GRANT DELETE,INSERT,SELECT,UPDATE ON TABLE public."RuntimeConfig" TO nexi_evolution_runtime;
+-- profile=groups; source evidence in s12-evolution-runtime-contract.json
+GRANT INSERT,SELECT,UPDATE ON TABLE public."NexiGroupControl" TO nexi_evolution_runtime;
+-- profile=groups; source evidence in s12-evolution-runtime-contract.json
+GRANT INSERT,SELECT,UPDATE ON TABLE public."NexiGroupEventOutbox" TO nexi_evolution_runtime;
+-- profile=attendance; source evidence in s12-evolution-runtime-contract.json
+GRANT INSERT,SELECT ON TABLE public."NexiManagedTransportContext" TO nexi_evolution_runtime;
+-- profile=attendance; source evidence in s12-evolution-runtime-contract.json
+GRANT INSERT,SELECT,UPDATE ON TABLE public."NexiAttendancePreparation" TO nexi_evolution_runtime;
+-- profile=attendance; source evidence in s12-evolution-runtime-contract.json
+GRANT INSERT,SELECT ON TABLE public."NexiReceiptJournal" TO nexi_evolution_runtime;
+-- profile=attendance; source evidence in s12-evolution-runtime-contract.json
+GRANT INSERT,SELECT,UPDATE ON TABLE public."NexiAttendanceEventOutbox" TO nexi_evolution_runtime;
+-- profile=attendance; source evidence in s12-evolution-runtime-contract.json
+GRANT INSERT,SELECT,UPDATE ON TABLE public."NexiAttendanceHealth" TO nexi_evolution_runtime;
+-- profile=durable_ingress; source evidence in s12-evolution-runtime-contract.json
+GRANT INSERT,SELECT,UPDATE ON TABLE public."NexiIngressScope" TO nexi_evolution_runtime;
+-- profile=durable_ingress; source evidence in s12-evolution-runtime-contract.json
+GRANT DELETE,INSERT,SELECT,UPDATE ON TABLE public."NexiIngressLane" TO nexi_evolution_runtime;
+-- profile=durable_ingress; source evidence in s12-evolution-runtime-contract.json
+GRANT INSERT,SELECT,UPDATE ON TABLE public."NexiIngressJournal" TO nexi_evolution_runtime;
+-- profile=durable_ingress; source evidence in s12-evolution-runtime-contract.json
+GRANT INSERT,SELECT,UPDATE ON TABLE public."NexiIngressEffectLane" TO nexi_evolution_runtime;
+-- profile=durable_ingress; source evidence in s12-evolution-runtime-contract.json
+GRANT INSERT,SELECT,UPDATE ON TABLE public."NexiIngressEffect" TO nexi_evolution_runtime;
+-- profile=durable_ingress; source evidence in s12-evolution-runtime-contract.json
+GRANT DELETE,INSERT,SELECT,UPDATE ON TABLE public."NexiIngressContactCache" TO nexi_evolution_runtime;
+-- profile=owner_generation; source evidence in s12-evolution-runtime-contract.json
+GRANT INSERT,SELECT,UPDATE ON TABLE public."NexiIngressOwnerRoot" TO nexi_evolution_runtime;
+-- profile=owner_generation; source evidence in s12-evolution-runtime-contract.json
+GRANT INSERT,SELECT,UPDATE ON TABLE public."NexiIngressOwnerGeneration" TO nexi_evolution_runtime;
+-- profile=owner_generation; source evidence in s12-evolution-runtime-contract.json
+GRANT INSERT,SELECT ON TABLE public."NexiIngressOwnerSource" TO nexi_evolution_runtime;
+-- profile=owner_generation; source evidence in s12-evolution-runtime-contract.json
+GRANT INSERT,SELECT ON TABLE public."NexiIngressOwnerDelivery" TO nexi_evolution_runtime;
+
+-- Sequence identities are deliberately absent: resolve exactly the two catalog
+-- dependencies named in the contract; grant USAGE only, never UPDATE/setval.
+-- Runtime receives no ledger/private table access or direct trigger EXECUTE.

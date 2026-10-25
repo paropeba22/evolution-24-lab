@@ -47,6 +47,12 @@ GRANT CONNECT ON DATABASE nexi TO nexi_evolution_runtime,nexi_evolution_migrator
 GRANT USAGE ON SCHEMA public TO nexi_evolution_runtime,nexi_evolution_schema_owner,nexi_evolution_guard_owner;
 ALTER ROLE nexi_evolution_runtime IN DATABASE nexi SET search_path=public;
 ALTER ROLE nexi_evolution_runtime IN DATABASE nexi SET session_replication_role=origin;
+-- Every newly authenticated direct Prisma maintenance connection receives the
+-- same effective NOLOGIN owner from PostgreSQL itself. Do not rely on SET ROLE
+-- performed in an unrelated client, pooled connection, PGOPTIONS or URL parser.
+ALTER ROLE nexi_evolution_migrator IN DATABASE nexi SET role=nexi_evolution_guard_owner;
+ALTER ROLE nexi_evolution_migrator IN DATABASE nexi SET search_path=public;
+ALTER ROLE nexi_evolution_migrator IN DATABASE nexi SET session_replication_role=origin;
 -- These PUBLIC changes affect every consumer of nexi/public: catalog-backed
 -- impact review and named replacement grants are mandatory before application.
 REVOKE CREATE,TEMPORARY ON DATABASE nexi FROM PUBLIC;
@@ -83,7 +89,13 @@ COMMIT;
 -- nexi_evolution_guard_owner on every DDL/ledger connection, including any
 -- connection opened by Prisma. session_user is the separately authenticated
 -- migrator. A superuser login alone fails the migration's current_user check.
--- Do not assume PGOPTIONS/URI options propagate through an unverified driver.
+-- The per-database login defaults above apply at authentication to each backend.
+-- Reject client startup role/options overrides, PGOPTIONS, poolers, and paths
+-- that RESET ROLE NONE; never mount this migration credential in runtime.
+-- Run the prepared read-only s12-evolution-migration-preflight.sql on a newly
+-- authenticated direct connection, without SET ROLE, as a separate authorized
+-- operation. It checks both session identity and the catalog login-default
+-- contract. It never authorizes migration or proves a future unbuilt artifact.
 -- Apply only the reconciled 20261025000000 migration; do not replay histories.
 -- Provision the receipt key separately without SQL logs, argv, shell trace,
 -- chat output or committed files. No signing/key-returning SQL API is allowed.
@@ -123,6 +135,12 @@ COMMIT;
 
 -- PHASE D (not SQL here): complete baseline matrix, named sequence grants and
 -- explicit owner transfers if required. Never REASSIGN OWNED BY postgres.
+-- The full source-surface named proposals now exist in
+-- s12-evolution-named-runtime-grants.sql.in, gated independently. Select only
+-- catalog-reconciled deployed profiles; do not execute all optional integrations.
+-- After the authorized maintenance window, revoke the migrator's SET membership
+-- and disable its LOGIN. RESET its database role/search_path/replication defaults
+-- before repurposing it; never reuse a maintenance credential for runtime.
 -- Credential setup and LOGIN activation are separate, audited secret-manager
 -- operations. Runtime DATABASE_CONNECTION_URI uses runtime credentials only.
 -- No credential values are present in this template. Migration credentials

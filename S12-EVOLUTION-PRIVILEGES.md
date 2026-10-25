@@ -1,6 +1,10 @@
 # S12 Evolution Prisma provenance and privilege preparation
 
 Status: **PREPARED / NOT EXECUTED / NOT READY FOR PRODUCTION APPLICATION**.
+The subsequent [closure supplement](S12-EVOLUTION-CLOSURE.md) supersedes the
+source-level schema/wrapper uncertainty below, completes all 54 model access
+classifications and adds the server-side migrator login-default owner contract.
+Its remaining deployment/catalog gates are still binding.
 Static work only on 2026-10-25. No tests, builds, compilers, package installation,
 service/DB/Redis/Docker execution, production queries, role changes, migration,
 deployment, message processing or activation were performed in this preparation.

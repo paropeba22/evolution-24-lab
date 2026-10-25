@@ -1,0 +1,37 @@
+{
+  "status": "STATIC_BYTE_DERIVATION_NOT_BUILT_OR_DEPLOYED",
+  "upstream": "e273b904d53f5726970fd6a244ed9caa61dfeb9a",
+  "overlay_baseline": "f248f1ede50ec2d5519cef0ba4c391a49d6124b4",
+  "overlay_candidate_source": "87a82765f52ad9945f9bf52562e99c84e1ad6a49",
+  "baseline_lf_sha256": "145e9ac35677739e544c5092b7c7326d9271d9dbfebc6a5690fe014338e85d7f",
+  "candidate_lf_sha256": "403b508bf0da6ceccb461b2b61837da1c450d8f36008acdee75f47018cc14463",
+  "reported_runtime_schema_sha256": "145e9ac35677739e544c5092b7c7326d9271d9dbfebc6a5690fe014338e85d7f",
+  "baseline_matches_reported": true,
+  "wrapper_variants": [
+    {
+      "variant": "raw",
+      "sha256": "f6556b46a7712fa018fe5ffa7e65d9763050398d8a16e8fe8e157b5852563968",
+      "matches_reported": false
+    },
+    {
+      "variant": "lf",
+      "sha256": "e0a66767b5a349b74d70584204ade30f8debfc760253070a2507574621eee1f8",
+      "matches_reported": true
+    },
+    {
+      "variant": "lf_with_trailing_lf",
+      "sha256": "efc58969ea34c021da9af497f11c336c10032e88e9a77bcf0d40f29678f2968f",
+      "matches_reported": false
+    },
+    {
+      "variant": "crlf",
+      "sha256": "f6556b46a7712fa018fe5ffa7e65d9763050398d8a16e8fe8e157b5852563968",
+      "matches_reported": false
+    },
+    {
+      "variant": "crlf_with_trailing_crlf",
+      "sha256": "c5ed626a404f5061f243106a28fe828b4e68feb081a2a5eb9dec01819ebca4ac",
+      "matches_reported": false
+    }
+  ]
+}

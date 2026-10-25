@@ -20,7 +20,7 @@ SELECT roleid::regrole AS granted_role,member::regrole AS member,grantor::regrol
        admin_option,inherit_option,set_option FROM pg_auth_members ORDER BY roleid,member,grantor;
 SELECT d.setdatabase,d.setrole::regrole AS role,
        split_part(v,'=',1) AS setting_name,
-       CASE WHEN split_part(v,'=',1) IN ('search_path','session_replication_role','statement_timeout','lock_timeout')
+       CASE WHEN split_part(v,'=',1) IN ('role','search_path','session_replication_role','statement_timeout','lock_timeout')
             THEN substr(v,strpos(v,'=')+1) ELSE '[value omitted]' END AS setting_value
 FROM pg_db_role_setting d CROSS JOIN LATERAL unnest(d.setconfig) v
 WHERE d.setdatabase IN (0,(SELECT oid FROM pg_database WHERE datname=current_database()))
