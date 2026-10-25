@@ -1,0 +1,130 @@
+-- PREPARED ONLY; NEVER EXECUTED. Review worksheet, deliberately not runnable.
+-- Production catalog and artifact provenance are incomplete. Remove this gate
+-- only in a separately authorized, reviewed derivative with the exact catalog
+-- capture hash, database OID, object owners and completed per-object matrix.
+\set ON_ERROR_STOP on
+\echo 'STOP: incomplete production provenance/catalog; this is a review template.'
+\quit 3
+
+-- PHASE A: separate cluster administrator session, not an application pool.
+-- Replace EXPECTED_DATABASE_OID before review; do not select role passwords.
+BEGIN;
+SET LOCAL statement_timeout='10s';
+SET LOCAL lock_timeout='1s';
+DO $$ BEGIN
+  IF current_database()<>'nexi' OR current_setting('server_version_num')::int NOT BETWEEN 180000 AND 189999
+    OR (SELECT oid FROM pg_database WHERE datname=current_database())<>EXPECTED_DATABASE_OID
+    OR session_user<>current_user
+    OR NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname=current_user AND rolsuper)
+  THEN RAISE EXCEPTION 'wrong database, server or administrative identity'; END IF;
+  IF EXISTS(SELECT 1 FROM pg_roles WHERE rolname IN ('nexi_evolution_schema_owner',
+    'nexi_evolution_guard_owner','nexi_evolution_migrator','nexi_evolution_runtime'))
+  THEN RAISE EXCEPTION 'role collision: inspect, never reuse/alter blindly'; END IF;
+  IF to_regclass('public."NexiIngressScope"') IS NULL OR to_regclass('public."NexiIngressLane"') IS NULL
+    OR to_regclass('public."NexiIngressJournal"') IS NULL OR to_regclass('public."_prisma_migrations"') IS NULL
+    OR to_regnamespace('nexi_ingress_owner_private') IS NOT NULL
+    OR to_regclass('public."NexiIngressOwnerRoot"') IS NOT NULL
+    OR to_regclass('public."NexiIngressOwnerGeneration"') IS NOT NULL
+    OR to_regclass('public."NexiIngressOwnerSource"') IS NOT NULL
+    OR to_regclass('public."NexiIngressOwnerDelivery"') IS NOT NULL
+    OR EXISTS(SELECT 1 FROM pg_extension WHERE extname='pgcrypto')
+  THEN RAISE EXCEPTION 'baseline or pgcrypto plan mismatch'; END IF;
+  IF EXISTS(SELECT 1 FROM public."_prisma_migrations" WHERE rolled_back_at IS NULL AND finished_at IS NULL)
+    OR EXISTS(SELECT 1 FROM public."_prisma_migrations"
+      WHERE migration_name='20261025000000_nexi_ingress_owner_generations' AND rolled_back_at IS NULL)
+  THEN RAISE EXCEPTION 'unresolved or already recorded migration'; END IF;
+END $$;
+-- New credential identities remain NOLOGIN until a secure credential ceremony.
+CREATE ROLE nexi_evolution_schema_owner NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT;
+CREATE ROLE nexi_evolution_guard_owner NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT;
+CREATE ROLE nexi_evolution_migrator NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT;
+CREATE ROLE nexi_evolution_runtime NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT;
+GRANT nexi_evolution_schema_owner,nexi_evolution_guard_owner TO nexi_evolution_migrator WITH ADMIN FALSE;
+GRANT nexi_evolution_schema_owner,nexi_evolution_guard_owner TO nexi_evolution_migrator WITH INHERIT FALSE;
+GRANT nexi_evolution_schema_owner,nexi_evolution_guard_owner TO nexi_evolution_migrator WITH SET TRUE;
+-- No role membership is granted to runtime. No grant options anywhere.
+GRANT CONNECT ON DATABASE nexi TO nexi_evolution_runtime,nexi_evolution_migrator;
+GRANT USAGE ON SCHEMA public TO nexi_evolution_runtime,nexi_evolution_schema_owner,nexi_evolution_guard_owner;
+ALTER ROLE nexi_evolution_runtime IN DATABASE nexi SET search_path=public;
+ALTER ROLE nexi_evolution_runtime IN DATABASE nexi SET session_replication_role=origin;
+-- These PUBLIC changes affect every consumer of nexi/public: catalog-backed
+-- impact review and named replacement grants are mandatory before application.
+REVOKE CREATE,TEMPORARY ON DATABASE nexi FROM PUBLIC;
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+-- Inspect ALL other schemas, role memberships, parameter ACLs, and reachable
+-- SECURITY DEFINER functions. Any remaining runtime CREATE/TEMP/DDL/owner or
+-- dangerous parameter capability is a stop, not a reason to relax the guard.
+
+-- Fail closed for future objects, globally for each actual creator.
+-- Per-schema REVOKE cannot remove PostgreSQL's global PUBLIC EXECUTE default.
+ALTER DEFAULT PRIVILEGES FOR ROLE nexi_evolution_schema_owner REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
+ALTER DEFAULT PRIVILEGES FOR ROLE nexi_evolution_guard_owner REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
+ALTER DEFAULT PRIVILEGES FOR ROLE nexi_evolution_schema_owner REVOKE ALL ON TABLES FROM PUBLIC,nexi_evolution_runtime;
+ALTER DEFAULT PRIVILEGES FOR ROLE nexi_evolution_guard_owner REVOKE ALL ON TABLES FROM PUBLIC,nexi_evolution_runtime;
+ALTER DEFAULT PRIVILEGES FOR ROLE nexi_evolution_schema_owner REVOKE ALL ON SEQUENCES FROM PUBLIC,nexi_evolution_runtime;
+ALTER DEFAULT PRIVILEGES FOR ROLE nexi_evolution_guard_owner REVOKE ALL ON SEQUENCES FROM PUBLIC,nexi_evolution_runtime;
+-- No default runtime DML/sequence/function grants. Each new object needs a
+-- reviewed named grant; defaults do not fix existing or other creators' ACLs.
+
+-- PHASE B: narrow temporary capability for exactly the owner-generation DDL.
+-- Trusted pgcrypto creation requires database CREATE; public tables/functions
+-- require schema CREATE. Runtime receives neither capability.
+GRANT CREATE ON DATABASE nexi TO nexi_evolution_guard_owner;
+GRANT CREATE ON SCHEMA public TO nexi_evolution_guard_owner;
+GRANT REFERENCES ON TABLE public."NexiIngressScope",public."NexiIngressLane",public."NexiIngressJournal"
+  TO nexi_evolution_guard_owner;
+GRANT TRIGGER ON TABLE public."NexiIngressLane",public."NexiIngressJournal" TO nexi_evolution_guard_owner;
+-- Only for an approved Prisma ledger runner that needs these operations.
+GRANT SELECT,INSERT,UPDATE ON TABLE public."_prisma_migrations" TO nexi_evolution_guard_owner;
+COMMIT;
+
+-- STOP BETWEEN PHASES. No migration execution command is embedded here.
+-- The approved dedicated migration runner must prove current_user is exactly
+-- nexi_evolution_guard_owner on every DDL/ledger connection, including any
+-- connection opened by Prisma. session_user is the separately authenticated
+-- migrator. A superuser login alone fails the migration's current_user check.
+-- Do not assume PGOPTIONS/URI options propagate through an unverified driver.
+-- Apply only the reconciled 20261025000000 migration; do not replay histories.
+-- Provision the receipt key separately without SQL logs, argv, shell trace,
+-- chat output or committed files. No signing/key-returning SQL API is allowed.
+
+-- PHASE C: separate administrator session after the reviewed migration.
+BEGIN;
+SET LOCAL statement_timeout='10s';
+SET LOCAL lock_timeout='1s';
+-- REQUIRED before executing this phase: full catalog recapture and exact
+-- source/owner/proconfig/trigger/index comparison from schemaGuard(). Abort on
+-- any mismatch. Merely finding table names is not sufficient validation.
+REVOKE CREATE ON DATABASE nexi FROM nexi_evolution_guard_owner;
+REVOKE CREATE ON SCHEMA public FROM nexi_evolution_guard_owner;
+REVOKE REFERENCES ON TABLE public."NexiIngressScope",public."NexiIngressLane",public."NexiIngressJournal"
+  FROM nexi_evolution_guard_owner;
+REVOKE TRIGGER ON TABLE public."NexiIngressLane",public."NexiIngressJournal" FROM nexi_evolution_guard_owner;
+REVOKE SELECT,INSERT,UPDATE ON TABLE public."_prisma_migrations" FROM nexi_evolution_guard_owner;
+-- Exact receive protocol delta: baseline ORM/module matrix is a separate gate.
+GRANT SELECT,INSERT,UPDATE ON TABLE public."NexiIngressScope",public."NexiIngressJournal",
+  public."NexiIngressEffectLane",public."NexiIngressEffect",public."NexiIngressOwnerRoot",
+  public."NexiIngressOwnerGeneration" TO nexi_evolution_runtime;
+GRANT SELECT,INSERT,UPDATE,DELETE ON TABLE public."NexiIngressLane",public."NexiIngressContactCache"
+  TO nexi_evolution_runtime;
+GRANT SELECT,INSERT ON TABLE public."NexiIngressOwnerSource",public."NexiIngressOwnerDelivery"
+  TO nexi_evolution_runtime;
+REVOKE ALL ON SCHEMA nexi_ingress_owner_private FROM PUBLIC,nexi_evolution_runtime;
+REVOKE ALL ON TABLE nexi_ingress_owner_private.receipt_key FROM PUBLIC,nexi_evolution_runtime;
+REVOKE ALL ON FUNCTION public.nexi_ingress_owner_receipt_guard() FROM PUBLIC,nexi_evolution_runtime;
+REVOKE ALL ON FUNCTION public.nexi_ingress_owner_root_guard(),public.nexi_ingress_owner_generation_guard(),
+  public.nexi_ingress_owner_source_guard(),public.nexi_ingress_owner_prefix_guard() FROM PUBLIC,nexi_evolution_runtime;
+-- Runtime needs no direct call to these trigger-only routines, no private
+-- pgcrypto schema USAGE, and no sequence for owner-generation IDs/counters.
+-- No EXECUTE-on-all, TRUNCATE, TRIGGER, REFERENCES, MAINTAIN, ownership or DDL.
+-- Existing baseline ACLs, column grants and defaults must also be checked:
+-- REVOKE at table level does not remove separately granted column privileges.
+COMMIT;
+
+-- PHASE D (not SQL here): complete baseline matrix, named sequence grants and
+-- explicit owner transfers if required. Never REASSIGN OWNED BY postgres.
+-- Credential setup and LOGIN activation are separate, audited secret-manager
+-- operations. Runtime DATABASE_CONNECTION_URI uses runtime credentials only.
+-- No credential values are present in this template. Migration credentials
+-- must never be mounted in the runtime service. Do not enable the feature or
+-- replace any pool until all gates in S12-EVOLUTION-PRIVILEGES.md are satisfied.

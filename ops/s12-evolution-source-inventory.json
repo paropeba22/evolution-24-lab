@@ -1,0 +1,4049 @@
+{
+  "status": "PREPARED_NOT_EXECUTED_NOT_A_GRANT_ALLOWLIST",
+  "candidate_head": "87a82765f52ad9945f9bf52562e99c84e1ad6a49",
+  "upstream_commit": "e273b904d53f5726970fd6a244ed9caa61dfeb9a",
+  "source_method": "git archive of exact upstream commit; overlay files read from clean approved candidate",
+  "limitations": [
+    "No deployed schema bytes or complete production catalogs supplied; schema not reconstructed.",
+    "Lexical direct delegate calls are evidence, not complete authorization: aliases, dynamic delegates, nested writes, cascades, raw SQL and branches need review.",
+    "Patch template calls can describe code replaced by patches; resolve final transformed source before approving grants.",
+    "No tests, build, compiler, service, database, Redis, Docker or package execution."
+  ],
+  "runtime_reported": {
+    "image": "ghcr.io/paropeba22/nexi-evolution-s12-dispatch-bound-f248f1e@sha256:37bec98093e3a83b20cee3eb249379e325651c8cdc68bcf775f633515e620cf0",
+    "git_sha": "b206baaa0518ba881fade671942a693ca1c24188",
+    "schema_sha256": "145e9ac35677739e544c5092b7c7326d9271d9dbfebc6a5690fe014338e85d7f",
+    "config_sha256": "9615adcd624567b61043880dac5ee19441a7c0b2760057c70057b4a7fec99904",
+    "production_catalog_complete": false
+  },
+  "hashes": [
+    {
+      "file": "prisma.config.ts",
+      "sha256_lf": "9615adcd624567b61043880dac5ee19441a7c0b2760057c70057b4a7fec99904",
+      "sha256_worktree_bytes": "b177ec73269d47d2aa37c6f8a4d2b372119c0dda08bd6eb786460961d61efb6a"
+    },
+    {
+      "file": "Dockerfile",
+      "sha256_lf": "e0b194fc434e4d2fcb20f1d575c9ba9a29a9e72c5f2bee2952cd5609cefa3e45",
+      "sha256_worktree_bytes": "97cc85f51fa17c6cdb6691c5e38efc71d20caf64b995b6697fe93b272da4de15"
+    },
+    {
+      "file": "nexi-start.sh",
+      "sha256_lf": "ed3b5a18fcf02f6da4a3edb53b8f70e5561b633a7092f4c7943b4a329eba5e90",
+      "sha256_worktree_bytes": "bc6121eb2a08b2cf66deb104a828b0ba4f09d0ea77aff2ddce5601c2454f8f36"
+    },
+    {
+      "file": "ingress-models.prisma",
+      "sha256_lf": "5b9d4e80a74c0fb3ebc4aa5adf39e951d5a274dcd1b367e0afc76fb27b68cfd7",
+      "sha256_worktree_bytes": "f9d3aed9248526ed6f36479afd225cae5dfbd8afaa2c04bdb4adcba18e15a26c"
+    },
+    {
+      "file": "attendance-models.prisma",
+      "sha256_lf": "72158d93fb34cdc5e3eaa391619c20b92b0ca7337df7f8e94107ee355db5c4e2",
+      "sha256_worktree_bytes": "3f239876009ac8e4494508eb21f85fea497d9a8d4402c10948813f27c9a90899"
+    },
+    {
+      "file": "patch-prisma-binding.mjs",
+      "sha256_lf": "e2c22242e03b3a8395520c126104092f73c3f67a45e548d5a97acbf17b66ff1a",
+      "sha256_worktree_bytes": "88802224ee21ce18d6c69b7146024de39d44011dde29094538f3694f25e8da6e"
+    },
+    {
+      "file": "patch-groups-source.mjs",
+      "sha256_lf": "436ed0411593fbc279664352267964efe671d567e3c24eaa5dce2af4b53ecd02",
+      "sha256_worktree_bytes": "9cf8eb59d3915a8743ee6c65ad90a647756e5b2f1fe899e3dd183ed9a2240043"
+    },
+    {
+      "file": "patch-attendance-source.mjs",
+      "sha256_lf": "2b7874f42e424b31a90b9f3014dad6ecf3a4fb64113f87977518c32842f10bdb",
+      "sha256_worktree_bytes": "eff1dd1944fb2678908189c941d2464a5dbe70cd07ca5e03a94b72c761bfa05b"
+    },
+    {
+      "file": "patch-ingress-source.mjs",
+      "sha256_lf": "5e175087dc2ed86d44c0e560c4245b5af2977318d45f4f874ceb4c814a147787",
+      "sha256_worktree_bytes": "1fb47921f79a8b0ce30c778a910feb2522f0c1cf857a551ab63b99321ec94d82"
+    },
+    {
+      "file": "prisma/postgresql-migrations/20261025000000_nexi_ingress_owner_generations/migration.sql",
+      "sha256_lf": "e17a49cd4f395d79cc370679c9512f59184233fd19caa985b532b425f9329d57",
+      "sha256_worktree_bytes": "e17a49cd4f395d79cc370679c9512f59184233fd19caa985b532b425f9329d57"
+    }
+  ],
+  "postgresql_migrations": [
+    {
+      "name": "20240609181238_init",
+      "origin": "upstream",
+      "sha256_read_bytes": "27baef777302e9d8367e3b3a349872057560db25a0fa56f15c205d291d9b0f3f",
+      "sha256_lf": "7507eff6b49fad53cdd0b3ace500f529597dfa1a8987afbb9807968a8ee8ef49",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": [
+        "Instance",
+        "Session",
+        "Chat",
+        "Contact",
+        "Message",
+        "MessageUpdate",
+        "Webhook",
+        "Chatwoot",
+        "Label",
+        "Proxy",
+        "Setting",
+        "Rabbitmq",
+        "Sqs",
+        "Websocket",
+        "Typebot",
+        "TypebotSession",
+        "TypebotSetting"
+      ]
+    },
+    {
+      "name": "20240610144159_create_column_profile_name_instance",
+      "origin": "upstream",
+      "sha256_read_bytes": "8976f3457d20744e965f3d41531efc90b1cdfb8b478c15b81e1006d60c960b14",
+      "sha256_lf": "914eeefb9eba0dacdbcb7cdbe47567abd957543d6f27c39db4eec6a40c864008",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": []
+    },
+    {
+      "name": "20240611125754_create_columns_whitelabel_chatwoot",
+      "origin": "upstream",
+      "sha256_read_bytes": "2a09fb68313bba6db31af81eda4b626b53e239b9ca2d080ce217345cd9c32eb3",
+      "sha256_lf": "50d6920345af06dbd5086959784b7e2b4d163a5b555ff1029e5f81678a454444",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": []
+    },
+    {
+      "name": "20240611202817_create_columns_debounce_time_typebot",
+      "origin": "upstream",
+      "sha256_read_bytes": "36e9e5138685311bef9385a3ef63e7df56ad23dd2163034167ff6d3645bddc34",
+      "sha256_lf": "b90c49299ed812fb46b71a4f0b9f818b7fc7109c52b1aff227a107236839d93c",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": []
+    },
+    {
+      "name": "20240712144948_add_business_id_column_to_instances",
+      "origin": "upstream",
+      "sha256_read_bytes": "c1afb961d562d4936219599cc90821517432954a6a9698912e0130ec93476a34",
+      "sha256_lf": "01303057a037f5dc28272ac513b60d5a75be71d1bf727e671ca538db3268fa2e",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": []
+    },
+    {
+      "name": "20240712150256_create_templates_table",
+      "origin": "upstream",
+      "sha256_read_bytes": "7549964e67088b0925e05ae0cebb605ff69a8eadb008f779305f8826303ddaf0",
+      "sha256_lf": "34235c250eb1f088c285489ad690b4c045680f1638076436cdc66de0ea382cc2",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": [
+        "Template"
+      ]
+    },
+    {
+      "name": "20240712155950_adjusts_in_templates_table",
+      "origin": "upstream",
+      "sha256_read_bytes": "50b74edd75a97f18469ebd0236fb284374bc47688699ddcb61f4bdad4e8dc729",
+      "sha256_lf": "0ba192ba428c9ab5a9b31d1f7d73603ee47b6192e2f8c590f6d93ade0dbdbccf",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": []
+    },
+    {
+      "name": "20240712162206_remove_templates_table",
+      "origin": "upstream",
+      "sha256_read_bytes": "403d96613e5434797281f27a189d1f71efa1b7fcf3b4944f283f90ffb086643d",
+      "sha256_lf": "426256b73f7ea52538dc91a890179c841325a9c387cf02885b81971d582af830",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": []
+    },
+    {
+      "name": "20240712223655_column_fallback_typebot",
+      "origin": "upstream",
+      "sha256_read_bytes": "2a8555b8851dde702d9bc1cadb6e2b321b4a88b6825d94d2c508abb1c3ac7298",
+      "sha256_lf": "3496739609829e80daf733baecd3d3e4e279bf318a99adc1ca3aa1c76f893b2f",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": []
+    },
+    {
+      "name": "20240712230631_column_ignore_jids_typebot",
+      "origin": "upstream",
+      "sha256_read_bytes": "0709e73c076c906c0faf243a5815f0d37b4177a7fbde734b5deeba7ee15ee0dd",
+      "sha256_lf": "bea48f697c0c5db52ade4a3f26c1321e3f5611c80ea50384baa54e58c6b3a79e",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": []
+    },
+    {
+      "name": "20240713184337_add_media_table",
+      "origin": "upstream",
+      "sha256_read_bytes": "a6d4871802c0db34a87d26826a8f84b38c551f412e3ee13aa23688dbb6d2330c",
+      "sha256_lf": "1bac56740af5d2d6512b29e7a6e0721d69b2a290400f6660b92b6f2d8b30cd6e",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": [
+        "Media"
+      ]
+    },
+    {
+      "name": "20240718121437_add_openai_tables",
+      "origin": "upstream",
+      "sha256_read_bytes": "1e78d4efb6ef2a7405ca27d8cac45894fe4d11747f37a05baaf062eeab8e5c69",
+      "sha256_lf": "bdd992b253321ca9a9556e30fea5e7760556cb8e80140aec34066301b55dc675",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": [
+        "OpenaiCreds",
+        "OpenaiBot",
+        "OpenaiSession",
+        "OpenaiSetting"
+      ]
+    },
+    {
+      "name": "20240718123923_adjusts_openai_tables",
+      "origin": "upstream",
+      "sha256_read_bytes": "630b9467b4fe015e8fd3b6ccea2a17fa5ac70abae7a65b749ae1b77f1c8bf4b0",
+      "sha256_lf": "8147ec0cc86ac30ea1be05d461559ba5064273a3fcb3227af71ddcd895f5aebe",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": []
+    },
+    {
+      "name": "20240722173259_add_name_column_to_openai_creds",
+      "origin": "upstream",
+      "sha256_read_bytes": "4369e38f01b8296775c5b0460233214c57033da9148f73e2080268a55e28c8b1",
+      "sha256_lf": "8c2a595975dc2f6dee831983304996e25c37014c48291576e7c8044078bfde32",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": []
+    },
+    {
+      "name": "20240722173518_add_name_column_to_openai_creds",
+      "origin": "upstream",
+      "sha256_read_bytes": "3022fd5439a903e6f85dedb02392d3e757921ad7a07ab1fa26b351af88e91249",
+      "sha256_lf": "20b3c04d93799c25fa8b2d0a85d10f9280e915a5d7519542492ed85ff082a3c0",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": []
+    },
+    {
+      "name": "20240723152648_adjusts_in_column_openai_creds",
+      "origin": "upstream",
+      "sha256_read_bytes": "d3a982042b0982e6bb53291d41f5aee33e9e2485a95841a8f621d54062d7bc09",
+      "sha256_lf": "7ffb91b84cb7aa17b1f488d580626144cd557ccdfaec6654515545401d1938af",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": []
+    },
+    {
+      "name": "20240723200254_add_webhookurl_on_message",
+      "origin": "upstream",
+      "sha256_read_bytes": "55b023362155af02ad14d44ff7ebcaf513912f48acf433da9ebcff4b01c21d1d",
+      "sha256_lf": "3056f8f1335e8933e4098f005e33cd4821190be2eb76520c0d01e2e13cf6e073",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": []
+    },
+    {
+      "name": "20240725184147_create_template_table",
+      "origin": "upstream",
+      "sha256_read_bytes": "df84dce280f764e69766e6661e90d124f2bb4dd8b4892ac1aa8d60c37b603c07",
+      "sha256_lf": "9d6c9b4ffe51483a851f6507f7aefd2fb34f54a7c28961856e3230fda4f87022",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": [
+        "Template"
+      ]
+    },
+    {
+      "name": "20240725202651_add_webhook_url_template_table",
+      "origin": "upstream",
+      "sha256_read_bytes": "ac4f04b12686276b4b829a7da23262f9528009335db4ffb6ec7d83b10bacf5b1",
+      "sha256_lf": "94e2edb21107895c77b24402f41cd020c7f74dbb39b9a95664a45e62e2582be9",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": []
+    },
+    {
+      "name": "20240725221646_modify_token_instance_table",
+      "origin": "upstream",
+      "sha256_read_bytes": "43d3af691b83349a977f17f092fa22108d9cb5cbd13cd1dc9b7129ea350d9961",
+      "sha256_lf": "d0da588e4204c50bde2e41a615b9301afca072991033545b6f4e3e34e088db87",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": []
+    },
+    {
+      "name": "20240729115127_modify_trigger_type_openai_typebot_table",
+      "origin": "upstream",
+      "sha256_read_bytes": "b5b0db352bce21b2f3673d31b69a2217b527afd2848371feb5fd85e9c75915de",
+      "sha256_lf": "a80f5c27cd80d088ea69153f8d6f4879406770ffa5a7fd50b28da82bd020322e",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": []
+    },
+    {
+      "name": "20240729180347_modify_typebot_session_status_openai_typebot_table",
+      "origin": "upstream",
+      "sha256_read_bytes": "8aca808c0e07836ed6897de6c3d8434c8a77c50680db5abad2d95dd8f3c08ec1",
+      "sha256_lf": "c29ccc88930138c50091712466f3f97bff48f6a0f486dcec5b19dc08c3612973",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": []
+    },
+    {
+      "name": "20240730152156_create_dify_tables",
+      "origin": "upstream",
+      "sha256_read_bytes": "56a2691a8bca94859621e41c4ff4daff7427d470463b7d901040bfd4177299d4",
+      "sha256_lf": "961a8627684fe1e4c7123565db3d16db30768df41881342032f9a2df16145eaf",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": [
+        "Dify",
+        "DifySession",
+        "DifySetting"
+      ]
+    },
+    {
+      "name": "20240801193907_add_column_speech_to_text_openai_setting_table",
+      "origin": "upstream",
+      "sha256_read_bytes": "6e44004ee3d2b66f6ced49f6d5710ea740af246d201a29a8009c1a98b06a2ac8",
+      "sha256_lf": "b56b053451d564ff6282078fad4fc7bff4aa71e3b0b8d00bf219da4ed1bc4c86",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": []
+    },
+    {
+      "name": "20240803163908_add_column_description_on_integrations_table",
+      "origin": "upstream",
+      "sha256_read_bytes": "cf6f3e634c587b127b628ffda60766c6fc9da405b7fd07e1d8dd8077d0aa09fb",
+      "sha256_lf": "2b963cbc826ea024f9a643af2d5d9fcea06717c90ec9bacb255d3836efa06aea",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": []
+    },
+    {
+      "name": "20240808210239_add_column_function_url_openaibot_table",
+      "origin": "upstream",
+      "sha256_read_bytes": "95fc913caa826687423d7972f348f33dc9a0eb791edcec0f8fd977aca9786e0f",
+      "sha256_lf": "4d2dd947ebb7515c7c278472a10ebab6d5f41a5ef60e15df717a05d457d5d2aa",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": []
+    },
+    {
+      "name": "20240811021156_add_chat_name_column",
+      "origin": "upstream",
+      "sha256_read_bytes": "0b970540201fe2a47b0c8d0a4ffc6a3921cc34e334b2427f41f11d014f6b5680",
+      "sha256_lf": "c8627bad5d72ee4ef774ed32c95a2524517b0c60c49fa67cd4ba9dff7cbdde3b",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": []
+    },
+    {
+      "name": "20240811183328_add_unique_index_for_remoted_jid_and_instance_in_contacts",
+      "origin": "upstream",
+      "sha256_read_bytes": "bc4f917fa44c1e013373c1bf810ab2540ee2ced045419de38a2ea077cd6c76b7",
+      "sha256_lf": "ee44f0420384d55de6d252fffb8f2cfa88479e5811e14cfe975d8edfcc6957e0",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": []
+    },
+    {
+      "name": "20240813003116_make_label_unique_for_instance",
+      "origin": "upstream",
+      "sha256_read_bytes": "e315a9c3ad3645c636e138936ce8d46c215313d71879e9b929730f1ff2b55dd5",
+      "sha256_lf": "29c330029a48aaee63567e63c4f4e57b7c1f5344162b11fbf61a4dc194547861",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": []
+    },
+    {
+      "name": "20240814173033_add_ignore_jids_chatwoot",
+      "origin": "upstream",
+      "sha256_read_bytes": "f540e340e50d12fdfff7c4cc44356fbfe4a5f69f151254b81879b326677296af",
+      "sha256_lf": "428a9148f2a29f773e0c9813149e6d07bf51765e018652aeac0be2141a722b67",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": []
+    },
+    {
+      "name": "20240814202359_integrations_unification",
+      "origin": "upstream",
+      "sha256_read_bytes": "8634ce63942602ac539f952a861981a5c1be1bbe436057db5cd739449aafc76b",
+      "sha256_lf": "e1eb8997ac99fd555b8a9241c817b97fa5614124922b4e6b3cb1751e9e2199c7",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": [
+        "IntegrationSession"
+      ]
+    },
+    {
+      "name": "20240817110155_add_trigger_type_advanced",
+      "origin": "upstream",
+      "sha256_read_bytes": "d6777198b6b5a3a1649f17e0b1ec88b7a73cee24cf937d25c3e7d89f69cbd2f3",
+      "sha256_lf": "bc5cd1c7fb4df72e88cb4856c9c49ea340284c9d8f389fe558008a921494ed82",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": []
+    },
+    {
+      "name": "20240819154941_add_context_to_integration_session",
+      "origin": "upstream",
+      "sha256_read_bytes": "9a75396215bc3fd67b17fa4d0ef9f2f60bfa5bf14c8ad0ec67d1704120fda3b7",
+      "sha256_lf": "1af30cbbccd90152fbb1b99a458978e42428a792b822b4b5f9c9c7fffbf7264f",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": []
+    },
+    {
+      "name": "20240821120816_bot_id_integration_session",
+      "origin": "upstream",
+      "sha256_read_bytes": "dfd211da0e1f67d5000f26052c76effe0bba79d2738114619238ec84e5d84065",
+      "sha256_lf": "a363a9ebc5bb526e504c4e6f71ed7702a5b6d317db6a9981f36c4560f9147fba",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": []
+    },
+    {
+      "name": "20240821171327_add_generic_bot_table",
+      "origin": "upstream",
+      "sha256_read_bytes": "d1437a5d62848e7a742aa38481b0e5ab22243135bbe5ca6f0e0693ac7538087b",
+      "sha256_lf": "e31947e6c709ee3a62504980ae9ab1ffbfd9faf0cf9ac389cfd6435734c49902",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": [
+        "GenericBot",
+        "GenericSetting"
+      ]
+    },
+    {
+      "name": "20240821194524_add_flowise_table",
+      "origin": "upstream",
+      "sha256_read_bytes": "99e19e179f1ba62a72cbf0f3e8d385cd4fc9921d722599355a6ede164d69fa4b",
+      "sha256_lf": "18dde8e48c49a97f33f5b789ccd919326253c26d43af72c77f6b13d4285ffba8",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": [
+        "Flowise",
+        "FlowiseSetting"
+      ]
+    },
+    {
+      "name": "20240824161333_add_type_on_integration_sessions",
+      "origin": "upstream",
+      "sha256_read_bytes": "8176065f1f2ca1bf329808d1da76783864ce44efb7070da5a842d2bb6acc35aa",
+      "sha256_lf": "0148a09e0e5eedafe5c5169c6351201a5c70ebaa853456693d75a7b82a851dbe",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": []
+    },
+    {
+      "name": "20240825130616_change_to_evolution_bot",
+      "origin": "upstream",
+      "sha256_read_bytes": "0479360c9ff28d54e8fae64538fb690357c139e51dcc5d37a3030421aca79e9c",
+      "sha256_lf": "710e7ee3aabf07aa6ee9bf2865c09f75d461efa5724dd83f5a6f324ea1e5e47c",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": [
+        "EvolutionBot",
+        "EvolutionBotSetting"
+      ]
+    },
+    {
+      "name": "20240828140837_add_is_on_whatsapp_table",
+      "origin": "upstream",
+      "sha256_read_bytes": "995908c88a04dfe8f38ffa2a089300cc06e7d6eab326f816442cf008420613ce",
+      "sha256_lf": "d03a8a31df36eb0a07e80cd2a149b6d826e69bb2cb21fbe69943ae5ffba672ad",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": [
+        "is_on_whatsapp"
+      ]
+    },
+    {
+      "name": "20240828141556_remove_name_column_from_on_whatsapp_table",
+      "origin": "upstream",
+      "sha256_read_bytes": "d782ffe57498c849ed2cd229db78cbc4f448055d9afa378c680df46f8403cb7a",
+      "sha256_lf": "e927e00343b622bee7dab1b9b5c9fdd95007bfaf9d705ec52db9ecb05fb3d078",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": []
+    },
+    {
+      "name": "20240830193533_changed_table_case",
+      "origin": "upstream",
+      "sha256_read_bytes": "7f0c4d1d6c5f0fcc3abe234872a1de75e0d760c8b239d8c2135aa4e0c0de40f3",
+      "sha256_lf": "cf00d8ef2c28cf94aea51e7e2a80ddd65474a4f6c1113abc65dea6cc194c1a57",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": [
+        "IsOnWhatsapp"
+      ]
+    },
+    {
+      "name": "20240906202019_add_headers_on_webhook_config",
+      "origin": "upstream",
+      "sha256_read_bytes": "1a43b7c4547dc9047463e1ef64c9e957dc4a0efd098879918fecbfd27df5bbc3",
+      "sha256_lf": "1cc60b9c38db62b694f753e2ee4c155e95c66815b5800f6ddb6f7cddec23b1ad",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": []
+    },
+    {
+      "name": "20241001180457_add_message_status",
+      "origin": "upstream",
+      "sha256_read_bytes": "53710418ac9b163d15cd06cba2ce9d127945d3284b6b8677ecde62f8b589c855",
+      "sha256_lf": "7dff7227c1e013127210ab4f77b91dc24eae14bcd07f21fb27aaa2fa82b23865",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": []
+    },
+    {
+      "name": "20241006130306_alter_status_on_message_table",
+      "origin": "upstream",
+      "sha256_read_bytes": "36993071520c77a664acebee3f71a35dfc9613c793ccf93446989bc2b6c08271",
+      "sha256_lf": "07449acbac59175f82670f34664c1dcea4d34f9a1710f19bd3396e26868db09e",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": []
+    },
+    {
+      "name": "20241007164026_add_unread_messages_on_chat_table",
+      "origin": "upstream",
+      "sha256_read_bytes": "afcfc0a729e2bd8c9ccd70778d9560b1f72e0d67edc3f4548cfdc0cd4542f49a",
+      "sha256_lf": "7e9a7c45f05285e9fea38ccfa4266790a099107605299d81c309e689c06494ef",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": []
+    },
+    {
+      "name": "20241011085129_create_pusher_table",
+      "origin": "upstream",
+      "sha256_read_bytes": "d6a9d4a0e864f6a9e5cba1a7fe20d6e95a51eb0b1d01a1b238e3e2851390691f",
+      "sha256_lf": "7e3e4686eb8009cbf0f71e8606a442b1c2862673dbc654b3f36f39a36efcb586",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": [
+        "Pusher"
+      ]
+    },
+    {
+      "name": "20241011100803_split_messages_and_time_per_char_integrations",
+      "origin": "upstream",
+      "sha256_read_bytes": "998ab330e39bf09eb9e4b57a642a671683a73c03216119fe153caa8aa19916f4",
+      "sha256_lf": "270e1e51c7b9d24c0e68708ad167cb5748d591fd194ad422486574a0e83c0b79",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": []
+    },
+    {
+      "name": "20241017144950_create_index",
+      "origin": "upstream",
+      "sha256_read_bytes": "0f2acced4ac0f99dce8cff04e07fd6704379cb224a9e62649916c66b1037b92c",
+      "sha256_lf": "e82282df963a32556a9c8cd5fd908dd5810d4c35f0d7765ab9e844ebad1106a2",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": []
+    },
+    {
+      "name": "20250116001415_add_wavoip_token_to_settings_table",
+      "origin": "upstream",
+      "sha256_read_bytes": "6326f8116ce7f5f93dbb39d3f642e4e64711f97d4c4302c8eb5f02110b78d4e6",
+      "sha256_lf": "668e44d3cd8caafa8f60f89805e9f80587c1c69b4d52a21dfc79f4b615125b1c",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": []
+    },
+    {
+      "name": "20250225180031_add_nats_integration",
+      "origin": "upstream",
+      "sha256_read_bytes": "78c3a2776bbdafe344d7ceb4871b191b35bc6d0a0302eb7096b54baa66cdb332",
+      "sha256_lf": "17983175f27c61a0ee6aaa42c94d665cabb7e904ee91c33f867c657512210e1a",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": [
+        "Nats"
+      ]
+    },
+    {
+      "name": "20250514232744_add_n8n_table",
+      "origin": "upstream",
+      "sha256_read_bytes": "19fd34ee359dba5ae1c7fa4ba9584c3160d682304e27c2ea5d5982d8d91c1fd7",
+      "sha256_lf": "0a6034359b1cf68820e829d31402032eed0f77586fb1ee590a98f5a6c3e15847",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": [
+        "N8n",
+        "N8nSetting"
+      ]
+    },
+    {
+      "name": "20250515211815_add_evoai_table",
+      "origin": "upstream",
+      "sha256_read_bytes": "8b318fcb69a6d8dd3f799ce512e9991b54602b663721519d3377706ea33bb9ab",
+      "sha256_lf": "f9ddf352b22e52a1f466d40df95da7bd6f4bf51310c07911d9c990f720e1fe81",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": [
+        "Evoai",
+        "EvoaiSetting"
+      ]
+    },
+    {
+      "name": "20250516012152_remove_unique_atribute_for_file_name_in_media",
+      "origin": "upstream",
+      "sha256_read_bytes": "703bffc08d3341e90294775a3da2796e51553c35e35e5238bfb84837e7806ed3",
+      "sha256_lf": "7a03627d41844a016b28b4194e36eea0e52cd24be0061535fecba4ccbd0e72f4",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": []
+    },
+    {
+      "name": "20250612155048_add_coluns_trypebot_tables",
+      "origin": "upstream",
+      "sha256_read_bytes": "2e88cd5c65fd6bed57cba423fcab7d0d50f795f2d73c6c3d56b9f1c959712d4e",
+      "sha256_lf": "3fca4961d4e7fa8e1a99e3ec6b072d235bec706b7463ab699887be1084e3b656",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": []
+    },
+    {
+      "name": "20250613143000_add_lid_column_to_is_onwhatsapp",
+      "origin": "upstream",
+      "sha256_read_bytes": "b4b33d4c398d1ce8bc60dc0104b246cbe2198d6f7720c5575c8ceaa8dd5939c4",
+      "sha256_lf": "36a19fe7711b98d02b450aedb2de8802b5e2e635a1e530cbc42f1d184e89bec3",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": []
+    },
+    {
+      "name": "20250918182355_add_kafka_integration",
+      "origin": "upstream",
+      "sha256_read_bytes": "a7787732893f366e994875945b7ae2179058340ddb3dd052a8b757652ffc3d0a",
+      "sha256_lf": "2b9d50b837a154ee3a74284c130b21fbe10ecddc1159cb29dac74c4ba4cb6a5f",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": [
+        "Kafka"
+      ]
+    },
+    {
+      "name": "20251122003044_add_chat_instance_remotejid_unique",
+      "origin": "upstream",
+      "sha256_read_bytes": "0a0f8dc2d201001c9a01232cf815b305d9bf727bf7b39a8a62a6c9984c14c440",
+      "sha256_lf": "84053d218d69e85953f7533bbfced9171e762c02c88ab944aaaa75b17f18e161",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": []
+    },
+    {
+      "name": "20251216143054_increase_token_length",
+      "origin": "upstream",
+      "sha256_read_bytes": "8fdf485cc0c833eb751444c73b795947eb60a84fded98b48c6cfeb8acfe16be4",
+      "sha256_lf": "75bf5f658ead0ca12ea58eabd7ffcc4411d94c3d2ff9a6ca050d4e1fa3c9161a",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": []
+    },
+    {
+      "name": "20260506184850_add_runtime_config",
+      "origin": "upstream",
+      "sha256_read_bytes": "72b29a997c2b80dbdfcda071c5c1f8ec827805e4b19fef2b22efb5a523bedbf3",
+      "sha256_lf": "17efc12cc44028e72a66cddeb41be00b7abdbac7d1bbd5e2e9408ad14c4535e0",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": [
+        "RuntimeConfig"
+      ]
+    },
+    {
+      "name": "20260926000000_add_chatwoot_inbox_id",
+      "origin": "overlay",
+      "sha256_read_bytes": "3cb0441d859e447972233fef916ec0bfc93b6f8c1d0f2cd280f105a0a4f25aa7",
+      "sha256_lf": "6e7004d282dd2e196e5737ea40e2c0f0aaee287cac98e5054d60f700a1580b90",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": []
+    },
+    {
+      "name": "20261002000000_nexi_groups_wave1",
+      "origin": "overlay",
+      "sha256_read_bytes": "d694e3780eb9deb06e24d73bfa44148f85b17e8ab3d2503d212c4c5943726d17",
+      "sha256_lf": "dfbae110b75f4dcfc981677eab787491813ec99a9968053f4bc6621e7cf7985c",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": [
+        "NexiGroupControl",
+        "NexiGroupEventOutbox"
+      ]
+    },
+    {
+      "name": "20261002000001_harden_groups_wave1",
+      "origin": "overlay",
+      "sha256_read_bytes": "04e13c3bc3218731ba072bf8a40dc87ed9578fb52769b8866ed3e3d65251b210",
+      "sha256_lf": "8a7bb12eace9434ced34834c0b3abe193d31c9db6603e070143110cdb9c1afa5",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": []
+    },
+    {
+      "name": "20261002000002_namespace_groups_source",
+      "origin": "overlay",
+      "sha256_read_bytes": "59faaf04508e0799d51d68b16d49d89118e590ac3bb63847bf3cc786e4c41d6a",
+      "sha256_lf": "2400f3e45fba4f0e6d2ad307a8a20abec502fb4acb5d7da255a29c1d37c70dcd",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": []
+    },
+    {
+      "name": "20261005000000_nexi_attendance_boundaries",
+      "origin": "overlay",
+      "sha256_read_bytes": "c4dce7844f03310ee53aaf3fb563f36e5f8635905b2fa7bb82bd0fcb088cf537",
+      "sha256_lf": "57f49c82bc9340a7f1db76b3fa1ce6648bc0f07ba404bd0f3da96c111539486f",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": [
+        "NexiManagedTransportContext",
+        "NexiAttendancePreparation",
+        "NexiReceiptJournal",
+        "NexiAttendanceEventOutbox",
+        "NexiAttendanceHealth"
+      ]
+    },
+    {
+      "name": "20261005000001_attendance_canonical_version",
+      "origin": "overlay",
+      "sha256_read_bytes": "db21757e1bebe2cd27d2724bfd1dba78b0a651153005ae8087d315f761b2b62e",
+      "sha256_lf": "0214f56e508df1d81b23700ee6ca73c554f82945db1ffc898d5a58b626ca4ab1",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": []
+    },
+    {
+      "name": "20261006000000_attendance_release_dispatch",
+      "origin": "overlay",
+      "sha256_read_bytes": "cfea3842716d4ef6c64572c44e47efad9b932db2b80f1ce943896566f409d34f",
+      "sha256_lf": "2a8daff6ce7b8bc16173d2babbe70c7e580237d90291df8d465f693d6647580f",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": []
+    },
+    {
+      "name": "20261010000000_attendance_physical_dispatch",
+      "origin": "overlay",
+      "sha256_read_bytes": "4615d5c978dba32faf0555a9777fb0dba2bc0b499eca443f92962b6bac12a4a0",
+      "sha256_lf": "a17cff382193662ebd2598e59d8d559d7e7a642cd0137a8754007ddcd46af2ae",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": []
+    },
+    {
+      "name": "20261015000000_nexi_durable_ingress",
+      "origin": "overlay",
+      "sha256_read_bytes": "d79278d717941f2b4b93f263051f6749f214daa27352a3a93477b9640c65d7a5",
+      "sha256_lf": "042e4282213477a330644a5017621f1646793880c141b195c82092bf0009ba04",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": [
+        "NexiIngressScope",
+        "NexiIngressLane",
+        "NexiIngressJournal"
+      ]
+    },
+    {
+      "name": "20261015000001_nexi_ingress_secondary",
+      "origin": "overlay",
+      "sha256_read_bytes": "528983c93e337d8da65173844ebeb67545ce01ebb59c1fd65dac602a141a4676",
+      "sha256_lf": "f9e556dd35b041ce92b9a860ab5b49002dfc553d0c2f3f043edc199e8ee8be6d",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": [
+        "NexiIngressEffectLane",
+        "NexiIngressEffect"
+      ]
+    },
+    {
+      "name": "20261015000002_nexi_ingress_contact_cache",
+      "origin": "overlay",
+      "sha256_read_bytes": "37242c03be4bb8ba583980719294ceee3760a3c75c931bb3991b50d83e5f7b64",
+      "sha256_lf": "3c6a65a339cae039d0742337ae76bec09f5890b8f0786dfa9e61b6e0ec0a599c",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": [
+        "NexiIngressContactCache"
+      ]
+    },
+    {
+      "name": "20261025000000_nexi_ingress_owner_generations",
+      "origin": "overlay",
+      "sha256_read_bytes": "e17a49cd4f395d79cc370679c9512f59184233fd19caa985b532b425f9329d57",
+      "sha256_lf": "e17a49cd4f395d79cc370679c9512f59184233fd19caa985b532b425f9329d57",
+      "production_ledger_status": "UNKNOWN except supplied last-three names; exact checksums not supplied",
+      "declared_tables": [
+        "nexi_ingress_owner_private",
+        "NexiIngressOwnerRoot",
+        "NexiIngressOwnerGeneration",
+        "NexiIngressOwnerSource",
+        "NexiIngressOwnerDelivery"
+      ]
+    }
+  ],
+  "owner_function_contracts": [
+    {
+      "name": "nexi_ingress_owner_receipt_guard",
+      "owner": "nexi_evolution_guard_owner",
+      "security_definer": true,
+      "proconfig": [
+        "search_path=pg_catalog, public, pg_temp"
+      ],
+      "sha256_source_lf": "72f607c8b019a6b4fb0d6a4f192e0e056e0d858ab372c03082de747b35d7fdae",
+      "md5_source_lf": "0bcc6c5e60f381e41ff3a23aa9fa2724"
+    },
+    {
+      "name": "nexi_ingress_owner_root_guard",
+      "owner": "nexi_evolution_guard_owner",
+      "security_definer": false,
+      "proconfig": [
+        "search_path=pg_catalog, public, pg_temp"
+      ],
+      "sha256_source_lf": "a64dc342c38087a9e9c6f84ef5d8695130255a7e81d2c34310189682b973a14f",
+      "md5_source_lf": "bc8a202b1565aed3860b1e2c721aa35f"
+    },
+    {
+      "name": "nexi_ingress_owner_generation_guard",
+      "owner": "nexi_evolution_guard_owner",
+      "security_definer": false,
+      "proconfig": [
+        "search_path=pg_catalog, public, pg_temp"
+      ],
+      "sha256_source_lf": "1e5bc952aae9302fff8c219c1e75eff6ca9c2fd7ceee4025e76eb46f3a59f4f5",
+      "md5_source_lf": "c67ace983c0e56e136c9a1e0928ee22d"
+    },
+    {
+      "name": "nexi_ingress_owner_source_guard",
+      "owner": "nexi_evolution_guard_owner",
+      "security_definer": false,
+      "proconfig": [
+        "search_path=pg_catalog, public, pg_temp"
+      ],
+      "sha256_source_lf": "f704f82cfb0147937bae86445b468a1e03f17afcd3a3d9d9a535801edda6f8f8",
+      "md5_source_lf": "8d4a1b0a9d7abe4de1efb5a1ddd0effa"
+    },
+    {
+      "name": "nexi_ingress_owner_prefix_guard",
+      "owner": "nexi_evolution_guard_owner",
+      "security_definer": false,
+      "proconfig": [
+        "search_path=pg_catalog, public, pg_temp"
+      ],
+      "sha256_source_lf": "c739a8bd1c9b18d3af90797b32279b9db5c0fbc35ab77dcd008aea87802549da",
+      "md5_source_lf": "776a14f6470a2eb4f57d49d07c8f66f2"
+    }
+  ],
+  "model_count": 54,
+  "models": [
+    {
+      "model": "Instance",
+      "origin": "upstream:e273b904d53f5726970fd6a244ed9caa61dfeb9a",
+      "relations": [],
+      "defaults": [
+        "id                      String                   @id @default(cuid())",
+        "connectionStatus        InstanceConnectionStatus @default(open)",
+        "createdAt               DateTime?                @default(now()) @db.Timestamp"
+      ],
+      "operations": [
+        {
+          "model": "Instance",
+          "method": "findMany",
+          "file": "upstream/src/api/controllers/instance.controller.ts",
+          "line": 412
+        },
+        {
+          "model": "Instance",
+          "method": "findUnique",
+          "file": "upstream/src/api/guards/auth.guard.ts",
+          "line": 30
+        },
+        {
+          "model": "Instance",
+          "method": "findFirst",
+          "file": "upstream/src/api/guards/auth.guard.ts",
+          "line": 38
+        },
+        {
+          "model": "Instance",
+          "method": "findMany",
+          "file": "upstream/src/api/guards/instance.guard.ts",
+          "line": 19
+        },
+        {
+          "model": "Instance",
+          "method": "findMany",
+          "file": "upstream/src/api/integrations/channel/evohub/evohub.controlplane.router.ts",
+          "line": 54
+        },
+        {
+          "model": "Instance",
+          "method": "update",
+          "file": "upstream/src/api/integrations/channel/evolution/evolution.channel.service.ts",
+          "line": 121
+        },
+        {
+          "model": "Instance",
+          "method": "findFirst",
+          "file": "upstream/src/api/integrations/channel/evolution/evolution.controller.ts",
+          "line": 24
+        },
+        {
+          "model": "Instance",
+          "method": "findFirst",
+          "file": "upstream/src/api/integrations/channel/meta/meta.controller.ts",
+          "line": 49
+        },
+        {
+          "model": "Instance",
+          "method": "update",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 352
+        },
+        {
+          "model": "Instance",
+          "method": "update",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 482
+        },
+        {
+          "model": "Instance",
+          "method": "update",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 546
+        },
+        {
+          "model": "Instance",
+          "method": "update",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 599
+        },
+        {
+          "model": "Instance",
+          "method": "findFirst",
+          "file": "upstream/src/api/integrations/chatbot/typebot/controllers/typebot.controller.ts",
+          "line": 120
+        },
+        {
+          "model": "Instance",
+          "method": "findFirst",
+          "file": "upstream/src/api/integrations/chatbot/typebot/services/typebot.service.ts",
+          "line": 639
+        },
+        {
+          "model": "Instance",
+          "method": "findMany",
+          "file": "upstream/src/api/integrations/event/pusher/pusher.controller.ts",
+          "line": 36
+        },
+        {
+          "model": "Instance",
+          "method": "findFirst",
+          "file": "upstream/src/api/integrations/event/websocket/websocket.controller.ts",
+          "line": 55
+        },
+        {
+          "model": "Instance",
+          "method": "findMany",
+          "file": "upstream/src/api/services/auth.service.ts",
+          "line": 12
+        },
+        {
+          "model": "Instance",
+          "method": "findMany",
+          "file": "upstream/src/api/services/monitor.service.ts",
+          "line": 109
+        },
+        {
+          "model": "Instance",
+          "method": "findFirst",
+          "file": "upstream/src/api/services/monitor.service.ts",
+          "line": 135
+        },
+        {
+          "model": "Instance",
+          "method": "findFirst",
+          "file": "upstream/src/api/services/monitor.service.ts",
+          "line": 140
+        },
+        {
+          "model": "Instance",
+          "method": "findFirst",
+          "file": "upstream/src/api/services/monitor.service.ts",
+          "line": 162
+        },
+        {
+          "model": "Instance",
+          "method": "update",
+          "file": "upstream/src/api/services/monitor.service.ts",
+          "line": 167
+        },
+        {
+          "model": "Instance",
+          "method": "findFirst",
+          "file": "upstream/src/api/services/monitor.service.ts",
+          "line": 197
+        },
+        {
+          "model": "Instance",
+          "method": "delete",
+          "file": "upstream/src/api/services/monitor.service.ts",
+          "line": 224
+        },
+        {
+          "model": "Instance",
+          "method": "create",
+          "file": "upstream/src/api/services/monitor.service.ts",
+          "line": 244
+        },
+        {
+          "model": "Instance",
+          "method": "findUnique",
+          "file": "upstream/src/api/services/monitor.service.ts",
+          "line": 321
+        },
+        {
+          "model": "Instance",
+          "method": "findMany",
+          "file": "upstream/src/api/services/monitor.service.ts",
+          "line": 348
+        },
+        {
+          "model": "Instance",
+          "method": "findUnique",
+          "file": "upstream/src/api/services/monitor.service.ts",
+          "line": 381
+        },
+        {
+          "model": "Instance",
+          "method": "updateMany",
+          "file": "overlay/nexi-attendance-authority.cjs",
+          "line": 260
+        },
+        {
+          "model": "Instance",
+          "method": "findUnique",
+          "file": "overlay/nexi-attendance-authority.cjs",
+          "line": 343
+        },
+        {
+          "model": "Instance",
+          "method": "updateMany",
+          "file": "overlay/nexi-attendance-authority.cjs",
+          "line": 384
+        },
+        {
+          "model": "Instance",
+          "method": "findUnique",
+          "file": "overlay/nexi-attendance.cjs",
+          "line": 1810
+        },
+        {
+          "model": "Instance",
+          "method": "findUnique",
+          "file": "overlay/nexi-attendance.cjs",
+          "line": 1840
+        },
+        {
+          "model": "Instance",
+          "method": "findUnique",
+          "file": "overlay/nexi-attendance.cjs",
+          "line": 2018
+        },
+        {
+          "model": "Instance",
+          "method": "updateMany",
+          "file": "overlay/nexi-groups.cjs",
+          "line": 58
+        },
+        {
+          "model": "Instance",
+          "method": "findUnique",
+          "file": "overlay/nexi-groups.cjs",
+          "line": 108
+        },
+        {
+          "model": "Instance",
+          "method": "findUnique",
+          "file": "overlay/nexi-groups.cjs",
+          "line": 138
+        },
+        {
+          "model": "Instance",
+          "method": "updateMany",
+          "file": "overlay/nexi-groups.cjs",
+          "line": 145
+        },
+        {
+          "model": "Instance",
+          "method": "findUnique",
+          "file": "overlay/nexi-groups.cjs",
+          "line": 170
+        },
+        {
+          "model": "Instance",
+          "method": "updateMany",
+          "file": "overlay/nexi-groups.cjs",
+          "line": 186
+        },
+        {
+          "model": "Instance",
+          "method": "findUnique",
+          "file": "overlay/nexi-groups.cjs",
+          "line": 246
+        },
+        {
+          "model": "Instance",
+          "method": "updateMany",
+          "file": "overlay/nexi-groups.cjs",
+          "line": 259
+        },
+        {
+          "model": "Instance",
+          "method": "updateMany",
+          "file": "overlay/nexi-groups.cjs",
+          "line": 267
+        },
+        {
+          "model": "Instance",
+          "method": "updateMany",
+          "file": "overlay/nexi-groups.cjs",
+          "line": 327
+        },
+        {
+          "model": "Instance",
+          "method": "updateMany",
+          "file": "overlay/nexi-groups.cjs",
+          "line": 332
+        },
+        {
+          "model": "Instance",
+          "method": "findUnique",
+          "file": "overlay/nexi-groups.cjs",
+          "line": 353
+        },
+        {
+          "model": "Instance",
+          "method": "findUnique",
+          "file": "overlay/nexi-groups.cjs",
+          "line": 388
+        },
+        {
+          "model": "Instance",
+          "method": "updateMany",
+          "file": "overlay/nexi-ingress-effects.cjs",
+          "line": 108
+        },
+        {
+          "model": "Instance",
+          "method": "updateMany",
+          "file": "overlay/nexi-ingress-effects.cjs",
+          "line": 174
+        },
+        {
+          "model": "Instance",
+          "method": "updateMany",
+          "file": "overlay/nexi-ingress.cjs",
+          "line": 440
+        },
+        {
+          "model": "Instance",
+          "method": "update",
+          "file": "overlay/patch-groups-source.mjs",
+          "line": 83
+        },
+        {
+          "model": "Instance",
+          "method": "update",
+          "file": "overlay/patch-groups-source.mjs",
+          "line": 194
+        },
+        {
+          "model": "Instance",
+          "method": "findFirst",
+          "file": "overlay/patch-groups-source.mjs",
+          "line": 361
+        },
+        {
+          "model": "Instance",
+          "method": "findFirst",
+          "file": "overlay/patch-groups-source.mjs",
+          "line": 365
+        },
+        {
+          "model": "Instance",
+          "method": "update",
+          "file": "overlay/patch-groups-source.mjs",
+          "line": 366
+        }
+      ]
+    },
+    {
+      "model": "Session",
+      "origin": "upstream:e273b904d53f5726970fd6a244ed9caa61dfeb9a",
+      "relations": [
+        "Instance  Instance @relation(fields: [sessionId], references: [id], onDelete: Cascade)"
+      ],
+      "defaults": [
+        "id        String   @id @default(cuid())",
+        "createdAt DateTime @default(now()) @db.Timestamp"
+      ],
+      "operations": [
+        {
+          "model": "Session",
+          "method": "findFirst",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 347
+        },
+        {
+          "model": "Session",
+          "method": "delete",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 349
+        },
+        {
+          "model": "Session",
+          "method": "findUnique",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 361
+        },
+        {
+          "model": "Session",
+          "method": "deleteMany",
+          "file": "upstream/src/api/services/monitor.service.ts",
+          "line": 175
+        },
+        {
+          "model": "Session",
+          "method": "deleteMany",
+          "file": "upstream/src/api/services/monitor.service.ts",
+          "line": 205
+        },
+        {
+          "model": "Session",
+          "method": "findUnique",
+          "file": "upstream/src/utils/use-multi-file-auth-state-prisma.ts",
+          "line": 21
+        },
+        {
+          "model": "Session",
+          "method": "create",
+          "file": "upstream/src/utils/use-multi-file-auth-state-prisma.ts",
+          "line": 32
+        },
+        {
+          "model": "Session",
+          "method": "update",
+          "file": "upstream/src/utils/use-multi-file-auth-state-prisma.ts",
+          "line": 38
+        },
+        {
+          "model": "Session",
+          "method": "findUnique",
+          "file": "upstream/src/utils/use-multi-file-auth-state-prisma.ts",
+          "line": 51
+        },
+        {
+          "model": "Session",
+          "method": "delete",
+          "file": "upstream/src/utils/use-multi-file-auth-state-prisma.ts",
+          "line": 62
+        },
+        {
+          "model": "Session",
+          "method": "findFirst",
+          "file": "overlay/patch-groups-source.mjs",
+          "line": 192
+        },
+        {
+          "model": "Session",
+          "method": "delete",
+          "file": "overlay/patch-groups-source.mjs",
+          "line": 193
+        }
+      ]
+    },
+    {
+      "model": "Chat",
+      "origin": "upstream:e273b904d53f5726970fd6a244ed9caa61dfeb9a",
+      "relations": [
+        "Instance       Instance  @relation(fields: [instanceId], references: [id], onDelete: Cascade)"
+      ],
+      "defaults": [
+        "id             String    @id @default(cuid())",
+        "createdAt      DateTime? @default(now()) @db.Timestamp",
+        "unreadMessages Int       @default(0)"
+      ],
+      "operations": [
+        {
+          "model": "Chat",
+          "method": "findFirst",
+          "file": "upstream/src/api/integrations/channel/evolution/evolution.channel.service.ts",
+          "line": 267
+        },
+        {
+          "model": "Chat",
+          "method": "updateMany",
+          "file": "upstream/src/api/integrations/channel/evolution/evolution.channel.service.ts",
+          "line": 279
+        },
+        {
+          "model": "Chat",
+          "method": "create",
+          "file": "upstream/src/api/integrations/channel/evolution/evolution.channel.service.ts",
+          "line": 292
+        },
+        {
+          "model": "Chat",
+          "method": "findMany",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 869
+        },
+        {
+          "model": "Chat",
+          "method": "createMany",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 889
+        },
+        {
+          "model": "Chat",
+          "method": "updateMany",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 907
+        },
+        {
+          "model": "Chat",
+          "method": "deleteMany",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 917
+        },
+        {
+          "model": "Chat",
+          "method": "findMany",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 1120
+        },
+        {
+          "model": "Chat",
+          "method": "createMany",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 1160
+        },
+        {
+          "model": "Chat",
+          "method": "findFirst",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 1366
+        },
+        {
+          "model": "Chat",
+          "method": "update",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 1382
+        },
+        {
+          "model": "Chat",
+          "method": "findFirst",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 1944
+        },
+        {
+          "model": "Chat",
+          "method": "update",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 1954
+        },
+        {
+          "model": "Chat",
+          "method": "findFirst",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 5311
+        },
+        {
+          "model": "Chat",
+          "method": "update",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 5316
+        },
+        {
+          "model": "Chat",
+          "method": "findFirst",
+          "file": "upstream/src/api/services/channel.service.ts",
+          "line": 711
+        },
+        {
+          "model": "Chat",
+          "method": "deleteMany",
+          "file": "upstream/src/api/services/monitor.service.ts",
+          "line": 207
+        },
+        {
+          "model": "Chat",
+          "method": "findFirst",
+          "file": "overlay/ingress-effects.ts.inc",
+          "line": 6
+        },
+        {
+          "model": "Chat",
+          "method": "update",
+          "file": "overlay/ingress-effects.ts.inc",
+          "line": 17
+        },
+        {
+          "model": "Chat",
+          "method": "findFirst",
+          "file": "overlay/nexi-ingress.cjs",
+          "line": 448
+        },
+        {
+          "model": "Chat",
+          "method": "findFirst",
+          "file": "overlay/patch-attendance-source.mjs",
+          "line": 37
+        },
+        {
+          "model": "Chat",
+          "method": "findFirst",
+          "file": "overlay/patch-attendance-source.mjs",
+          "line": 38
+        }
+      ]
+    },
+    {
+      "model": "Contact",
+      "origin": "upstream:e273b904d53f5726970fd6a244ed9caa61dfeb9a",
+      "relations": [
+        "Instance      Instance  @relation(fields: [instanceId], references: [id], onDelete: Cascade)"
+      ],
+      "defaults": [
+        "id            String    @id @default(cuid())",
+        "createdAt     DateTime? @default(now()) @db.Timestamp"
+      ],
+      "operations": [
+        {
+          "model": "Contact",
+          "method": "findFirst",
+          "file": "upstream/src/api/integrations/channel/evolution/evolution.channel.service.ts",
+          "line": 232
+        },
+        {
+          "model": "Contact",
+          "method": "updateMany",
+          "file": "upstream/src/api/integrations/channel/evolution/evolution.channel.service.ts",
+          "line": 240
+        },
+        {
+          "model": "Contact",
+          "method": "create",
+          "file": "upstream/src/api/integrations/channel/evolution/evolution.channel.service.ts",
+          "line": 248
+        },
+        {
+          "model": "Contact",
+          "method": "findFirst",
+          "file": "upstream/src/api/integrations/channel/meta/whatsapp.business.service.ts",
+          "line": 499
+        },
+        {
+          "model": "Contact",
+          "method": "updateMany",
+          "file": "upstream/src/api/integrations/channel/meta/whatsapp.business.service.ts",
+          "line": 836
+        },
+        {
+          "model": "Contact",
+          "method": "create",
+          "file": "upstream/src/api/integrations/channel/meta/whatsapp.business.service.ts",
+          "line": 845
+        },
+        {
+          "model": "Contact",
+          "method": "createMany",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 938
+        },
+        {
+          "model": "Contact",
+          "method": "updateMany",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 981
+        },
+        {
+          "model": "Contact",
+          "method": "upsert",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 1029
+        },
+        {
+          "model": "Contact",
+          "method": "findFirst",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 1687
+        },
+        {
+          "model": "Contact",
+          "method": "upsert",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 1732
+        },
+        {
+          "model": "Contact",
+          "method": "upsert",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 1744
+        },
+        {
+          "model": "Contact",
+          "method": "findMany",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 2524
+        },
+        {
+          "model": "Contact",
+          "method": "findMany",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 2988
+        },
+        {
+          "model": "Contact",
+          "method": "findMany",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 4023
+        },
+        {
+          "model": "Contact",
+          "method": "findMany",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 5039
+        },
+        {
+          "model": "Contact",
+          "method": "findMany",
+          "file": "upstream/src/api/integrations/chatbot/chatwoot/services/chatwoot.service.ts",
+          "line": 2886
+        },
+        {
+          "model": "Contact",
+          "method": "findMany",
+          "file": "upstream/src/api/services/channel.service.ts",
+          "line": 528
+        },
+        {
+          "model": "Contact",
+          "method": "deleteMany",
+          "file": "upstream/src/api/services/monitor.service.ts",
+          "line": 208
+        },
+        {
+          "model": "Contact",
+          "method": "findFirst",
+          "file": "overlay/ingress-effects.ts.inc",
+          "line": 25
+        },
+        {
+          "model": "Contact",
+          "method": "upsert",
+          "file": "overlay/ingress-effects.ts.inc",
+          "line": 29
+        },
+        {
+          "model": "Contact",
+          "method": "findFirst",
+          "file": "overlay/nexi-ingress.cjs",
+          "line": 447
+        }
+      ]
+    },
+    {
+      "model": "Message",
+      "origin": "upstream:e273b904d53f5726970fd6a244ed9caa61dfeb9a",
+      "relations": [
+        "Instance                     Instance        @relation(fields: [instanceId], references: [id], onDelete: Cascade)",
+        "session   IntegrationSession? @relation(fields: [sessionId], references: [id])"
+      ],
+      "defaults": [
+        "id                           String          @id @default(cuid())"
+      ],
+      "operations": [
+        {
+          "model": "Message",
+          "method": "create",
+          "file": "upstream/src/api/integrations/channel/evolution/evolution.channel.service.ts",
+          "line": 209
+        },
+        {
+          "model": "Message",
+          "method": "findFirst",
+          "file": "upstream/src/api/integrations/channel/evolution/evolution.channel.service.ts",
+          "line": 452
+        },
+        {
+          "model": "Message",
+          "method": "create",
+          "file": "upstream/src/api/integrations/channel/evolution/evolution.channel.service.ts",
+          "line": 536
+        },
+        {
+          "model": "Message",
+          "method": "create",
+          "file": "upstream/src/api/integrations/channel/meta/whatsapp.business.service.ts",
+          "line": 605
+        },
+        {
+          "model": "Message",
+          "method": "create",
+          "file": "upstream/src/api/integrations/channel/meta/whatsapp.business.service.ts",
+          "line": 799
+        },
+        {
+          "model": "Message",
+          "method": "findFirst",
+          "file": "upstream/src/api/integrations/channel/meta/whatsapp.business.service.ts",
+          "line": 863
+        },
+        {
+          "model": "Message",
+          "method": "create",
+          "file": "upstream/src/api/integrations/channel/meta/whatsapp.business.service.ts",
+          "line": 1275
+        },
+        {
+          "model": "Message",
+          "method": "findMany",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 1172
+        },
+        {
+          "model": "Message",
+          "method": "createMany",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 1221
+        },
+        {
+          "model": "Message",
+          "method": "update",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 1333
+        },
+        {
+          "model": "Message",
+          "method": "create",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 1547
+        },
+        {
+          "model": "Message",
+          "method": "update",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 1624
+        },
+        {
+          "model": "Message",
+          "method": "update",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 1924
+        },
+        {
+          "model": "Message",
+          "method": "create",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 2769
+        },
+        {
+          "model": "Message",
+          "method": "update",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 2814
+        },
+        {
+          "model": "Message",
+          "method": "findMany",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 4189
+        },
+        {
+          "model": "Message",
+          "method": "findFirst",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 4273
+        },
+        {
+          "model": "Message",
+          "method": "update",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 4279
+        },
+        {
+          "model": "Message",
+          "method": "deleteMany",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 4297
+        },
+        {
+          "model": "Message",
+          "method": "findFirst",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 4693
+        },
+        {
+          "model": "Message",
+          "method": "update",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 4710
+        },
+        {
+          "model": "Message",
+          "method": "count",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 5617
+        },
+        {
+          "model": "Message",
+          "method": "findMany",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 5646
+        },
+        {
+          "model": "Message",
+          "method": "findMany",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 5752
+        },
+        {
+          "model": "Message",
+          "method": "findMany",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 5963
+        },
+        {
+          "model": "Message",
+          "method": "findFirst",
+          "file": "upstream/src/api/integrations/chatbot/chatwoot/services/chatwoot.service.ts",
+          "line": 1399
+        },
+        {
+          "model": "Message",
+          "method": "deleteMany",
+          "file": "upstream/src/api/integrations/chatbot/chatwoot/services/chatwoot.service.ts",
+          "line": 1411
+        },
+        {
+          "model": "Message",
+          "method": "findFirst",
+          "file": "upstream/src/api/integrations/chatbot/chatwoot/services/chatwoot.service.ts",
+          "line": 1593
+        },
+        {
+          "model": "Message",
+          "method": "updateMany",
+          "file": "upstream/src/api/integrations/chatbot/chatwoot/services/chatwoot.service.ts",
+          "line": 1622
+        },
+        {
+          "model": "Message",
+          "method": "findFirst",
+          "file": "upstream/src/api/integrations/chatbot/chatwoot/services/chatwoot.service.ts",
+          "line": 1759
+        },
+        {
+          "model": "Message",
+          "method": "findFirst",
+          "file": "upstream/src/api/integrations/chatbot/chatwoot/services/chatwoot.service.ts",
+          "line": 2212
+        },
+        {
+          "model": "Message",
+          "method": "deleteMany",
+          "file": "upstream/src/api/integrations/chatbot/chatwoot/services/chatwoot.service.ts",
+          "line": 2524
+        },
+        {
+          "model": "Message",
+          "method": "findMany",
+          "file": "upstream/src/api/integrations/chatbot/chatwoot/services/chatwoot.service.ts",
+          "line": 2941
+        },
+        {
+          "model": "Message",
+          "method": "count",
+          "file": "upstream/src/api/services/channel.service.ts",
+          "line": 618
+        },
+        {
+          "model": "Message",
+          "method": "findMany",
+          "file": "upstream/src/api/services/channel.service.ts",
+          "line": 642
+        },
+        {
+          "model": "Message",
+          "method": "deleteMany",
+          "file": "upstream/src/api/services/monitor.service.ts",
+          "line": 210
+        },
+        {
+          "model": "Message",
+          "method": "findUnique",
+          "file": "overlay/ingress-effects.ts.inc",
+          "line": 100
+        },
+        {
+          "model": "Message",
+          "method": "findUnique",
+          "file": "overlay/ingress-effects.ts.inc",
+          "line": 114
+        },
+        {
+          "model": "Message",
+          "method": "findUnique",
+          "file": "overlay/nexi-ingress-effects.cjs",
+          "line": 111
+        },
+        {
+          "model": "Message",
+          "method": "update",
+          "file": "overlay/nexi-ingress-effects.cjs",
+          "line": 123
+        },
+        {
+          "model": "Message",
+          "method": "upsert",
+          "file": "overlay/nexi-ingress.cjs",
+          "line": 443
+        },
+        {
+          "model": "Message",
+          "method": "upsert",
+          "file": "overlay/nexi-ingress.cjs",
+          "line": 467
+        },
+        {
+          "model": "Message",
+          "method": "findUnique",
+          "file": "overlay/nexi-ingress.cjs",
+          "line": 525
+        },
+        {
+          "model": "Message",
+          "method": "create",
+          "file": "overlay/patch-attendance-source.mjs",
+          "line": 52
+        },
+        {
+          "model": "Message",
+          "method": "create",
+          "file": "overlay/patch-attendance-source.mjs",
+          "line": 53
+        },
+        {
+          "model": "Message",
+          "method": "create",
+          "file": "overlay/patch-ingress-source.mjs",
+          "line": 108
+        },
+        {
+          "model": "Message",
+          "method": "create",
+          "file": "overlay/patch-ingress-source.mjs",
+          "line": 109
+        },
+        {
+          "model": "Message",
+          "method": "findFirst",
+          "file": "overlay/patch-ingress-source.mjs",
+          "line": 228
+        }
+      ]
+    },
+    {
+      "model": "MessageUpdate",
+      "origin": "upstream:e273b904d53f5726970fd6a244ed9caa61dfeb9a",
+      "relations": [
+        "Message     Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)",
+        "Instance    Instance @relation(fields: [instanceId], references: [id], onDelete: Cascade)"
+      ],
+      "defaults": [
+        "id          String   @id @default(cuid())"
+      ],
+      "operations": [
+        {
+          "model": "MessageUpdate",
+          "method": "create",
+          "file": "upstream/src/api/integrations/channel/meta/whatsapp.business.service.ts",
+          "line": 898
+        },
+        {
+          "model": "MessageUpdate",
+          "method": "create",
+          "file": "upstream/src/api/integrations/channel/meta/whatsapp.business.service.ts",
+          "line": 925
+        },
+        {
+          "model": "MessageUpdate",
+          "method": "create",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 1341
+        },
+        {
+          "model": "MessageUpdate",
+          "method": "create",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 1893
+        },
+        {
+          "model": "MessageUpdate",
+          "method": "create",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 1941
+        },
+        {
+          "model": "MessageUpdate",
+          "method": "create",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 4293
+        },
+        {
+          "model": "MessageUpdate",
+          "method": "create",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 4729
+        },
+        {
+          "model": "MessageUpdate",
+          "method": "findMany",
+          "file": "upstream/src/api/services/channel.service.ts",
+          "line": 698
+        },
+        {
+          "model": "MessageUpdate",
+          "method": "deleteMany",
+          "file": "upstream/src/api/services/monitor.service.ts",
+          "line": 209
+        }
+      ]
+    },
+    {
+      "model": "Webhook",
+      "origin": "upstream:e273b904d53f5726970fd6a244ed9caa61dfeb9a",
+      "relations": [
+        "Instance        Instance  @relation(fields: [instanceId], references: [id], onDelete: Cascade)"
+      ],
+      "defaults": [
+        "id              String    @id @default(cuid())",
+        "enabled         Boolean?  @default(true) @db.Boolean",
+        "webhookByEvents Boolean?  @default(false) @db.Boolean",
+        "webhookBase64   Boolean?  @default(false) @db.Boolean",
+        "createdAt       DateTime? @default(now()) @db.Timestamp"
+      ],
+      "operations": [
+        {
+          "model": "Webhook",
+          "method": "upsert",
+          "file": "upstream/src/api/integrations/event/webhook/webhook.controller.ts",
+          "line": 33
+        },
+        {
+          "model": "Webhook",
+          "method": "findUnique",
+          "file": "upstream/src/api/services/channel.service.ts",
+          "line": 132
+        },
+        {
+          "model": "Webhook",
+          "method": "deleteMany",
+          "file": "upstream/src/api/services/monitor.service.ts",
+          "line": 212
+        },
+        {
+          "model": "Webhook",
+          "method": "findUnique",
+          "file": "overlay/nexi-attendance.cjs",
+          "line": 775
+        },
+        {
+          "model": "Webhook",
+          "method": "findUnique",
+          "file": "overlay/nexi-groups.cjs",
+          "line": 881
+        },
+        {
+          "model": "Webhook",
+          "method": "findUnique",
+          "file": "overlay/nexi-identity.cjs",
+          "line": 86
+        },
+        {
+          "model": "Webhook",
+          "method": "findUnique",
+          "file": "overlay/nexi-ingress.cjs",
+          "line": 179
+        }
+      ]
+    },
+    {
+      "model": "Chatwoot",
+      "origin": "upstream:e273b904d53f5726970fd6a244ed9caa61dfeb9a",
+      "relations": [
+        "Instance                Instance  @relation(fields: [instanceId], references: [id], onDelete: Cascade)"
+      ],
+      "defaults": [
+        "id                      String    @id @default(cuid())",
+        "enabled                 Boolean?  @default(true) @db.Boolean",
+        "signMsg                 Boolean?  @default(false) @db.Boolean",
+        "reopenConversation      Boolean?  @default(false) @db.Boolean",
+        "conversationPending     Boolean?  @default(false) @db.Boolean",
+        "mergeBrazilContacts     Boolean?  @default(false) @db.Boolean",
+        "importContacts          Boolean?  @default(false) @db.Boolean",
+        "importMessages          Boolean?  @default(false) @db.Boolean",
+        "createdAt               DateTime? @default(now()) @db.Timestamp"
+      ],
+      "operations": [
+        {
+          "model": "Chatwoot",
+          "method": "findUnique",
+          "file": "upstream/src/api/services/channel.service.ts",
+          "line": 230
+        },
+        {
+          "model": "Chatwoot",
+          "method": "findUnique",
+          "file": "upstream/src/api/services/channel.service.ts",
+          "line": 257
+        },
+        {
+          "model": "Chatwoot",
+          "method": "update",
+          "file": "upstream/src/api/services/channel.service.ts",
+          "line": 264
+        },
+        {
+          "model": "Chatwoot",
+          "method": "create",
+          "file": "upstream/src/api/services/channel.service.ts",
+          "line": 295
+        },
+        {
+          "model": "Chatwoot",
+          "method": "findUnique",
+          "file": "upstream/src/api/services/channel.service.ts",
+          "line": 327
+        },
+        {
+          "model": "Chatwoot",
+          "method": "deleteMany",
+          "file": "upstream/src/api/services/monitor.service.ts",
+          "line": 213
+        }
+      ]
+    },
+    {
+      "model": "Label",
+      "origin": "upstream:e273b904d53f5726970fd6a244ed9caa61dfeb9a",
+      "relations": [
+        "Instance     Instance  @relation(fields: [instanceId], references: [id], onDelete: Cascade)"
+      ],
+      "defaults": [
+        "id           String    @id @default(cuid())",
+        "createdAt    DateTime? @default(now()) @db.Timestamp"
+      ],
+      "operations": [
+        {
+          "model": "Label",
+          "method": "findMany",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 2051
+        },
+        {
+          "model": "Label",
+          "method": "delete",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 2055
+        },
+        {
+          "model": "Label",
+          "method": "upsert",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 2072
+        },
+        {
+          "model": "Label",
+          "method": "findMany",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 4743
+        },
+        {
+          "model": "Label",
+          "method": "deleteMany",
+          "file": "upstream/src/api/services/monitor.service.ts",
+          "line": 222
+        }
+      ]
+    },
+    {
+      "model": "Proxy",
+      "origin": "upstream:e273b904d53f5726970fd6a244ed9caa61dfeb9a",
+      "relations": [
+        "Instance   Instance  @relation(fields: [instanceId], references: [id], onDelete: Cascade)"
+      ],
+      "defaults": [
+        "id         String    @id @default(cuid())",
+        "enabled    Boolean   @default(false) @db.Boolean",
+        "createdAt  DateTime? @default(now()) @db.Timestamp"
+      ],
+      "operations": [
+        {
+          "model": "Proxy",
+          "method": "findUnique",
+          "file": "upstream/src/api/services/channel.service.ts",
+          "line": 378
+        },
+        {
+          "model": "Proxy",
+          "method": "upsert",
+          "file": "upstream/src/api/services/channel.service.ts",
+          "line": 395
+        },
+        {
+          "model": "Proxy",
+          "method": "findUnique",
+          "file": "upstream/src/api/services/channel.service.ts",
+          "line": 422
+        },
+        {
+          "model": "Proxy",
+          "method": "deleteMany",
+          "file": "upstream/src/api/services/monitor.service.ts",
+          "line": 214
+        }
+      ]
+    },
+    {
+      "model": "Setting",
+      "origin": "upstream:e273b904d53f5726970fd6a244ed9caa61dfeb9a",
+      "relations": [
+        "Instance        Instance  @relation(fields: [instanceId], references: [id], onDelete: Cascade)"
+      ],
+      "defaults": [
+        "id              String    @id @default(cuid())",
+        "rejectCall      Boolean   @default(false) @db.Boolean",
+        "groupsIgnore    Boolean   @default(false) @db.Boolean",
+        "alwaysOnline    Boolean   @default(false) @db.Boolean",
+        "readMessages    Boolean   @default(false) @db.Boolean",
+        "readStatus      Boolean   @default(false) @db.Boolean",
+        "syncFullHistory Boolean   @default(false) @db.Boolean",
+        "createdAt       DateTime? @default(now()) @db.Timestamp"
+      ],
+      "operations": [
+        {
+          "model": "Setting",
+          "method": "findUnique",
+          "file": "upstream/src/api/services/channel.service.ts",
+          "line": 143
+        },
+        {
+          "model": "Setting",
+          "method": "upsert",
+          "file": "upstream/src/api/services/channel.service.ts",
+          "line": 160
+        },
+        {
+          "model": "Setting",
+          "method": "findUnique",
+          "file": "upstream/src/api/services/channel.service.ts",
+          "line": 203
+        },
+        {
+          "model": "Setting",
+          "method": "deleteMany",
+          "file": "upstream/src/api/services/monitor.service.ts",
+          "line": 221
+        },
+        {
+          "model": "Setting",
+          "method": "upsert",
+          "file": "overlay/patch-groups-source.mjs",
+          "line": 424
+        },
+        {
+          "model": "Setting",
+          "method": "upsert",
+          "file": "overlay/patch-groups-source.mjs",
+          "line": 426
+        }
+      ]
+    },
+    {
+      "model": "Rabbitmq",
+      "origin": "upstream:e273b904d53f5726970fd6a244ed9caa61dfeb9a",
+      "relations": [
+        "Instance   Instance  @relation(fields: [instanceId], references: [id], onDelete: Cascade)"
+      ],
+      "defaults": [
+        "id         String    @id @default(cuid())",
+        "enabled    Boolean   @default(false) @db.Boolean",
+        "createdAt  DateTime? @default(now()) @db.Timestamp"
+      ],
+      "operations": [
+        {
+          "model": "Rabbitmq",
+          "method": "deleteMany",
+          "file": "upstream/src/api/services/monitor.service.ts",
+          "line": 215
+        }
+      ]
+    },
+    {
+      "model": "Nats",
+      "origin": "upstream:e273b904d53f5726970fd6a244ed9caa61dfeb9a",
+      "relations": [
+        "Instance   Instance  @relation(fields: [instanceId], references: [id], onDelete: Cascade)"
+      ],
+      "defaults": [
+        "id         String    @id @default(cuid())",
+        "enabled    Boolean   @default(false) @db.Boolean",
+        "createdAt  DateTime? @default(now()) @db.Timestamp"
+      ],
+      "operations": [
+        {
+          "model": "Nats",
+          "method": "deleteMany",
+          "file": "upstream/src/api/services/monitor.service.ts",
+          "line": 216
+        }
+      ]
+    },
+    {
+      "model": "Sqs",
+      "origin": "upstream:e273b904d53f5726970fd6a244ed9caa61dfeb9a",
+      "relations": [
+        "Instance   Instance  @relation(fields: [instanceId], references: [id], onDelete: Cascade)"
+      ],
+      "defaults": [
+        "id         String    @id @default(cuid())",
+        "enabled    Boolean   @default(false) @db.Boolean",
+        "createdAt  DateTime? @default(now()) @db.Timestamp"
+      ],
+      "operations": [
+        {
+          "model": "Sqs",
+          "method": "deleteMany",
+          "file": "upstream/src/api/services/monitor.service.ts",
+          "line": 217
+        }
+      ]
+    },
+    {
+      "model": "Kafka",
+      "origin": "upstream:e273b904d53f5726970fd6a244ed9caa61dfeb9a",
+      "relations": [
+        "Instance   Instance  @relation(fields: [instanceId], references: [id], onDelete: Cascade)"
+      ],
+      "defaults": [
+        "id         String    @id @default(cuid())",
+        "enabled    Boolean   @default(false) @db.Boolean",
+        "createdAt  DateTime? @default(now()) @db.Timestamp"
+      ],
+      "operations": []
+    },
+    {
+      "model": "Websocket",
+      "origin": "upstream:e273b904d53f5726970fd6a244ed9caa61dfeb9a",
+      "relations": [
+        "Instance   Instance  @relation(fields: [instanceId], references: [id], onDelete: Cascade)"
+      ],
+      "defaults": [
+        "id         String    @id @default(cuid())",
+        "enabled    Boolean   @default(false) @db.Boolean",
+        "createdAt  DateTime? @default(now()) @db.Timestamp"
+      ],
+      "operations": [
+        {
+          "model": "Websocket",
+          "method": "deleteMany",
+          "file": "upstream/src/api/services/monitor.service.ts",
+          "line": 220
+        }
+      ]
+    },
+    {
+      "model": "Pusher",
+      "origin": "upstream:e273b904d53f5726970fd6a244ed9caa61dfeb9a",
+      "relations": [
+        "Instance   Instance  @relation(fields: [instanceId], references: [id], onDelete: Cascade)"
+      ],
+      "defaults": [
+        "id         String    @id @default(cuid())",
+        "enabled    Boolean   @default(false) @db.Boolean",
+        "useTLS     Boolean   @default(false) @db.Boolean",
+        "createdAt  DateTime? @default(now()) @db.Timestamp"
+      ],
+      "operations": [
+        {
+          "model": "Pusher",
+          "method": "upsert",
+          "file": "upstream/src/api/integrations/event/pusher/pusher.controller.ts",
+          "line": 74
+        }
+      ]
+    },
+    {
+      "model": "Typebot",
+      "origin": "upstream:e273b904d53f5726970fd6a244ed9caa61dfeb9a",
+      "relations": [
+        "Instance        Instance         @relation(fields: [instanceId], references: [id], onDelete: Cascade)"
+      ],
+      "defaults": [
+        "id              String           @id @default(cuid())",
+        "enabled         Boolean          @default(true) @db.Boolean",
+        "expire          Int?             @default(0) @db.Integer",
+        "listeningFromMe Boolean?         @default(false) @db.Boolean",
+        "stopBotFromMe   Boolean?         @default(false) @db.Boolean",
+        "keepOpen        Boolean?         @default(false) @db.Boolean",
+        "createdAt       DateTime?        @default(now()) @db.Timestamp",
+        "splitMessages   Boolean?         @default(false) @db.Boolean",
+        "timePerChar     Int?             @default(50) @db.Integer"
+      ],
+      "operations": [
+        {
+          "model": "Typebot",
+          "method": "deleteMany",
+          "file": "upstream/src/api/services/monitor.service.ts",
+          "line": 219
+        }
+      ]
+    },
+    {
+      "model": "TypebotSetting",
+      "origin": "upstream:e273b904d53f5726970fd6a244ed9caa61dfeb9a",
+      "relations": [
+        "Fallback          Typebot?  @relation(fields: [typebotIdFallback], references: [id])",
+        "Instance          Instance  @relation(fields: [instanceId], references: [id], onDelete: Cascade)"
+      ],
+      "defaults": [
+        "id                String    @id @default(cuid())",
+        "expire            Int?      @default(0) @db.Integer",
+        "listeningFromMe   Boolean?  @default(false) @db.Boolean",
+        "stopBotFromMe     Boolean?  @default(false) @db.Boolean",
+        "keepOpen          Boolean?  @default(false) @db.Boolean",
+        "splitMessages     Boolean?  @default(false) @db.Boolean",
+        "timePerChar       Int?      @default(50) @db.Integer",
+        "createdAt         DateTime? @default(now()) @db.Timestamp"
+      ],
+      "operations": []
+    },
+    {
+      "model": "Media",
+      "origin": "upstream:e273b904d53f5726970fd6a244ed9caa61dfeb9a",
+      "relations": [
+        "Message    Message   @relation(fields: [messageId], references: [id], onDelete: Cascade)",
+        "Instance   Instance  @relation(fields: [instanceId], references: [id], onDelete: Cascade)"
+      ],
+      "defaults": [
+        "id         String    @id @default(cuid())",
+        "createdAt  DateTime? @default(now()) @db.Date"
+      ],
+      "operations": [
+        {
+          "model": "Media",
+          "method": "create",
+          "file": "upstream/src/api/integrations/channel/meta/whatsapp.business.service.ts",
+          "line": 609
+        },
+        {
+          "model": "Media",
+          "method": "create",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 1610
+        },
+        {
+          "model": "Media",
+          "method": "create",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 2806
+        },
+        {
+          "model": "Media",
+          "method": "findMany",
+          "file": "upstream/src/api/integrations/storage/s3/services/s3.service.ts",
+          "line": 20
+        },
+        {
+          "model": "Media",
+          "method": "upsert",
+          "file": "overlay/nexi-ingress-effects.cjs",
+          "line": 115
+        }
+      ]
+    },
+    {
+      "model": "OpenaiCreds",
+      "origin": "upstream:e273b904d53f5726970fd6a244ed9caa61dfeb9a",
+      "relations": [
+        "Instance        Instance       @relation(fields: [instanceId], references: [id], onDelete: Cascade)"
+      ],
+      "defaults": [
+        "id              String         @id @default(cuid())",
+        "createdAt       DateTime?      @default(now()) @db.Timestamp"
+      ],
+      "operations": [
+        {
+          "model": "OpenaiCreds",
+          "method": "findUnique",
+          "file": "upstream/src/api/integrations/chatbot/openai/services/openai.service.ts",
+          "line": 63
+        },
+        {
+          "model": "OpenaiCreds",
+          "method": "findUnique",
+          "file": "upstream/src/api/integrations/chatbot/openai/services/openai.service.ts",
+          "line": 95
+        },
+        {
+          "model": "OpenaiCreds",
+          "method": "findUnique",
+          "file": "upstream/src/api/integrations/chatbot/openai/services/openai.service.ts",
+          "line": 202
+        },
+        {
+          "model": "OpenaiCreds",
+          "method": "findUnique",
+          "file": "upstream/src/api/integrations/chatbot/openai/services/openai.service.ts",
+          "line": 408
+        },
+        {
+          "model": "OpenaiCreds",
+          "method": "findUnique",
+          "file": "upstream/src/api/integrations/chatbot/openai/services/openai.service.ts",
+          "line": 685
+        }
+      ]
+    },
+    {
+      "model": "OpenaiBot",
+      "origin": "upstream:e273b904d53f5726970fd6a244ed9caa61dfeb9a",
+      "relations": [
+        "OpenaiCreds       OpenaiCreds      @relation(fields: [openaiCredsId], references: [id], onDelete: Cascade)",
+        "Instance          Instance         @relation(fields: [instanceId], references: [id], onDelete: Cascade)"
+      ],
+      "defaults": [
+        "id                String           @id @default(cuid())",
+        "enabled           Boolean          @default(true) @db.Boolean",
+        "expire            Int?             @default(0) @db.Integer",
+        "listeningFromMe   Boolean?         @default(false) @db.Boolean",
+        "stopBotFromMe     Boolean?         @default(false) @db.Boolean",
+        "keepOpen          Boolean?         @default(false) @db.Boolean",
+        "splitMessages     Boolean?         @default(false) @db.Boolean",
+        "timePerChar       Int?             @default(50) @db.Integer",
+        "createdAt         DateTime?        @default(now()) @db.Timestamp"
+      ],
+      "operations": []
+    },
+    {
+      "model": "IntegrationSession",
+      "origin": "upstream:e273b904d53f5726970fd6a244ed9caa61dfeb9a",
+      "relations": [
+        "Instance   Instance      @relation(fields: [instanceId], references: [id], onDelete: Cascade)"
+      ],
+      "defaults": [
+        "id         String        @id @default(cuid())",
+        "awaitUser  Boolean       @default(false) @db.Boolean",
+        "createdAt  DateTime?     @default(now()) @db.Timestamp"
+      ],
+      "operations": [
+        {
+          "model": "IntegrationSession",
+          "method": "deleteMany",
+          "file": "upstream/src/api/integrations/chatbot/base-chatbot.controller.ts",
+          "line": 768
+        },
+        {
+          "model": "IntegrationSession",
+          "method": "update",
+          "file": "upstream/src/api/integrations/chatbot/base-chatbot.controller.ts",
+          "line": 873
+        },
+        {
+          "model": "IntegrationSession",
+          "method": "create",
+          "file": "upstream/src/api/integrations/chatbot/base-chatbot.service.ts",
+          "line": 91
+        },
+        {
+          "model": "IntegrationSession",
+          "method": "update",
+          "file": "upstream/src/api/integrations/chatbot/base-chatbot.service.ts",
+          "line": 144
+        },
+        {
+          "model": "IntegrationSession",
+          "method": "update",
+          "file": "upstream/src/api/integrations/chatbot/base-chatbot.service.ts",
+          "line": 159
+        },
+        {
+          "model": "IntegrationSession",
+          "method": "update",
+          "file": "upstream/src/api/integrations/chatbot/base-chatbot.service.ts",
+          "line": 385
+        },
+        {
+          "model": "IntegrationSession",
+          "method": "findFirst",
+          "file": "upstream/src/api/integrations/chatbot/chatbot.controller.ts",
+          "line": 171
+        },
+        {
+          "model": "IntegrationSession",
+          "method": "update",
+          "file": "upstream/src/api/integrations/chatbot/dify/services/dify.service.ts",
+          "line": 134
+        },
+        {
+          "model": "IntegrationSession",
+          "method": "update",
+          "file": "upstream/src/api/integrations/chatbot/dify/services/dify.service.ts",
+          "line": 216
+        },
+        {
+          "model": "IntegrationSession",
+          "method": "update",
+          "file": "upstream/src/api/integrations/chatbot/dify/services/dify.service.ts",
+          "line": 304
+        },
+        {
+          "model": "IntegrationSession",
+          "method": "update",
+          "file": "upstream/src/api/integrations/chatbot/n8n/services/n8n.service.ts",
+          "line": 84
+        },
+        {
+          "model": "IntegrationSession",
+          "method": "update",
+          "file": "upstream/src/api/integrations/chatbot/openai/services/openai.service.ts",
+          "line": 113
+        },
+        {
+          "model": "IntegrationSession",
+          "method": "delete",
+          "file": "upstream/src/api/integrations/chatbot/openai/services/openai.service.ts",
+          "line": 122
+        },
+        {
+          "model": "IntegrationSession",
+          "method": "update",
+          "file": "upstream/src/api/integrations/chatbot/openai/services/openai.service.ts",
+          "line": 164
+        },
+        {
+          "model": "IntegrationSession",
+          "method": "update",
+          "file": "upstream/src/api/integrations/chatbot/openai/services/openai.service.ts",
+          "line": 246
+        },
+        {
+          "model": "IntegrationSession",
+          "method": "update",
+          "file": "upstream/src/api/integrations/chatbot/openai/services/openai.service.ts",
+          "line": 324
+        },
+        {
+          "model": "IntegrationSession",
+          "method": "update",
+          "file": "upstream/src/api/integrations/chatbot/openai/services/openai.service.ts",
+          "line": 378
+        },
+        {
+          "model": "IntegrationSession",
+          "method": "findFirst",
+          "file": "upstream/src/api/integrations/chatbot/openai/services/openai.service.ts",
+          "line": 429
+        },
+        {
+          "model": "IntegrationSession",
+          "method": "update",
+          "file": "upstream/src/api/integrations/chatbot/openai/services/openai.service.ts",
+          "line": 563
+        },
+        {
+          "model": "IntegrationSession",
+          "method": "deleteMany",
+          "file": "upstream/src/api/integrations/chatbot/typebot/controllers/typebot.controller.ts",
+          "line": 223
+        },
+        {
+          "model": "IntegrationSession",
+          "method": "create",
+          "file": "upstream/src/api/integrations/chatbot/typebot/services/typebot.service.ts",
+          "line": 129
+        },
+        {
+          "model": "IntegrationSession",
+          "method": "update",
+          "file": "upstream/src/api/integrations/chatbot/typebot/services/typebot.service.ts",
+          "line": 456
+        },
+        {
+          "model": "IntegrationSession",
+          "method": "deleteMany",
+          "file": "upstream/src/api/integrations/chatbot/typebot/services/typebot.service.ts",
+          "line": 467
+        },
+        {
+          "model": "IntegrationSession",
+          "method": "update",
+          "file": "upstream/src/api/integrations/chatbot/typebot/services/typebot.service.ts",
+          "line": 474
+        },
+        {
+          "model": "IntegrationSession",
+          "method": "update",
+          "file": "upstream/src/api/integrations/chatbot/typebot/services/typebot.service.ts",
+          "line": 658
+        },
+        {
+          "model": "IntegrationSession",
+          "method": "deleteMany",
+          "file": "upstream/src/api/integrations/chatbot/typebot/services/typebot.service.ts",
+          "line": 667
+        },
+        {
+          "model": "IntegrationSession",
+          "method": "update",
+          "file": "upstream/src/api/integrations/chatbot/typebot/services/typebot.service.ts",
+          "line": 722
+        },
+        {
+          "model": "IntegrationSession",
+          "method": "deleteMany",
+          "file": "upstream/src/api/integrations/chatbot/typebot/services/typebot.service.ts",
+          "line": 732
+        },
+        {
+          "model": "IntegrationSession",
+          "method": "update",
+          "file": "upstream/src/api/integrations/chatbot/typebot/services/typebot.service.ts",
+          "line": 887
+        },
+        {
+          "model": "IntegrationSession",
+          "method": "deleteMany",
+          "file": "upstream/src/api/integrations/chatbot/typebot/services/typebot.service.ts",
+          "line": 897
+        },
+        {
+          "model": "IntegrationSession",
+          "method": "update",
+          "file": "upstream/src/api/integrations/chatbot/typebot/services/typebot.service.ts",
+          "line": 960
+        },
+        {
+          "model": "IntegrationSession",
+          "method": "update",
+          "file": "upstream/src/api/integrations/chatbot/typebot/services/typebot.service.ts",
+          "line": 995
+        },
+        {
+          "model": "IntegrationSession",
+          "method": "deleteMany",
+          "file": "upstream/src/api/integrations/chatbot/typebot/services/typebot.service.ts",
+          "line": 1005
+        },
+        {
+          "model": "IntegrationSession",
+          "method": "deleteMany",
+          "file": "upstream/src/api/services/monitor.service.ts",
+          "line": 218
+        }
+      ]
+    },
+    {
+      "model": "OpenaiSetting",
+      "origin": "upstream:e273b904d53f5726970fd6a244ed9caa61dfeb9a",
+      "relations": [
+        "OpenaiCreds      OpenaiCreds? @relation(fields: [openaiCredsId], references: [id])",
+        "Fallback         OpenaiBot?   @relation(fields: [openaiIdFallback], references: [id])",
+        "Instance         Instance     @relation(fields: [instanceId], references: [id], onDelete: Cascade)"
+      ],
+      "defaults": [
+        "id               String       @id @default(cuid())",
+        "expire           Int?         @default(0) @db.Integer",
+        "listeningFromMe  Boolean?     @default(false) @db.Boolean",
+        "stopBotFromMe    Boolean?     @default(false) @db.Boolean",
+        "keepOpen         Boolean?     @default(false) @db.Boolean",
+        "splitMessages    Boolean?     @default(false) @db.Boolean",
+        "timePerChar      Int?         @default(50) @db.Integer",
+        "speechToText     Boolean?     @default(false) @db.Boolean",
+        "createdAt        DateTime?    @default(now()) @db.Timestamp"
+      ],
+      "operations": [
+        {
+          "model": "OpenaiSetting",
+          "method": "findFirst",
+          "file": "upstream/src/api/integrations/channel/evolution/evolution.channel.service.ts",
+          "line": 163
+        },
+        {
+          "model": "OpenaiSetting",
+          "method": "findFirst",
+          "file": "upstream/src/api/integrations/channel/meta/whatsapp.business.service.ts",
+          "line": 628
+        },
+        {
+          "model": "OpenaiSetting",
+          "method": "findFirst",
+          "file": "upstream/src/api/integrations/channel/meta/whatsapp.business.service.ts",
+          "line": 675
+        },
+        {
+          "model": "OpenaiSetting",
+          "method": "findFirst",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 1533
+        },
+        {
+          "model": "OpenaiSetting",
+          "method": "findFirst",
+          "file": "upstream/src/api/integrations/channel/whatsapp/whatsapp.baileys.service.ts",
+          "line": 2757
+        },
+        {
+          "model": "OpenaiSetting",
+          "method": "findFirst",
+          "file": "upstream/src/api/integrations/chatbot/openai/services/openai.service.ts",
+          "line": 674
+        },
+        {
+          "model": "OpenaiSetting",
+          "method": "findFirst",
+          "file": "overlay/ingress-effects.ts.inc",
+          "line": 37
+        }
+      ]
+    },
+    {
+      "model": "Template",
+      "origin": "upstream:e273b904d53f5726970fd6a244ed9caa61dfeb9a",
+      "relations": [
+        "Instance   Instance  @relation(fields: [instanceId], references: [id], onDelete: Cascade)"
+      ],
+      "defaults": [
+        "id         String    @id @default(cuid())",
+        "createdAt  DateTime? @default(now()) @db.Timestamp"
+      ],
+      "operations": [
+        {
+          "model": "Template",
+          "method": "findFirst",
+          "file": "upstream/src/api/integrations/channel/meta/meta.controller.ts",
+          "line": 20
+        },
+        {
+          "model": "Template",
+          "method": "create",
+          "file": "upstream/src/api/services/template.service.ts",
+          "line": 73
+        },
+        {
+          "model": "Template",
+          "method": "deleteMany",
+          "file": "upstream/src/api/services/template.service.ts",
+          "line": 145
+        }
+      ]
+    },
+    {
+      "model": "Dify",
+      "origin": "upstream:e273b904d53f5726970fd6a244ed9caa61dfeb9a",
+      "relations": [
+        "Instance        Instance         @relation(fields: [instanceId], references: [id], onDelete: Cascade)"
+      ],
+      "defaults": [
+        "id              String           @id @default(cuid())",
+        "enabled         Boolean          @default(true) @db.Boolean",
+        "expire          Int?             @default(0) @db.Integer",
+        "listeningFromMe Boolean?         @default(false) @db.Boolean",
+        "stopBotFromMe   Boolean?         @default(false) @db.Boolean",
+        "keepOpen        Boolean?         @default(false) @db.Boolean",
+        "splitMessages   Boolean?         @default(false) @db.Boolean",
+        "timePerChar     Int?             @default(50) @db.Integer",
+        "createdAt       DateTime?        @default(now()) @db.Timestamp"
+      ],
+      "operations": []
+    },
+    {
+      "model": "DifySetting",
+      "origin": "upstream:e273b904d53f5726970fd6a244ed9caa61dfeb9a",
+      "relations": [
+        "Fallback        Dify?     @relation(fields: [difyIdFallback], references: [id])",
+        "Instance        Instance  @relation(fields: [instanceId], references: [id], onDelete: Cascade)"
+      ],
+      "defaults": [
+        "id              String    @id @default(cuid())",
+        "expire          Int?      @default(0) @db.Integer",
+        "listeningFromMe Boolean?  @default(false) @db.Boolean",
+        "stopBotFromMe   Boolean?  @default(false) @db.Boolean",
+        "keepOpen        Boolean?  @default(false) @db.Boolean",
+        "splitMessages   Boolean?  @default(false) @db.Boolean",
+        "timePerChar     Int?      @default(50) @db.Integer",
+        "createdAt       DateTime? @default(now()) @db.Timestamp"
+      ],
+      "operations": []
+    },
+    {
+      "model": "EvolutionBot",
+      "origin": "upstream:e273b904d53f5726970fd6a244ed9caa61dfeb9a",
+      "relations": [
+        "Instance            Instance              @relation(fields: [instanceId], references: [id], onDelete: Cascade)"
+      ],
+      "defaults": [
+        "id                  String                @id @default(cuid())",
+        "enabled             Boolean               @default(true) @db.Boolean",
+        "expire              Int?                  @default(0) @db.Integer",
+        "listeningFromMe     Boolean?              @default(false) @db.Boolean",
+        "stopBotFromMe       Boolean?              @default(false) @db.Boolean",
+        "keepOpen            Boolean?              @default(false) @db.Boolean",
+        "splitMessages       Boolean?              @default(false) @db.Boolean",
+        "timePerChar         Int?                  @default(50) @db.Integer",
+        "createdAt           DateTime?             @default(now()) @db.Timestamp"
+      ],
+      "operations": []
+    },
+    {
+      "model": "EvolutionBotSetting",
+      "origin": "upstream:e273b904d53f5726970fd6a244ed9caa61dfeb9a",
+      "relations": [
+        "Fallback        EvolutionBot? @relation(fields: [botIdFallback], references: [id])",
+        "Instance        Instance      @relation(fields: [instanceId], references: [id], onDelete: Cascade)"
+      ],
+      "defaults": [
+        "id              String        @id @default(cuid())",
+        "expire          Int?          @default(0) @db.Integer",
+        "listeningFromMe Boolean?      @default(false) @db.Boolean",
+        "stopBotFromMe   Boolean?      @default(false) @db.Boolean",
+        "keepOpen        Boolean?      @default(false) @db.Boolean",
+        "splitMessages   Boolean?      @default(false) @db.Boolean",
+        "timePerChar     Int?          @default(50) @db.Integer",
+        "createdAt       DateTime?     @default(now()) @db.Timestamp"
+      ],
+      "operations": []
+    },
+    {
+      "model": "Flowise",
+      "origin": "upstream:e273b904d53f5726970fd6a244ed9caa61dfeb9a",
+      "relations": [
+        "Instance        Instance         @relation(fields: [instanceId], references: [id], onDelete: Cascade)"
+      ],
+      "defaults": [
+        "id              String           @id @default(cuid())",
+        "enabled         Boolean          @default(true) @db.Boolean",
+        "expire          Int?             @default(0) @db.Integer",
+        "listeningFromMe Boolean?         @default(false) @db.Boolean",
+        "stopBotFromMe   Boolean?         @default(false) @db.Boolean",
+        "keepOpen        Boolean?         @default(false) @db.Boolean",
+        "splitMessages   Boolean?         @default(false) @db.Boolean",
+        "timePerChar     Int?             @default(50) @db.Integer",
+        "createdAt       DateTime?        @default(now()) @db.Timestamp"
+      ],
+      "operations": []
+    },
+    {
+      "model": "FlowiseSetting",
+      "origin": "upstream:e273b904d53f5726970fd6a244ed9caa61dfeb9a",
+      "relations": [
+        "Fallback          Flowise?  @relation(fields: [flowiseIdFallback], references: [id])",
+        "Instance          Instance  @relation(fields: [instanceId], references: [id], onDelete: Cascade)"
+      ],
+      "defaults": [
+        "id                String    @id @default(cuid())",
+        "expire            Int?      @default(0) @db.Integer",
+        "listeningFromMe   Boolean?  @default(false) @db.Boolean",
+        "stopBotFromMe     Boolean?  @default(false) @db.Boolean",
+        "keepOpen          Boolean?  @default(false) @db.Boolean",
+        "splitMessages     Boolean?  @default(false) @db.Boolean",
+        "timePerChar       Int?      @default(50) @db.Integer",
+        "createdAt         DateTime? @default(now()) @db.Timestamp"
+      ],
+      "operations": []
+    },
+    {
+      "model": "IsOnWhatsapp",
+      "origin": "upstream:e273b904d53f5726970fd6a244ed9caa61dfeb9a",
+      "relations": [],
+      "defaults": [
+        "id         String   @id @default(cuid())",
+        "createdAt  DateTime @default(now()) @db.Timestamp"
+      ],
+      "operations": [
+        {
+          "model": "IsOnWhatsapp",
+          "method": "findFirst",
+          "file": "upstream/src/utils/onWhatsappCache.ts",
+          "line": 102
+        },
+        {
+          "model": "IsOnWhatsapp",
+          "method": "update",
+          "file": "upstream/src/utils/onWhatsappCache.ts",
+          "line": 159
+        },
+        {
+          "model": "IsOnWhatsapp",
+          "method": "create",
+          "file": "upstream/src/utils/onWhatsappCache.ts",
+          "line": 169
+        },
+        {
+          "model": "IsOnWhatsapp",
+          "method": "update",
+          "file": "upstream/src/utils/onWhatsappCache.ts",
+          "line": 182
+        },
+        {
+          "model": "IsOnWhatsapp",
+          "method": "findMany",
+          "file": "upstream/src/utils/onWhatsappCache.ts",
+          "line": 213
+        }
+      ]
+    },
+    {
+      "model": "N8n",
+      "origin": "upstream:e273b904d53f5726970fd6a244ed9caa61dfeb9a",
+      "relations": [
+        "Instance        Instance         @relation(fields: [instanceId], references: [id], onDelete: Cascade)"
+      ],
+      "defaults": [
+        "id              String           @id @default(cuid())",
+        "enabled         Boolean          @default(true) @db.Boolean",
+        "expire          Int?             @default(0) @db.Integer",
+        "listeningFromMe Boolean?         @default(false) @db.Boolean",
+        "stopBotFromMe   Boolean?         @default(false) @db.Boolean",
+        "keepOpen        Boolean?         @default(false) @db.Boolean",
+        "splitMessages   Boolean?         @default(false) @db.Boolean",
+        "timePerChar     Int?             @default(50) @db.Integer",
+        "createdAt       DateTime?        @default(now()) @db.Timestamp"
+      ],
+      "operations": []
+    },
+    {
+      "model": "N8nSetting",
+      "origin": "upstream:e273b904d53f5726970fd6a244ed9caa61dfeb9a",
+      "relations": [
+        "Fallback        N8n?      @relation(fields: [n8nIdFallback], references: [id])",
+        "Instance        Instance  @relation(fields: [instanceId], references: [id], onDelete: Cascade)"
+      ],
+      "defaults": [
+        "id              String    @id @default(cuid())",
+        "expire          Int?      @default(0) @db.Integer",
+        "listeningFromMe Boolean?  @default(false) @db.Boolean",
+        "stopBotFromMe   Boolean?  @default(false) @db.Boolean",
+        "keepOpen        Boolean?  @default(false) @db.Boolean",
+        "splitMessages   Boolean?  @default(false) @db.Boolean",
+        "timePerChar     Int?      @default(50) @db.Integer",
+        "createdAt       DateTime? @default(now()) @db.Timestamp"
+      ],
+      "operations": []
+    },
+    {
+      "model": "Evoai",
+      "origin": "upstream:e273b904d53f5726970fd6a244ed9caa61dfeb9a",
+      "relations": [
+        "Instance        Instance         @relation(fields: [instanceId], references: [id], onDelete: Cascade)"
+      ],
+      "defaults": [
+        "id              String           @id @default(cuid())",
+        "enabled         Boolean          @default(true) @db.Boolean",
+        "expire          Int?             @default(0) @db.Integer",
+        "listeningFromMe Boolean?         @default(false) @db.Boolean",
+        "stopBotFromMe   Boolean?         @default(false) @db.Boolean",
+        "keepOpen        Boolean?         @default(false) @db.Boolean",
+        "splitMessages   Boolean?         @default(false) @db.Boolean",
+        "timePerChar     Int?             @default(50) @db.Integer",
+        "createdAt       DateTime?        @default(now()) @db.Timestamp"
+      ],
+      "operations": []
+    },
+    {
+      "model": "EvoaiSetting",
+      "origin": "upstream:e273b904d53f5726970fd6a244ed9caa61dfeb9a",
+      "relations": [
+        "Fallback        Evoai?    @relation(fields: [evoaiIdFallback], references: [id])",
+        "Instance        Instance  @relation(fields: [instanceId], references: [id], onDelete: Cascade)"
+      ],
+      "defaults": [
+        "id              String    @id @default(cuid())",
+        "expire          Int?      @default(0) @db.Integer",
+        "listeningFromMe Boolean?  @default(false) @db.Boolean",
+        "stopBotFromMe   Boolean?  @default(false) @db.Boolean",
+        "keepOpen        Boolean?  @default(false) @db.Boolean",
+        "splitMessages   Boolean?  @default(false) @db.Boolean",
+        "timePerChar     Int?      @default(50) @db.Integer",
+        "createdAt       DateTime? @default(now()) @db.Timestamp"
+      ],
+      "operations": []
+    },
+    {
+      "model": "RuntimeConfig",
+      "origin": "upstream:e273b904d53f5726970fd6a244ed9caa61dfeb9a",
+      "relations": [],
+      "defaults": [
+        "id        Int      @id @default(autoincrement())",
+        "createdAt DateTime @default(now()) @db.Timestamp"
+      ],
+      "operations": [
+        {
+          "model": "RuntimeConfig",
+          "method": "findUnique",
+          "file": "upstream/src/licensing/store.ts",
+          "line": 25
+        },
+        {
+          "model": "RuntimeConfig",
+          "method": "upsert",
+          "file": "upstream/src/licensing/store.ts",
+          "line": 31
+        },
+        {
+          "model": "RuntimeConfig",
+          "method": "deleteMany",
+          "file": "upstream/src/licensing/store.ts",
+          "line": 40
+        }
+      ]
+    },
+    {
+      "model": "NexiGroupControl",
+      "origin": "overlay:patch-groups-source.mjs schema template",
+      "relations": [
+        "Instance Instance @relation(fields: [instanceId], references: [id], onDelete: Cascade)"
+      ],
+      "defaults": [
+        "revision Int @default(0)",
+        "catalogStale Boolean @default(true)"
+      ],
+      "operations": [
+        {
+          "model": "NexiGroupControl",
+          "method": "findUnique",
+          "file": "overlay/nexi-groups.cjs",
+          "line": 369
+        },
+        {
+          "model": "NexiGroupControl",
+          "method": "updateMany",
+          "file": "overlay/nexi-groups.cjs",
+          "line": 371
+        },
+        {
+          "model": "NexiGroupControl",
+          "method": "updateMany",
+          "file": "overlay/nexi-groups.cjs",
+          "line": 599
+        },
+        {
+          "model": "NexiGroupControl",
+          "method": "updateMany",
+          "file": "overlay/nexi-groups.cjs",
+          "line": 607
+        },
+        {
+          "model": "NexiGroupControl",
+          "method": "findUnique",
+          "file": "overlay/nexi-groups.cjs",
+          "line": 765
+        },
+        {
+          "model": "NexiGroupControl",
+          "method": "updateMany",
+          "file": "overlay/nexi-groups.cjs",
+          "line": 773
+        },
+        {
+          "model": "NexiGroupControl",
+          "method": "updateMany",
+          "file": "overlay/nexi-groups.cjs",
+          "line": 860
+        },
+        {
+          "model": "NexiGroupControl",
+          "method": "findUnique",
+          "file": "overlay/nexi-groups.cjs",
+          "line": 918
+        },
+        {
+          "model": "NexiGroupControl",
+          "method": "create",
+          "file": "overlay/nexi-groups.cjs",
+          "line": 923
+        },
+        {
+          "model": "NexiGroupControl",
+          "method": "updateMany",
+          "file": "overlay/nexi-groups.cjs",
+          "line": 927
+        },
+        {
+          "model": "NexiGroupControl",
+          "method": "findUnique",
+          "file": "overlay/nexi-groups.cjs",
+          "line": 931
+        },
+        {
+          "model": "NexiGroupControl",
+          "method": "updateMany",
+          "file": "overlay/nexi-groups.cjs",
+          "line": 954
+        },
+        {
+          "model": "NexiGroupControl",
+          "method": "findUnique",
+          "file": "overlay/nexi-groups.cjs",
+          "line": 978
+        },
+        {
+          "model": "NexiGroupControl",
+          "method": "updateMany",
+          "file": "overlay/nexi-groups.cjs",
+          "line": 986
+        }
+      ]
+    },
+    {
+      "model": "NexiGroupEventOutbox",
+      "origin": "overlay:patch-groups-source.mjs schema template",
+      "relations": [
+        "Instance Instance @relation(fields: [instanceId], references: [id], onDelete: Cascade)"
+      ],
+      "defaults": [
+        "id BigInt @id @default(autoincrement())",
+        "attempts Int @default(0)",
+        "createdAt DateTime @default(now())"
+      ],
+      "operations": [
+        {
+          "model": "NexiGroupEventOutbox",
+          "method": "upsert",
+          "file": "overlay/nexi-groups.cjs",
+          "line": 376
+        },
+        {
+          "model": "NexiGroupEventOutbox",
+          "method": "findUnique",
+          "file": "overlay/nexi-groups.cjs",
+          "line": 794
+        },
+        {
+          "model": "NexiGroupEventOutbox",
+          "method": "upsert",
+          "file": "overlay/nexi-groups.cjs",
+          "line": 803
+        }
+      ]
+    },
+    {
+      "model": "NexiManagedTransportContext",
+      "origin": "overlay:attendance-models.prisma",
+      "relations": [],
+      "defaults": [
+        "canonicalVersion String @default(\"legacy_unversioned\") @db.VarChar(32)",
+        "createdAt DateTime @default(now())"
+      ],
+      "operations": [
+        {
+          "model": "NexiManagedTransportContext",
+          "method": "findFirst",
+          "file": "overlay/nexi-attendance.cjs",
+          "line": 1268
+        },
+        {
+          "model": "NexiManagedTransportContext",
+          "method": "findFirst",
+          "file": "overlay/nexi-attendance.cjs",
+          "line": 1302
+        },
+        {
+          "model": "NexiManagedTransportContext",
+          "method": "findFirst",
+          "file": "overlay/nexi-attendance.cjs",
+          "line": 1829
+        },
+        {
+          "model": "NexiManagedTransportContext",
+          "method": "findFirst",
+          "file": "overlay/nexi-attendance.cjs",
+          "line": 1842
+        }
+      ]
+    },
+    {
+      "model": "NexiAttendancePreparation",
+      "origin": "overlay:attendance-models.prisma",
+      "relations": [],
+      "defaults": [
+        "canonicalVersion String @default(\"legacy_unversioned\") @db.VarChar(32)",
+        "outcomeUnknown Boolean @default(false)",
+        "revision Int @default(0)",
+        "recoveryAttempts Int @default(0)",
+        "nextRecoveryAt DateTime @default(now())",
+        "createdAt DateTime @default(now())"
+      ],
+      "operations": [
+        {
+          "model": "NexiAttendancePreparation",
+          "method": "findUnique",
+          "file": "overlay/nexi-attendance-authority.cjs",
+          "line": 211
+        },
+        {
+          "model": "NexiAttendancePreparation",
+          "method": "findUnique",
+          "file": "overlay/nexi-attendance-authority.cjs",
+          "line": 222
+        },
+        {
+          "model": "NexiAttendancePreparation",
+          "method": "findUnique",
+          "file": "overlay/nexi-attendance-authority.cjs",
+          "line": 249
+        },
+        {
+          "model": "NexiAttendancePreparation",
+          "method": "findUnique",
+          "file": "overlay/nexi-attendance-dispatch.cjs",
+          "line": 89
+        },
+        {
+          "model": "NexiAttendancePreparation",
+          "method": "findUnique",
+          "file": "overlay/nexi-attendance-receipt-redelivery.cjs",
+          "line": 30
+        },
+        {
+          "model": "NexiAttendancePreparation",
+          "method": "findMany",
+          "file": "overlay/nexi-attendance.cjs",
+          "line": 1019
+        },
+        {
+          "model": "NexiAttendancePreparation",
+          "method": "findUnique",
+          "file": "overlay/nexi-attendance.cjs",
+          "line": 1127
+        },
+        {
+          "model": "NexiAttendancePreparation",
+          "method": "findUnique",
+          "file": "overlay/nexi-attendance.cjs",
+          "line": 1584
+        },
+        {
+          "model": "NexiAttendancePreparation",
+          "method": "findFirst",
+          "file": "overlay/nexi-attendance.cjs",
+          "line": 1743
+        },
+        {
+          "model": "NexiAttendancePreparation",
+          "method": "findFirst",
+          "file": "overlay/nexi-attendance.cjs",
+          "line": 1819
+        },
+        {
+          "model": "NexiAttendancePreparation",
+          "method": "findFirst",
+          "file": "overlay/nexi-attendance.cjs",
+          "line": 1832
+        },
+        {
+          "model": "NexiAttendancePreparation",
+          "method": "findUnique",
+          "file": "overlay/nexi-attendance.cjs",
+          "line": 1990
+        },
+        {
+          "model": "NexiAttendancePreparation",
+          "method": "findMany",
+          "file": "overlay/nexi-attendance.cjs",
+          "line": 2041
+        }
+      ]
+    },
+    {
+      "model": "NexiReceiptJournal",
+      "origin": "overlay:attendance-models.prisma",
+      "relations": [],
+      "defaults": [
+        "canonicalVersion String @default(\"legacy_unversioned\") @db.VarChar(32)",
+        "createdAt DateTime @default(now())"
+      ],
+      "operations": [
+        {
+          "model": "NexiReceiptJournal",
+          "method": "findUnique",
+          "file": "overlay/nexi-attendance-receipt-redelivery.cjs",
+          "line": 41
+        },
+        {
+          "model": "NexiReceiptJournal",
+          "method": "findUnique",
+          "file": "overlay/nexi-attendance.cjs",
+          "line": 1080
+        },
+        {
+          "model": "NexiReceiptJournal",
+          "method": "create",
+          "file": "overlay/nexi-attendance.cjs",
+          "line": 1084
+        },
+        {
+          "model": "NexiReceiptJournal",
+          "method": "findMany",
+          "file": "overlay/nexi-attendance.cjs",
+          "line": 1095
+        },
+        {
+          "model": "NexiReceiptJournal",
+          "method": "findUnique",
+          "file": "overlay/nexi-attendance.cjs",
+          "line": 1128
+        },
+        {
+          "model": "NexiReceiptJournal",
+          "method": "create",
+          "file": "overlay/nexi-attendance.cjs",
+          "line": 1136
+        }
+      ]
+    },
+    {
+      "model": "NexiAttendanceEventOutbox",
+      "origin": "overlay:attendance-models.prisma",
+      "relations": [],
+      "defaults": [
+        "canonicalVersion String @default(\"legacy_unversioned\") @db.VarChar(32)",
+        "attempts Int @default(0)",
+        "createdAt DateTime @default(now())"
+      ],
+      "operations": [
+        {
+          "model": "NexiAttendanceEventOutbox",
+          "method": "findUnique",
+          "file": "overlay/nexi-attendance-receipt-redelivery.cjs",
+          "line": 29
+        },
+        {
+          "model": "NexiAttendanceEventOutbox",
+          "method": "updateMany",
+          "file": "overlay/nexi-attendance-receipt-redelivery.cjs",
+          "line": 62
+        },
+        {
+          "model": "NexiAttendanceEventOutbox",
+          "method": "updateMany",
+          "file": "overlay/nexi-attendance-receipt-redelivery.cjs",
+          "line": 87
+        },
+        {
+          "model": "NexiAttendanceEventOutbox",
+          "method": "findUnique",
+          "file": "overlay/nexi-attendance-receipt-redelivery.cjs",
+          "line": 90
+        },
+        {
+          "model": "NexiAttendanceEventOutbox",
+          "method": "findMany",
+          "file": "overlay/nexi-attendance.cjs",
+          "line": 2037
+        }
+      ]
+    },
+    {
+      "model": "NexiAttendanceHealth",
+      "origin": "overlay:attendance-models.prisma",
+      "relations": [],
+      "defaults": [
+        "unhealthy Boolean @default(true)",
+        "revision Int @default(0)"
+      ],
+      "operations": [
+        {
+          "model": "NexiAttendanceHealth",
+          "method": "upsert",
+          "file": "overlay/nexi-attendance.cjs",
+          "line": 1060
+        },
+        {
+          "model": "NexiAttendanceHealth",
+          "method": "findUnique",
+          "file": "overlay/nexi-attendance.cjs",
+          "line": 2020
+        }
+      ]
+    },
+    {
+      "model": "NexiIngressScope",
+      "origin": "overlay:ingress-models.prisma",
+      "relations": [],
+      "defaults": [
+        "revision Int @default(0)",
+        "nextSequence BigInt @default(0)",
+        "pending Int @default(0)",
+        "secondaryPending Int @default(0)"
+      ],
+      "operations": [
+        {
+          "model": "NexiIngressScope",
+          "method": "updateMany",
+          "file": "overlay/nexi-ingress-effects.cjs",
+          "line": 45
+        },
+        {
+          "model": "NexiIngressScope",
+          "method": "update",
+          "file": "overlay/nexi-ingress-effects.cjs",
+          "line": 59
+        },
+        {
+          "model": "NexiIngressScope",
+          "method": "update",
+          "file": "overlay/nexi-ingress-effects.cjs",
+          "line": 89
+        },
+        {
+          "model": "NexiIngressScope",
+          "method": "update",
+          "file": "overlay/nexi-ingress-owner-generation.cjs",
+          "line": 352
+        },
+        {
+          "model": "NexiIngressScope",
+          "method": "update",
+          "file": "overlay/nexi-ingress-owner-generation.cjs",
+          "line": 450
+        },
+        {
+          "model": "NexiIngressScope",
+          "method": "update",
+          "file": "overlay/nexi-ingress-owner-generation.cjs",
+          "line": 462
+        },
+        {
+          "model": "NexiIngressScope",
+          "method": "upsert",
+          "file": "overlay/nexi-ingress.cjs",
+          "line": 219
+        },
+        {
+          "model": "NexiIngressScope",
+          "method": "updateMany",
+          "file": "overlay/nexi-ingress.cjs",
+          "line": 220
+        },
+        {
+          "model": "NexiIngressScope",
+          "method": "update",
+          "file": "overlay/nexi-ingress.cjs",
+          "line": 240
+        },
+        {
+          "model": "NexiIngressScope",
+          "method": "update",
+          "file": "overlay/nexi-ingress.cjs",
+          "line": 436
+        },
+        {
+          "model": "NexiIngressScope",
+          "method": "update",
+          "file": "overlay/nexi-ingress.cjs",
+          "line": 521
+        },
+        {
+          "model": "NexiIngressScope",
+          "method": "update",
+          "file": "overlay/nexi-ingress.cjs",
+          "line": 656
+        }
+      ]
+    },
+    {
+      "model": "NexiIngressLane",
+      "origin": "overlay:ingress-models.prisma",
+      "relations": [],
+      "defaults": [
+        "pending Int @default(0)",
+        "nextAttemptAt DateTime @default(now())",
+        "servedAt DateTime @default(now())"
+      ],
+      "operations": [
+        {
+          "model": "NexiIngressLane",
+          "method": "findUnique",
+          "file": "overlay/nexi-ingress-owner-generation.cjs",
+          "line": 250
+        },
+        {
+          "model": "NexiIngressLane",
+          "method": "findUnique",
+          "file": "overlay/nexi-ingress-owner-generation.cjs",
+          "line": 360
+        },
+        {
+          "model": "NexiIngressLane",
+          "method": "create",
+          "file": "overlay/nexi-ingress-owner-generation.cjs",
+          "line": 377
+        },
+        {
+          "model": "NexiIngressLane",
+          "method": "upsert",
+          "file": "overlay/nexi-ingress-owner-generation.cjs",
+          "line": 472
+        },
+        {
+          "model": "NexiIngressLane",
+          "method": "upsert",
+          "file": "overlay/nexi-ingress.cjs",
+          "line": 249
+        },
+        {
+          "model": "NexiIngressLane",
+          "method": "findUnique",
+          "file": "overlay/nexi-ingress.cjs",
+          "line": 316
+        },
+        {
+          "model": "NexiIngressLane",
+          "method": "updateMany",
+          "file": "overlay/nexi-ingress.cjs",
+          "line": 324
+        },
+        {
+          "model": "NexiIngressLane",
+          "method": "updateMany",
+          "file": "overlay/nexi-ingress.cjs",
+          "line": 437
+        },
+        {
+          "model": "NexiIngressLane",
+          "method": "updateMany",
+          "file": "overlay/nexi-ingress.cjs",
+          "line": 522
+        },
+        {
+          "model": "NexiIngressLane",
+          "method": "update",
+          "file": "overlay/nexi-ingress.cjs",
+          "line": 530
+        },
+        {
+          "model": "NexiIngressLane",
+          "method": "updateMany",
+          "file": "overlay/nexi-ingress.cjs",
+          "line": 554
+        },
+        {
+          "model": "NexiIngressLane",
+          "method": "updateMany",
+          "file": "overlay/nexi-ingress.cjs",
+          "line": 588
+        },
+        {
+          "model": "NexiIngressLane",
+          "method": "updateMany",
+          "file": "overlay/nexi-ingress.cjs",
+          "line": 607
+        },
+        {
+          "model": "NexiIngressLane",
+          "method": "findMany",
+          "file": "overlay/nexi-ingress.cjs",
+          "line": 645
+        },
+        {
+          "model": "NexiIngressLane",
+          "method": "updateMany",
+          "file": "overlay/nexi-ingress.cjs",
+          "line": 659
+        },
+        {
+          "model": "NexiIngressLane",
+          "method": "deleteMany",
+          "file": "overlay/nexi-ingress.cjs",
+          "line": 692
+        }
+      ]
+    },
+    {
+      "model": "NexiIngressJournal",
+      "origin": "overlay:ingress-models.prisma",
+      "relations": [],
+      "defaults": [
+        "state String @default(\"pending\") @db.VarChar(32)",
+        "checkpoint String @default(\"persisted\") @db.VarChar(32)",
+        "attempts Int @default(0)",
+        "createdAt DateTime @default(now())"
+      ],
+      "operations": [
+        {
+          "model": "NexiIngressJournal",
+          "method": "findUnique",
+          "file": "overlay/nexi-ingress-effects.cjs",
+          "line": 132
+        },
+        {
+          "model": "NexiIngressJournal",
+          "method": "findMany",
+          "file": "overlay/nexi-ingress-effects.cjs",
+          "line": 246
+        },
+        {
+          "model": "NexiIngressJournal",
+          "method": "update",
+          "file": "overlay/nexi-ingress-effects.cjs",
+          "line": 262
+        },
+        {
+          "model": "NexiIngressJournal",
+          "method": "findFirst",
+          "file": "overlay/nexi-ingress-owner-generation.cjs",
+          "line": 249
+        },
+        {
+          "model": "NexiIngressJournal",
+          "method": "findMany",
+          "file": "overlay/nexi-ingress-owner-generation.cjs",
+          "line": 326
+        },
+        {
+          "model": "NexiIngressJournal",
+          "method": "findMany",
+          "file": "overlay/nexi-ingress-owner-generation.cjs",
+          "line": 364
+        },
+        {
+          "model": "NexiIngressJournal",
+          "method": "count",
+          "file": "overlay/nexi-ingress-owner-generation.cjs",
+          "line": 372
+        },
+        {
+          "model": "NexiIngressJournal",
+          "method": "create",
+          "file": "overlay/nexi-ingress-owner-generation.cjs",
+          "line": 475
+        },
+        {
+          "model": "NexiIngressJournal",
+          "method": "findUnique",
+          "file": "overlay/nexi-ingress.cjs",
+          "line": 226
+        },
+        {
+          "model": "NexiIngressJournal",
+          "method": "create",
+          "file": "overlay/nexi-ingress.cjs",
+          "line": 252
+        },
+        {
+          "model": "NexiIngressJournal",
+          "method": "update",
+          "file": "overlay/nexi-ingress.cjs",
+          "line": 327
+        },
+        {
+          "model": "NexiIngressJournal",
+          "method": "update",
+          "file": "overlay/nexi-ingress.cjs",
+          "line": 456
+        },
+        {
+          "model": "NexiIngressJournal",
+          "method": "update",
+          "file": "overlay/nexi-ingress.cjs",
+          "line": 528
+        },
+        {
+          "model": "NexiIngressJournal",
+          "method": "findFirst",
+          "file": "overlay/nexi-ingress.cjs",
+          "line": 537
+        },
+        {
+          "model": "NexiIngressJournal",
+          "method": "update",
+          "file": "overlay/nexi-ingress.cjs",
+          "line": 591
+        }
+      ]
+    },
+    {
+      "model": "NexiIngressEffectLane",
+      "origin": "overlay:ingress-models.prisma",
+      "relations": [],
+      "defaults": [
+        "pending Int @default(0)",
+        "nextAttemptAt DateTime @default(now())",
+        "servedAt DateTime @default(now())"
+      ],
+      "operations": [
+        {
+          "model": "NexiIngressEffectLane",
+          "method": "findUnique",
+          "file": "overlay/nexi-ingress-dispatch.cjs",
+          "line": 46
+        },
+        {
+          "model": "NexiIngressEffectLane",
+          "method": "upsert",
+          "file": "overlay/nexi-ingress-dispatch.cjs",
+          "line": 80
+        },
+        {
+          "model": "NexiIngressEffectLane",
+          "method": "update",
+          "file": "overlay/nexi-ingress-dispatch.cjs",
+          "line": 82
+        },
+        {
+          "model": "NexiIngressEffectLane",
+          "method": "upsert",
+          "file": "overlay/nexi-ingress-effects.cjs",
+          "line": 27
+        },
+        {
+          "model": "NexiIngressEffectLane",
+          "method": "update",
+          "file": "overlay/nexi-ingress-effects.cjs",
+          "line": 48
+        },
+        {
+          "model": "NexiIngressEffectLane",
+          "method": "update",
+          "file": "overlay/nexi-ingress-effects.cjs",
+          "line": 50
+        },
+        {
+          "model": "NexiIngressEffectLane",
+          "method": "updateMany",
+          "file": "overlay/nexi-ingress-effects.cjs",
+          "line": 60
+        },
+        {
+          "model": "NexiIngressEffectLane",
+          "method": "update",
+          "file": "overlay/nexi-ingress-effects.cjs",
+          "line": 79
+        },
+        {
+          "model": "NexiIngressEffectLane",
+          "method": "update",
+          "file": "overlay/nexi-ingress-effects.cjs",
+          "line": 88
+        },
+        {
+          "model": "NexiIngressEffectLane",
+          "method": "updateMany",
+          "file": "overlay/nexi-ingress-effects.cjs",
+          "line": 151
+        },
+        {
+          "model": "NexiIngressEffectLane",
+          "method": "updateMany",
+          "file": "overlay/nexi-ingress-effects.cjs",
+          "line": 202
+        },
+        {
+          "model": "NexiIngressEffectLane",
+          "method": "findMany",
+          "file": "overlay/nexi-ingress-effects.cjs",
+          "line": 215
+        },
+        {
+          "model": "NexiIngressEffectLane",
+          "method": "updateMany",
+          "file": "overlay/nexi-ingress-effects.cjs",
+          "line": 220
+        }
+      ]
+    },
+    {
+      "model": "NexiIngressEffect",
+      "origin": "overlay:ingress-models.prisma",
+      "relations": [],
+      "defaults": [
+        "contractVersion Int @default(1)",
+        "state String @default(\"pending\") @db.VarChar(32)",
+        "attempts Int @default(0)",
+        "createdAt DateTime @default(now())"
+      ],
+      "operations": [
+        {
+          "model": "NexiIngressEffect",
+          "method": "findUnique",
+          "file": "overlay/nexi-ingress-effects.cjs",
+          "line": 24
+        },
+        {
+          "model": "NexiIngressEffect",
+          "method": "create",
+          "file": "overlay/nexi-ingress-effects.cjs",
+          "line": 38
+        },
+        {
+          "model": "NexiIngressEffect",
+          "method": "update",
+          "file": "overlay/nexi-ingress-effects.cjs",
+          "line": 68
+        },
+        {
+          "model": "NexiIngressEffect",
+          "method": "findUnique",
+          "file": "overlay/nexi-ingress-effects.cjs",
+          "line": 73
+        },
+        {
+          "model": "NexiIngressEffect",
+          "method": "update",
+          "file": "overlay/nexi-ingress-effects.cjs",
+          "line": 75
+        },
+        {
+          "model": "NexiIngressEffect",
+          "method": "updateMany",
+          "file": "overlay/nexi-ingress-effects.cjs",
+          "line": 83
+        },
+        {
+          "model": "NexiIngressEffect",
+          "method": "findFirst",
+          "file": "overlay/nexi-ingress-effects.cjs",
+          "line": 130
+        },
+        {
+          "model": "NexiIngressEffect",
+          "method": "findFirst",
+          "file": "overlay/nexi-ingress-effects.cjs",
+          "line": 143
+        },
+        {
+          "model": "NexiIngressEffect",
+          "method": "count",
+          "file": "overlay/nexi-ingress-effects.cjs",
+          "line": 255
+        },
+        {
+          "model": "NexiIngressEffect",
+          "method": "findMany",
+          "file": "overlay/nexi-ingress-effects.cjs",
+          "line": 257
+        },
+        {
+          "model": "NexiIngressEffect",
+          "method": "update",
+          "file": "overlay/nexi-ingress-effects.cjs",
+          "line": 258
+        },
+        {
+          "model": "NexiIngressEffect",
+          "method": "findFirst",
+          "file": "overlay/nexi-ingress.cjs",
+          "line": 449
+        }
+      ]
+    },
+    {
+      "model": "NexiIngressContactCache",
+      "origin": "overlay:ingress-models.prisma",
+      "relations": [],
+      "defaults": [],
+      "operations": [
+        {
+          "model": "NexiIngressContactCache",
+          "method": "findUnique",
+          "file": "overlay/ingress-effects.ts.inc",
+          "line": 160
+        },
+        {
+          "model": "NexiIngressContactCache",
+          "method": "upsert",
+          "file": "overlay/ingress-effects.ts.inc",
+          "line": 161
+        },
+        {
+          "model": "NexiIngressContactCache",
+          "method": "deleteMany",
+          "file": "overlay/nexi-ingress.cjs",
+          "line": 691
+        },
+        {
+          "model": "NexiIngressContactCache",
+          "method": "findMany",
+          "file": "overlay/nexi-ingress.cjs",
+          "line": 711
+        }
+      ]
+    },
+    {
+      "model": "NexiIngressOwnerRoot",
+      "origin": "overlay:ingress-models.prisma",
+      "relations": [],
+      "defaults": [
+        "revision Int @default(0)"
+      ],
+      "operations": [
+        {
+          "model": "NexiIngressOwnerRoot",
+          "method": "findUnique",
+          "file": "overlay/nexi-ingress-owner-generation.cjs",
+          "line": 216
+        },
+        {
+          "model": "NexiIngressOwnerRoot",
+          "method": "findUnique",
+          "file": "overlay/nexi-ingress-owner-generation.cjs",
+          "line": 235
+        },
+        {
+          "model": "NexiIngressOwnerRoot",
+          "method": "create",
+          "file": "overlay/nexi-ingress-owner-generation.cjs",
+          "line": 236
+        },
+        {
+          "model": "NexiIngressOwnerRoot",
+          "method": "updateMany",
+          "file": "overlay/nexi-ingress-owner-generation.cjs",
+          "line": 266
+        },
+        {
+          "model": "NexiIngressOwnerRoot",
+          "method": "findUnique",
+          "file": "overlay/nexi-ingress-owner-generation.cjs",
+          "line": 307
+        },
+        {
+          "model": "NexiIngressOwnerRoot",
+          "method": "findUnique",
+          "file": "overlay/nexi-ingress-owner-generation.cjs",
+          "line": 359
+        },
+        {
+          "model": "NexiIngressOwnerRoot",
+          "method": "updateMany",
+          "file": "overlay/nexi-ingress-owner-generation.cjs",
+          "line": 379
+        },
+        {
+          "model": "NexiIngressOwnerRoot",
+          "method": "findUnique",
+          "file": "overlay/nexi-ingress-owner-generation.cjs",
+          "line": 401
+        },
+        {
+          "model": "NexiIngressOwnerRoot",
+          "method": "findUnique",
+          "file": "overlay/nexi-ingress-owner-generation.cjs",
+          "line": 441
+        },
+        {
+          "model": "NexiIngressOwnerRoot",
+          "method": "findUnique",
+          "file": "overlay/nexi-ingress-owner-generation.cjs",
+          "line": 451
+        }
+      ]
+    },
+    {
+      "model": "NexiIngressOwnerGeneration",
+      "origin": "overlay:ingress-models.prisma",
+      "relations": [],
+      "defaults": [
+        "createdAt DateTime @default(now())"
+      ],
+      "operations": [
+        {
+          "model": "NexiIngressOwnerGeneration",
+          "method": "findUnique",
+          "file": "overlay/nexi-ingress-owner-generation.cjs",
+          "line": 241
+        },
+        {
+          "model": "NexiIngressOwnerGeneration",
+          "method": "findFirst",
+          "file": "overlay/nexi-ingress-owner-generation.cjs",
+          "line": 259
+        },
+        {
+          "model": "NexiIngressOwnerGeneration",
+          "method": "findUnique",
+          "file": "overlay/nexi-ingress-owner-generation.cjs",
+          "line": 284
+        },
+        {
+          "model": "NexiIngressOwnerGeneration",
+          "method": "findMany",
+          "file": "overlay/nexi-ingress-owner-generation.cjs",
+          "line": 292
+        },
+        {
+          "model": "NexiIngressOwnerGeneration",
+          "method": "findUnique",
+          "file": "overlay/nexi-ingress-owner-generation.cjs",
+          "line": 303
+        },
+        {
+          "model": "NexiIngressOwnerGeneration",
+          "method": "create",
+          "file": "overlay/nexi-ingress-owner-generation.cjs",
+          "line": 338
+        },
+        {
+          "model": "NexiIngressOwnerGeneration",
+          "method": "findUnique",
+          "file": "overlay/nexi-ingress-owner-generation.cjs",
+          "line": 353
+        },
+        {
+          "model": "NexiIngressOwnerGeneration",
+          "method": "findUnique",
+          "file": "overlay/nexi-ingress-owner-generation.cjs",
+          "line": 362
+        },
+        {
+          "model": "NexiIngressOwnerGeneration",
+          "method": "update",
+          "file": "overlay/nexi-ingress-owner-generation.cjs",
+          "line": 375
+        },
+        {
+          "model": "NexiIngressOwnerGeneration",
+          "method": "findMany",
+          "file": "overlay/nexi-ingress-owner-generation.cjs",
+          "line": 393
+        },
+        {
+          "model": "NexiIngressOwnerGeneration",
+          "method": "updateMany",
+          "file": "overlay/nexi-ingress-owner-generation.cjs",
+          "line": 418
+        },
+        {
+          "model": "NexiIngressOwnerGeneration",
+          "method": "findUnique",
+          "file": "overlay/nexi-ingress-owner-generation.cjs",
+          "line": 444
+        }
+      ]
+    },
+    {
+      "model": "NexiIngressOwnerSource",
+      "origin": "overlay:ingress-models.prisma",
+      "relations": [],
+      "defaults": [
+        "createdAt DateTime @default(now())"
+      ],
+      "operations": [
+        {
+          "model": "NexiIngressOwnerSource",
+          "method": "findUnique",
+          "file": "overlay/nexi-ingress-owner-generation.cjs",
+          "line": 215
+        },
+        {
+          "model": "NexiIngressOwnerSource",
+          "method": "findUnique",
+          "file": "overlay/nexi-ingress-owner-generation.cjs",
+          "line": 310
+        },
+        {
+          "model": "NexiIngressOwnerSource",
+          "method": "create",
+          "file": "overlay/nexi-ingress-owner-generation.cjs",
+          "line": 321
+        },
+        {
+          "model": "NexiIngressOwnerSource",
+          "method": "findMany",
+          "file": "overlay/nexi-ingress-owner-generation.cjs",
+          "line": 431
+        },
+        {
+          "model": "NexiIngressOwnerSource",
+          "method": "findFirst",
+          "file": "overlay/nexi-ingress-owner-generation.cjs",
+          "line": 454
+        },
+        {
+          "model": "NexiIngressOwnerSource",
+          "method": "findUnique",
+          "file": "overlay/nexi-ingress.cjs",
+          "line": 225
+        }
+      ]
+    },
+    {
+      "model": "NexiIngressOwnerDelivery",
+      "origin": "overlay:ingress-models.prisma",
+      "relations": [
+        "source NexiIngressOwnerSource @relation(fields: [sourceJournalId], references: [id], onDelete: Restrict)"
+      ],
+      "defaults": [],
+      "operations": [
+        {
+          "model": "NexiIngressOwnerDelivery",
+          "method": "findUnique",
+          "file": "overlay/nexi-ingress-owner-generation.cjs",
+          "line": 311
+        },
+        {
+          "model": "NexiIngressOwnerDelivery",
+          "method": "create",
+          "file": "overlay/nexi-ingress-owner-generation.cjs",
+          "line": 469
+        }
+      ]
+    }
+  ]
+}
