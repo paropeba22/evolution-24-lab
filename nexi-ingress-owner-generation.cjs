@@ -262,11 +262,11 @@ async function appendRoot(tx, scopeId, service, observation, priorSequence, veri
     propose: !!pending || !generation || !!blocked || !!unregisteredExpired,
     prior: pending, cutoff: pending?.cutoffSequence ?? priorSequence };
   if (!blocked) return {root,generation,laneId,stage:false,propose:false,cutoff:priorSequence};
-  const next={...root,revision:root.revision+1,sourceFloorSequence:priorSequence};
+  const next=attested('NexiIngressOwnerRoot',{...root,revision:root.revision+1,sourceFloorSequence:priorSequence});
   const updated = await tx.nexiIngressOwnerRoot.updateMany({ where: { id, revision: root.revision }, data: {
-    revision:next.revision,sourceFloorSequence:next.sourceFloorSequence,receipt:attested('NexiIngressOwnerRoot',next).receipt } });
+    revision:next.revision,sourceFloorSequence:next.sourceFloorSequence,receipt:next.receipt } });
   if (updated.count !== 1) fail('nexi_ingress_cas_retry');
-  return { root: { ...root, revision: root.revision + 1, sourceFloorSequence: blocked ? priorSequence : null },
+  return { root:next,
     generation, laneId, stage: !!blocked, propose: !!blocked, cutoff: priorSequence };
 }
 function verifyClaims(row, claims) {
