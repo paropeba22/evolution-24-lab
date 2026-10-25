@@ -1,6 +1,6 @@
 'use strict';
 
-const { createHash, createPublicKey, randomUUID, verify: verifySignature } = require('node:crypto');
+const { createHash, createHmac, timingSafeEqual, createPublicKey, randomUUID, verify: verifySignature } = require('node:crypto');
 const fs=require('node:fs'),path=require('node:path');
 const canonical = require('./nexi-canonical-json.cjs');
 const enabled = () => process.env.NEXI_WHATSAPP_OWNER_GENERATION_ENABLED === 'true';
@@ -18,7 +18,37 @@ const APPROVAL_KEYS = ['version', 'purpose', 'key_id', 'authorization_id', 'owne
 const REGISTRATION_KEYS = ['version', 'purpose', 'key_id', 'authorization_id', 'owner_generation_id',
   'cutover_digest', 'scope_id', 'new_lane_id', 'registered_at'];
 
+// A separate provider-only key attests the full persisted state after the
+// provider has verified HMAC/Ed25519. It is never a SQL parameter or an oracle.
+function receiptKey() {
+  const key=process.env.NEXI_INGRESS_OWNER_STORAGE_KEY;
+  if (!/^[0-9a-f]{64}$/.test(key||'')) fail('nexi_ingress_owner_storage_key_invalid');
+  return Buffer.from(key,'hex');
+}
+function stateDocument(table,row) {
+  const state={};
+  for (const [key,value] of Object.entries(row)) {
+    if (['receipt','createdAt','delivery','source'].includes(key)) continue;
+    state[key]=typeof value==='bigint'?value.toString():value instanceof Date?value.toISOString():value;
+  }
+  return {version:1,table,state};
+}
+function attested(table,row) {
+  const body=canonical.bytes(stateDocument(table,row));
+  return {...row,receipt:canonical.bytes({body,signature:createHmac('sha256',receiptKey()).update(body).digest('hex')})};
+}
+function verifyReceipt(table,row) {
+  try {
+    const packet=canonical.parse(row.receipt), expected=createHmac('sha256',receiptKey()).update(packet.body).digest();
+    if (Object.keys(packet).sort().join()!=='body,signature' || !hex(packet.signature) ||
+      !timingSafeEqual(expected,Buffer.from(packet.signature,'hex')) ||
+      packet.body!==canonical.bytes(stateDocument(table,row))) fail('nexi_ingress_owner_state_unattested');
+  } catch { fail('nexi_ingress_owner_state_unattested'); }
+  return row;
+}
+
 async function storageGuard(repo) {
+  receiptKey();
   // PostgreSQL 15+ only. No fallback when catalog/parameter ACL proof is absent.
   // The application role must not be able to disable these evidence guards.
   const rows=await repo.$queryRawUnsafe(`SELECT current_setting('server_version_num')::integer>=150000
@@ -49,22 +79,45 @@ async function storageGuard(repo) {
 async function schemaGuard(repo) {
   const migration=fs.readFileSync(path.join(__dirname,'prisma/postgresql-migrations/20261025000000_nexi_ingress_owner_generations/migration.sql'),'utf8')
     .replaceAll('\r\n','\n');
-  const expected=new Map([...migration.matchAll(/CREATE FUNCTION (nexi_ingress_owner_[a-z_]+)\(\) RETURNS trigger\nLANGUAGE plpgsql SET search_path=pg_catalog,public,pg_temp AS \$\$([\s\S]*?)\$\$;/g)]
+  const expected=new Map([...migration.matchAll(/CREATE FUNCTION (nexi_ingress_owner_[a-z_]+)\(\) RETURNS trigger\nLANGUAGE plpgsql(?: SECURITY DEFINER)? SET search_path=pg_catalog,public,pg_temp AS \$\$([\s\S]*?)\$\$;/g)]
     .map(match=>[match[1],createHash('sha256').update(match[2]).digest('hex')]));
-  if (expected.size!==4) fail('nexi_ingress_owner_schema_unguarded');
-  const functions=await repo.$queryRawUnsafe(`SELECT p.proname,p.prosrc,p.prosecdef,p.proconfig,l.lanname
+  if (expected.size!==5) fail('nexi_ingress_owner_schema_unguarded');
+  const functions=await repo.$queryRawUnsafe(`SELECT p.proname,p.prosrc,p.prosecdef,p.proconfig,l.lanname,r.rolname AS owner,
+    has_function_privilege(current_user,p.oid,'EXECUTE') AS executable
     FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace JOIN pg_language l ON l.oid=p.prolang
+    JOIN pg_roles r ON r.oid=p.proowner
     WHERE n.nspname='public' AND p.pronargs=0 AND p.proname IN ('nexi_ingress_owner_root_guard',
-      'nexi_ingress_owner_generation_guard','nexi_ingress_owner_source_guard','nexi_ingress_owner_prefix_guard')`);
-  if (functions.length!==4 || functions.some(p=>p.prosecdef || p.lanname!=='plpgsql' ||
+      'nexi_ingress_owner_generation_guard','nexi_ingress_owner_source_guard','nexi_ingress_owner_prefix_guard','nexi_ingress_owner_receipt_guard')`);
+  if (functions.length!==5 || functions.some(p=>p.prosecdef!==(p.proname==='nexi_ingress_owner_receipt_guard') ||
+      p.owner!=='nexi_evolution_guard_owner' || (p.prosecdef && p.executable) || p.lanname!=='plpgsql' ||
       JSON.stringify(p.proconfig)!==JSON.stringify(['search_path=pg_catalog, public, pg_temp']) ||
       expected.get(p.proname)!==createHash('sha256').update(p.prosrc.replaceAll('\r\n','\n')).digest('hex')))
     fail('nexi_ingress_owner_schema_unguarded');
+  const vault=await repo.$queryRawUnsafe(`SELECT n.nspowner=r.oid AND c.relowner=r.oid AND e.extowner=r.oid
+      AND NOT r.rolcanlogin AND NOT r.rolsuper AND NOT r.rolcreaterole AND NOT r.rolcreatedb
+      AND NOT r.rolreplication AND NOT r.rolbypassrls AND NOT pg_has_role(current_user,r.oid,'MEMBER')
+      AND NOT has_schema_privilege(current_user,n.oid,'USAGE') AND NOT has_schema_privilege(current_user,n.oid,'CREATE')
+      AND NOT has_table_privilege(current_user,c.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+      AND NOT EXISTS(SELECT 1 FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attnum>0
+        AND has_column_privilege(current_user,c.oid,a.attnum,'SELECT,INSERT,UPDATE,REFERENCES'))
+      AND NOT EXISTS(SELECT 1 FROM pg_proc p WHERE p.pronamespace=n.oid AND
+        NOT EXISTS(SELECT 1 FROM pg_depend d
+          WHERE d.classid='pg_proc'::regclass AND d.objid=p.oid AND d.refclassid='pg_extension'::regclass
+            AND d.refobjid=e.oid AND d.deptype='e')) AS safe
+    FROM pg_namespace n JOIN pg_roles r ON r.rolname='nexi_evolution_guard_owner'
+    JOIN pg_class c ON c.relnamespace=n.oid AND c.relname='receipt_key'
+    JOIN pg_extension e ON e.extnamespace=n.oid AND e.extname='pgcrypto'
+    WHERE n.nspname='nexi_ingress_owner_private'`);
+  if (vault.length!==1 || vault[0].safe!==true) fail('nexi_ingress_owner_storage_unguarded');
   const triggerRows=await repo.$queryRawUnsafe(`SELECT t.tgname,c.relname,p.proname,t.tgtype,t.tgenabled,t.tgnargs,
     t.tgdeferrable,t.tgqual IS NULL AS unqualified FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid
     JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_proc p ON p.oid=t.tgfoid
     WHERE n.nspname='public' AND NOT t.tgisinternal AND t.tgname LIKE 'nexi_ingress_owner_%'`);
   const triggers=[
+    ['a_receipt_root','NexiIngressOwnerRoot','receipt_guard',23],
+    ['a_receipt_generation','NexiIngressOwnerGeneration','receipt_guard',23],
+    ['a_receipt_source','NexiIngressOwnerSource','receipt_guard',23],
+    ['a_receipt_delivery','NexiIngressOwnerDelivery','receipt_guard',23],
     ['root_guard','NexiIngressOwnerRoot','root_guard',31],['root_no_truncate','NexiIngressOwnerRoot','root_guard',34],
     ['generation_guard','NexiIngressOwnerGeneration','generation_guard',31],['generation_no_truncate','NexiIngressOwnerGeneration','generation_guard',34],
     ['source_guard','NexiIngressOwnerSource','source_guard',31],['source_no_truncate','NexiIngressOwnerSource','source_guard',34],
@@ -141,6 +194,7 @@ function registration(generation, packet) {
 function rootId(scopeId, sessionIdentity, pnJid) { return canonical.digest([scopeId, sessionIdentity, pnJid]); }
 function newLane(rootLane, generation) { return canonical.digest(['ingress-owner-generation:v1', rootLane, generation]); }
 function validateProposal(g) {
+  verifyReceipt('NexiIngressOwnerGeneration',g);
   const c = g.cutover, w = g.witness, proof = w?.ingress?.claims;
   if (!c || Object.keys(c).sort().join() !== ['version','id','old_lane','scope_id','C','R','source_floor','witness_journal_id',
       'witness_proof_digest','snapshot_digest','generation_id','new_lane'].sort().join() ||
@@ -156,6 +210,21 @@ function validateProposal(g) {
       rootId(g.scopeId, g.sessionIdentity, w.pn_jid) !== g.rootLaneId) fail('nexi_ingress_owner_proposal_invalid');
   return c;
 }
+async function validateWitness(repo,g,verifyRow) {
+  validateProposal(g);
+  const source=await repo.nexiIngressOwnerSource.findUnique({where:{id:g.cutover.witness_journal_id}});
+  const root=await repo.nexiIngressOwnerRoot.findUnique({where:{id:g.rootLaneId}});
+  if (!source || !root) fail('nexi_ingress_owner_witness_missing');
+  verifyReceipt('NexiIngressOwnerSource',source); verifyReceipt('NexiIngressOwnerRoot',root);
+  const claims=verifyRow({...source,laneId:g.rootLaneId});
+  const witness={...claims.observation,account_id:claims.account_id,inbox_id:claims.inbox_id,ingress:source.envelope};
+  if (source.rootLaneId!==g.rootLaneId || source.scopeId!==g.scopeId || source.instanceId!==g.instanceId ||
+    source.sessionIdentity!==g.sessionIdentity || source.sequence<=root.sourceFloorSequence ||
+    root.sourceFloorSequence!==BigInt(g.cutover.source_floor) || claims.version!==1 ||
+    claims.journal_id!==source.id || canonical.digest(witness)!==canonical.digest(g.witness) ||
+    canonical.digest(source.envelope)!==g.cutover.witness_proof_digest)
+    fail('nexi_ingress_owner_witness_mismatch');
+}
 async function appendRoot(tx, scopeId, service, observation, priorSequence, verifyRow) {
   if (!enabled()) return null;
   await storageGuard(tx);
@@ -164,8 +233,9 @@ async function appendRoot(tx, scopeId, service, observation, priorSequence, veri
   // Caller already holds the scope CAS lock. Avoid a no-op UPSERT UPDATE,
   // which would violate this append-only owner's monotonic revision guard.
   const root = await tx.nexiIngressOwnerRoot.findUnique({ where: { id } }) ||
-    await tx.nexiIngressOwnerRoot.create({ data: { id, scopeId, instanceId: service.instanceId,
-      sessionIdentity: observation.session_identity, pnJid: observation.pn_jid } });
+    await tx.nexiIngressOwnerRoot.create({ data: attested('NexiIngressOwnerRoot',{ id, scopeId, instanceId: service.instanceId,
+      sessionIdentity: observation.session_identity, pnJid: observation.pn_jid,revision:0,activeGenerationId:null,sourceFloorSequence:null }) });
+  verifyReceipt('NexiIngressOwnerRoot',root);
   let generation, laneId = id;
   if (root.activeGenerationId) {
     generation = await tx.nexiIngressOwnerGeneration.findUnique({ where: { id: root.activeGenerationId } });
@@ -177,7 +247,12 @@ async function appendRoot(tx, scopeId, service, observation, priorSequence, veri
     laneId = generation.newLaneId;
   }
   const head = await tx.nexiIngressJournal.findFirst({ where: { laneId, state: { not: 'succeeded' } }, orderBy: { sequence: 'asc' } });
-  const blocked = head && head.checkpoint === 'identity_pending' && head.state === 'recoverable_failure';
+  const lane=await tx.nexiIngressLane.findUnique({where:{id:laneId}});
+  // identity_pending is also written before the HTTP identity request. Never
+  // create a cutover boundary while its operation still owns a lease, even if
+  // its timestamp expired: a non-null token may name an uncertain late request.
+  const busy=lane?.leaseToken || (lane?.leaseUntil && lane.leaseUntil>new Date());
+  const blocked = !busy && head && head.checkpoint === 'identity_pending' && head.state === 'recoverable_failure';
   if (blocked) verifyRow(head);
   const unregisteredExpired=generation && !generation.registration &&
     Date.parse(generation.approval.claims.expires_at)<=Date.now();
@@ -186,8 +261,10 @@ async function appendRoot(tx, scopeId, service, observation, priorSequence, veri
   if (root.sourceFloorSequence != null) return { root, generation, laneId, stage: true,
     propose: !!pending || !generation || !!blocked || !!unregisteredExpired,
     prior: pending, cutoff: pending?.cutoffSequence ?? priorSequence };
+  if (!blocked) return {root,generation,laneId,stage:false,propose:false,cutoff:priorSequence};
+  const next={...root,revision:root.revision+1,sourceFloorSequence:priorSequence};
   const updated = await tx.nexiIngressOwnerRoot.updateMany({ where: { id, revision: root.revision }, data: {
-    revision: { increment: 1 }, ...(blocked ? { sourceFloorSequence: priorSequence } : {}) } });
+    revision:next.revision,sourceFloorSequence:next.sourceFloorSequence,receipt:attested('NexiIngressOwnerRoot',next).receipt } });
   if (updated.count !== 1) fail('nexi_ingress_cas_retry');
   return { root: { ...root, revision: root.revision + 1, sourceFloorSequence: blocked ? priorSequence : null },
     generation, laneId, stage: !!blocked, propose: !!blocked, cutoff: priorSequence };
@@ -204,7 +281,20 @@ function verifyClaims(row, claims) {
 }
 async function frozen(repo, laneId) {
   if (!enabled()) return false;
-  return !!await repo.nexiIngressOwnerGeneration.findUnique({ where: { frozenLaneId: laneId } });
+  const g=await repo.nexiIngressOwnerGeneration.findUnique({ where: { frozenLaneId: laneId } });
+  if (!g) return false;
+  verifyReceipt('NexiIngressOwnerGeneration',g); validateProposal(g); approval(g,g.approval);
+  if (g.registration) registration(g,g.registration);
+  return true;
+}
+async function frozenLanes(repo,instanceId) {
+  await storageGuard(repo);
+  const rows=await repo.nexiIngressOwnerGeneration.findMany({where:{instanceId,frozenLaneId:{not:null}}});
+  for (const g of rows) {
+    verifyReceipt('NexiIngressOwnerGeneration',g); validateProposal(g); approval(g,g.approval);
+    if (g.registration) registration(g,g.registration);
+  }
+  return rows.map(g=>g.frozenLaneId);
 }
 async function assertWritable(repo, row, claims) {
   if (!enabled()) { if (claims?.version === 2) fail('nexi_ingress_owner_generation_disabled'); return; }
@@ -215,16 +305,20 @@ async function assertWritable(repo, row, claims) {
       g.newLaneId !== row.laneId || row.sequence <= g.cutoffSequence) fail('nexi_ingress_owner_generation_unregistered');
   validateProposal(g); registration(g, g.registration);
   const root = await repo.nexiIngressOwnerRoot.findUnique({ where: { id: g.rootLaneId } });
+  if (root) verifyReceipt('NexiIngressOwnerRoot',root);
   if (root?.activeGenerationId !== g.id) fail('nexi_ingress_owner_generation_fenced');
   const source = await repo.nexiIngressOwnerSource.findUnique({ where: { id: claims.source_journal_id } });
   const delivery = await repo.nexiIngressOwnerDelivery.findUnique({ where: { sourceJournalId: row.id } });
+  if (source) verifyReceipt('NexiIngressOwnerSource',source);
+  if (delivery) verifyReceipt('NexiIngressOwnerDelivery',delivery);
   if (!source || !delivery || delivery.deliveryJournalId!==row.id || delivery.generationId!==g.id ||
       delivery.sourceSequence!==source.sequence || delivery.deliverySequence!==row.sequence ||
       source.sequence<=BigInt(g.cutover.source_floor) || canonical.digest(source.envelope)!==claims.source_proof_digest ||
       canonical.digest(source.envelope)!==canonical.digest(claims.source_proof)) fail('nexi_ingress_owner_source_invalid');
 }
 async function stage(tx, state, row, observation, verifyRow) {
-  const source = await tx.nexiIngressOwnerSource.create({ data: { ...row, rootLaneId: state.root.id } });
+  verifyRow({...row,laneId:state.root.id});
+  const source = await tx.nexiIngressOwnerSource.create({ data: attested('NexiIngressOwnerSource',{ ...row, rootLaneId: state.root.id }) });
   if (!state.propose) return source;
   // Keep a live proposal stable while more sources arrive. A later fresh
   // immutable source replaces an expired proposal, never its prior evidence.
@@ -241,10 +335,11 @@ async function stage(tx, state, row, observation, verifyRow) {
     C: state.cutoff.toString(), R: state.root.revision, source_floor: state.root.sourceFloorSequence.toString(), witness_journal_id: row.id,
     witness_proof_digest: canonical.digest(row.envelope), snapshot_digest: canonical.digest(snapshot),
     generation_id: id, new_lane: newLane(state.root.id, id) };
-  await tx.nexiIngressOwnerGeneration.create({ data: { id, candidateId: c.id, rootLaneId: state.root.id, oldLaneId: state.laneId,
+  await tx.nexiIngressOwnerGeneration.create({ data: attested('NexiIngressOwnerGeneration',{ id, candidateId: c.id, rootLaneId: state.root.id, oldLaneId: state.laneId,
     newLaneId: c.new_lane, scopeId: row.scopeId, instanceId: row.instanceId, sessionIdentity: row.sessionIdentity,
     rootRevision: c.R, cutoffSequence: state.cutoff, cutover: c, cutoverDigest: canonical.digest(c), snapshot,
-    witness: { ...observation, account_id: row.envelope.claims.account_id, inbox_id: row.envelope.claims.inbox_id, ingress: row.envelope } } });
+    witness: { ...observation, account_id: row.envelope.claims.account_id, inbox_id: row.envelope.claims.inbox_id, ingress: row.envelope },
+    approval:null,installedAt:null,frozenLaneId:null,registration:null,registeredAt:null }) });
   return source;
 }
 
@@ -256,6 +351,7 @@ async function install(service, g, packet, verifyRow) {
   return repo.$transaction(async tx => {
     await tx.nexiIngressScope.update({ where: { id: g.scopeId }, data: { revision: { increment: 1 } } });
     const existing = await tx.nexiIngressOwnerGeneration.findUnique({ where: { id: g.id } });
+    await validateWitness(tx,g,verifyRow);
     if (existing?.installedAt) {
       if (canonical.digest(existing.approval) !== canonical.digest(packet)) fail('nexi_ingress_owner_authorization_conflict');
       return existing;
@@ -275,12 +371,14 @@ async function install(service, g, packet, verifyRow) {
     if (canonical.digest(snapshot) !== g.cutover.snapshot_digest ||
         await tx.nexiIngressJournal.count({ where: { laneId: g.oldLaneId, sequence: { gt: g.cutoffSequence } } }))
       fail('nexi_ingress_owner_prefix_changed');
-    const installed = await tx.nexiIngressOwnerGeneration.update({ where: { id: g.id }, data: { approval: packet,
-      frozenLaneId: g.oldLaneId, installedAt: new Date() } });
+    const change={approval:packet,frozenLaneId:g.oldLaneId,installedAt:new Date()};
+    const installed = await tx.nexiIngressOwnerGeneration.update({ where: { id: g.id }, data: {...change,
+      receipt:attested('NexiIngressOwnerGeneration',{...g,...change}).receipt} });
     await tx.nexiIngressLane.create({data:{id:g.newLaneId,scopeId:g.scopeId,instanceId:g.instanceId,
       sessionIdentity:g.sessionIdentity,pending:0}});
     const changed = await tx.nexiIngressOwnerRoot.updateMany({ where: { id: root.id, revision: g.rootRevision },
-      data: { revision: { increment: 1 }, activeGenerationId: g.id } });
+      data: { revision:root.revision+1,activeGenerationId:g.id,
+        receipt:attested('NexiIngressOwnerRoot',{...root,revision:root.revision+1,activeGenerationId:g.id}).receipt } });
     if (changed.count !== 1) fail('nexi_ingress_cas_retry');
     return installed;
   });
@@ -303,7 +401,7 @@ async function tick(service, api) {
       const root = await repo.nexiIngressOwnerRoot.findUnique({ where: { id: g.rootLaneId } });
       if (g.installedAt && root?.activeGenerationId!==g.id) continue;
       if (!g.installedAt && root?.revision !== g.rootRevision) continue;
-      validateProposal(g);
+      await validateWitness(repo,g,api.verify);
       if (!g.installedAt) {
         if (Date.parse(g.witness.ingress.claims.accepted_at) <= Date.now() - 600000) continue;
         const response = await api.event('ingress.owner_candidate', { version: 1, observation: g.witness, cutover: g.cutover }, g.candidateId);
@@ -316,8 +414,9 @@ async function tick(service, api) {
         authorization: g.approval }, canonical.digest([g.candidateId, 'installed']));
       if (!response?.registration) continue;
       registration(g, response.registration);
+      const change={registration:response.registration,registeredAt:new Date()};
       await repo.nexiIngressOwnerGeneration.updateMany({ where: { id: g.id, registeredAt: null },
-        data: { registration: response.registration, registeredAt: new Date() } });
+        data: {...change,receipt:attested('NexiIngressOwnerGeneration',{...g,...change}).receipt} });
       } catch {
         service.logger?.warn({event:'ingress.owner_generation_pending',generation_id:g.id,reason:'proof_authority_or_scope_pending'});
       }
@@ -341,6 +440,7 @@ async function flush(service, api) {
     try {
     const root=await repo.nexiIngressOwnerRoot.findUnique({where:{id:rootId}});
     if (!root?.activeGenerationId) continue;
+    verifyReceipt('NexiIngressOwnerRoot',root);
     const generation=await repo.nexiIngressOwnerGeneration.findUnique({where:{id:root.activeGenerationId}});
     if (!generation?.registeredAt || !generation.registration) continue;
     validateProposal(generation); registration(generation,generation.registration);
@@ -349,6 +449,7 @@ async function flush(service, api) {
       const delivered=await repo.$transaction(async tx=>{
         await tx.nexiIngressScope.update({where:{id:generation.scopeId},data:{revision:{increment:1}}});
         const current=await tx.nexiIngressOwnerRoot.findUnique({where:{id:rootId}});
+        if (current) verifyReceipt('NexiIngressOwnerRoot',current);
         if (current?.activeGenerationId!==generation.id || await frozen(tx,generation.newLaneId)) return false;
         const source=await tx.nexiIngressOwnerSource.findFirst({where:{rootLaneId:rootId,delivery:{is:null}},orderBy:{sequence:'asc'}});
         if (!source) return false;
@@ -364,9 +465,10 @@ async function flush(service, api) {
           source_sequence:source.sequence.toString(),delivery_sequence:scope.nextSequence.toString()};
         if (scope.nextSequence<=generation.cutoffSequence || scope.nextSequence<=source.sequence)
           fail('nexi_ingress_owner_sequence_invalid');
-        await tx.nexiIngressOwnerDelivery.create({data:{sourceJournalId:source.id,deliveryJournalId:source.id,
+        verifyReceipt('NexiIngressOwnerSource',source);
+        await tx.nexiIngressOwnerDelivery.create({data:attested('NexiIngressOwnerDelivery',{sourceJournalId:source.id,deliveryJournalId:source.id,
           generationId:generation.id,sourceSequence:source.sequence,deliverySequence:scope.nextSequence,
-          sourceProofDigest:claims.source_proof_digest}});
+          sourceProofDigest:claims.source_proof_digest})});
         await tx.nexiIngressLane.upsert({where:{id:generation.newLaneId},create:{id:generation.newLaneId,
           scopeId:source.scopeId,instanceId:source.instanceId,sessionIdentity:source.sessionIdentity,pending:1},
           update:{pending:{increment:1}}});
@@ -383,4 +485,4 @@ async function flush(service, api) {
     }
   }
 }
-module.exports = { enabled, appendRoot, verifyClaims, stage, frozen, assertWritable, tick };
+module.exports = { enabled, appendRoot, verifyClaims, stage, frozen, frozenLanes, assertWritable, tick };

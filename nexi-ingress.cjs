@@ -641,10 +641,9 @@ async function pump() {
         },
       }).catch(() => log(service, 'ingress.owner_generation_pending', null, 'authorization_or_registration_pending'));
       const now = new Date();
-      const frozenLanes = ownerGeneration.enabled() ? await service.prismaRepository.nexiIngressOwnerGeneration.findMany({
-        where: { instanceId: service.instanceId, frozenLaneId: { not: null } }, select: { frozenLaneId: true } }) : [];
+      const frozenLanes = ownerGeneration.enabled() ? await ownerGeneration.frozenLanes(service.prismaRepository,service.instanceId) : [];
       const lanes = await service.prismaRepository.nexiIngressLane.findMany({ where: { instanceId: service.instanceId,
-        ...(frozenLanes.length ? { id: { notIn: frozenLanes.map(item => item.frozenLaneId) } } : {}),
+        ...(frozenLanes.length ? { id: { notIn: frozenLanes } } : {}),
         pending: { gt: 0 }, nextAttemptAt: { lte: now }, OR: [{ leaseUntil: null }, { leaseUntil: { lte: now } }] },
         orderBy: [{ servedAt: 'asc' }, { id: 'asc' }], take: PER_INSTANCE });
       for (const lane of lanes) {

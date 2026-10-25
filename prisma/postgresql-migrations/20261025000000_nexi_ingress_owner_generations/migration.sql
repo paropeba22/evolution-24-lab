@@ -1,6 +1,34 @@
 -- PREPARED ONLY. PostgreSQL-only receive-generation metadata. No journal,
 -- lane, cursor, original timestamp or pending counter is rewritten/backfilled.
+-- Apply through an explicitly authorized migration session SET ROLE to this
+-- pre-provisioned NOLOGIN owner. Runtime must not be a member of this owner.
+DO $$ BEGIN
+  IF current_user<>'nexi_evolution_guard_owner' OR NOT EXISTS (SELECT 1 FROM pg_roles
+    WHERE rolname=current_user AND NOT rolcanlogin AND NOT rolsuper AND NOT rolcreaterole
+      AND NOT rolcreatedb AND NOT rolreplication AND NOT rolbypassrls)
+  THEN RAISE EXCEPTION 'nexi_ingress_owner_migration_owner_required'; END IF;
+END $$;
+CREATE SCHEMA nexi_ingress_owner_private AUTHORIZATION nexi_evolution_guard_owner;
+REVOKE ALL ON SCHEMA nexi_ingress_owner_private FROM PUBLIC;
+CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA nexi_ingress_owner_private;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_extension e JOIN pg_namespace n ON n.oid=e.extnamespace
+    WHERE e.extname='pgcrypto' AND n.nspname='nexi_ingress_owner_private')
+  THEN RAISE EXCEPTION 'nexi_ingress_owner_pgcrypto_schema_required'; END IF;
+END $$;
+CREATE TABLE nexi_ingress_owner_private.receipt_key (
+  purpose text PRIMARY KEY CHECK (purpose='owner-state-v1'),
+  secret bytea NOT NULL CHECK (octet_length(secret)=32)
+);
+REVOKE ALL ON ALL TABLES IN SCHEMA nexi_ingress_owner_private FROM PUBLIC;
+-- Trusted-extension C functions can belong to PostgreSQL's bootstrap owner.
+-- Schema USAGE is revoked, so runtime cannot resolve/call these functions;
+-- do not pretend this NOLOGIN owner can revoke bootstrap-owned function ACLs.
+-- No key is generated or provisioned by this migration. Supply the same new
+-- independent 32-byte secret here and to the provider secret manager, only via
+-- an authorized administrative channel. Never grant runtime key/table access.
 CREATE TABLE "NexiIngressOwnerRoot" (
+  "receipt" TEXT NOT NULL,
   "id" VARCHAR(64) PRIMARY KEY,
   "scopeId" VARCHAR(64) NOT NULL REFERENCES "NexiIngressScope"("id"),
   "instanceId" VARCHAR(100) NOT NULL,
@@ -11,6 +39,7 @@ CREATE TABLE "NexiIngressOwnerRoot" (
   "sourceFloorSequence" BIGINT CHECK ("sourceFloorSequence">=0)
 );
 CREATE TABLE "NexiIngressOwnerGeneration" (
+  "receipt" TEXT NOT NULL,
   "id" VARCHAR(36) PRIMARY KEY,
   "candidateId" VARCHAR(36) NOT NULL UNIQUE,
   "rootLaneId" VARCHAR(64) NOT NULL REFERENCES "NexiIngressOwnerRoot"("id"),
@@ -43,6 +72,7 @@ CREATE INDEX "NexiIngressOwnerGeneration_instanceId_createdAt_idx" ON "NexiIngre
 CREATE INDEX "NexiIngressOwnerGeneration_rootLaneId_rootRevision_idx" ON "NexiIngressOwnerGeneration" ("rootLaneId","rootRevision");
 
 CREATE TABLE "NexiIngressOwnerSource" (
+  "receipt" TEXT NOT NULL,
   "id" VARCHAR(36) PRIMARY KEY,
   "dedupKey" VARCHAR(64) NOT NULL UNIQUE,
   "rootLaneId" VARCHAR(64) NOT NULL REFERENCES "NexiIngressOwnerRoot"("id"),
@@ -57,6 +87,7 @@ CREATE TABLE "NexiIngressOwnerSource" (
 );
 CREATE INDEX "NexiIngressOwnerSource_instanceId_sequence_idx" ON "NexiIngressOwnerSource" ("instanceId","sequence");
 CREATE TABLE "NexiIngressOwnerDelivery" (
+  "receipt" TEXT NOT NULL,
   "sourceJournalId" VARCHAR(36) PRIMARY KEY REFERENCES "NexiIngressOwnerSource"("id"),
   "deliveryJournalId" VARCHAR(36) NOT NULL UNIQUE,
   "generationId" VARCHAR(36) NOT NULL REFERENCES "NexiIngressOwnerGeneration"("id"),
@@ -66,6 +97,45 @@ CREATE TABLE "NexiIngressOwnerDelivery" (
   FOREIGN KEY ("deliveryJournalId") REFERENCES "NexiIngressJournal"("id") DEFERRABLE INITIALLY DEFERRED,
   CHECK ("sourceJournalId"="deliveryJournalId")
 );
+
+CREATE FUNCTION nexi_ingress_owner_receipt_guard() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public,pg_temp AS $$
+DECLARE packet jsonb; doc jsonb; projected jsonb; secret_value bytea; field text;
+BEGIN
+  IF TG_OP NOT IN ('INSERT','UPDATE') THEN RAISE EXCEPTION 'nexi_ingress_owner_state_permanent'; END IF;
+  packet:=NEW."receipt"::jsonb;
+  IF jsonb_typeof(packet)<>'object' OR (SELECT count(*) FROM jsonb_object_keys(packet))<>2
+    OR jsonb_typeof(packet->'body')<>'string' OR packet->>'signature' !~ '^[0-9a-f]{64}$'
+    OR NOT packet ?& ARRAY['body','signature']
+  THEN RAISE EXCEPTION 'nexi_ingress_owner_state_unattested'; END IF;
+  SELECT k.secret INTO STRICT secret_value FROM nexi_ingress_owner_private.receipt_key k WHERE k.purpose='owner-state-v1';
+  IF packet->>'signature' IS DISTINCT FROM encode(nexi_ingress_owner_private.hmac(
+    convert_to(packet->>'body','UTF8'),secret_value,'sha256'),'hex')
+  THEN RAISE EXCEPTION 'nexi_ingress_owner_state_unattested'; END IF;
+  doc:=(packet->>'body')::jsonb;
+  projected:=to_jsonb(NEW)-ARRAY['receipt','createdAt'];
+  FOREACH field IN ARRAY ARRAY['sourceFloorSequence','cutoffSequence','sequence','sourceSequence','deliverySequence'] LOOP
+    IF projected ? field AND projected->field<>'null'::jsonb THEN
+      projected:=jsonb_set(projected,ARRAY[field],to_jsonb(projected->>field));
+    END IF;
+  END LOOP;
+  IF TG_TABLE_NAME='NexiIngressOwnerGeneration' THEN
+    projected:=jsonb_set(projected,'{installedAt}',COALESCE(to_jsonb(to_char(NEW."installedAt",'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')),'null'::jsonb));
+    projected:=jsonb_set(projected,'{registeredAt}',COALESCE(to_jsonb(to_char(NEW."registeredAt",'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')),'null'::jsonb));
+  END IF;
+  IF doc IS DISTINCT FROM jsonb_build_object('version',1,'table',TG_TABLE_NAME,'state',projected)
+  THEN RAISE EXCEPTION 'nexi_ingress_owner_state_unattested'; END IF;
+  RETURN NEW;
+END $$;
+REVOKE ALL ON FUNCTION nexi_ingress_owner_receipt_guard() FROM PUBLIC;
+CREATE TRIGGER nexi_ingress_owner_a_receipt_root BEFORE INSERT OR UPDATE ON "NexiIngressOwnerRoot"
+  FOR EACH ROW EXECUTE FUNCTION nexi_ingress_owner_receipt_guard();
+CREATE TRIGGER nexi_ingress_owner_a_receipt_generation BEFORE INSERT OR UPDATE ON "NexiIngressOwnerGeneration"
+  FOR EACH ROW EXECUTE FUNCTION nexi_ingress_owner_receipt_guard();
+CREATE TRIGGER nexi_ingress_owner_a_receipt_source BEFORE INSERT OR UPDATE ON "NexiIngressOwnerSource"
+  FOR EACH ROW EXECUTE FUNCTION nexi_ingress_owner_receipt_guard();
+CREATE TRIGGER nexi_ingress_owner_a_receipt_delivery BEFORE INSERT OR UPDATE ON "NexiIngressOwnerDelivery"
+  FOR EACH ROW EXECUTE FUNCTION nexi_ingress_owner_receipt_guard();
 
 CREATE FUNCTION nexi_ingress_owner_root_guard() RETURNS trigger
 LANGUAGE plpgsql SET search_path=pg_catalog,public,pg_temp AS $$
@@ -98,16 +168,36 @@ CREATE TRIGGER nexi_ingress_owner_root_no_truncate BEFORE TRUNCATE ON "NexiIngre
 
 CREATE FUNCTION nexi_ingress_owner_generation_guard() RETURNS trigger
 LANGUAGE plpgsql SET search_path=pg_catalog,public,pg_temp AS $$
+DECLARE source "NexiIngressOwnerSource"%ROWTYPE; root "NexiIngressOwnerRoot"%ROWTYPE;
 BEGIN
   IF TG_OP IN ('DELETE','TRUNCATE') THEN RAISE EXCEPTION 'nexi_ingress_owner_generation_permanent'; END IF;
   IF TG_OP='INSERT' THEN
+    PERFORM 1 FROM "NexiIngressScope" WHERE "id"=NEW."scopeId" FOR UPDATE;
+    SELECT * INTO STRICT root FROM "NexiIngressOwnerRoot" WHERE "id"=NEW."rootLaneId";
+    SELECT * INTO STRICT source FROM "NexiIngressOwnerSource" WHERE "id"=NEW."cutover"->>'witness_journal_id';
+    IF root."sourceFloorSequence" IS NULL OR source."sequence"<=root."sourceFloorSequence"
+      OR ROW(source."rootLaneId",source."scopeId",source."instanceId",source."sessionIdentity") IS DISTINCT FROM
+        ROW(NEW."rootLaneId",NEW."scopeId",NEW."instanceId",NEW."sessionIdentity")
+      OR ROW(root."scopeId",root."instanceId",root."sessionIdentity",root."revision") IS DISTINCT FROM
+        ROW(NEW."scopeId",NEW."instanceId",NEW."sessionIdentity",NEW."rootRevision")
+      OR source."envelope"->'claims'->>'journal_id' IS DISTINCT FROM source."id"
+      OR source."envelope"->'claims'->>'version' IS DISTINCT FROM '1'
+      OR source."envelope"->'claims'->>'instance_id' IS DISTINCT FROM source."instanceId"
+      OR source."envelope"->'claims'->'observation'->>'session_identity' IS DISTINCT FROM source."sessionIdentity"
+      OR source."envelope"->'claims'->'observation'->>'pn_jid' IS DISTINCT FROM root."pnJid"
+      OR source."envelope"->'claims'->>'payload_digest' IS DISTINCT FROM encode(sha256(decode(source."payload",'base64')),'hex')
+      OR NEW."cutover"->>'source_floor' IS DISTINCT FROM root."sourceFloorSequence"::text
+      OR NEW."witness" IS DISTINCT FROM (source."envelope"->'claims'->'observation' || jsonb_build_object(
+        'account_id',source."envelope"->'claims'->'account_id','inbox_id',source."envelope"->'claims'->'inbox_id',
+        'ingress',source."envelope"))
+    THEN RAISE EXCEPTION 'nexi_ingress_owner_witness_mismatch'; END IF;
     IF NEW."approval" IS NOT NULL OR NEW."installedAt" IS NOT NULL OR NEW."frozenLaneId" IS NOT NULL
       OR NEW."registration" IS NOT NULL OR NEW."registeredAt" IS NOT NULL
     THEN RAISE EXCEPTION 'nexi_ingress_owner_candidate_initial'; END IF;
     RETURN NEW;
   END IF;
-  IF (to_jsonb(NEW)-ARRAY['approval','installedAt','frozenLaneId','registration','registeredAt']) IS DISTINCT FROM
-      (to_jsonb(OLD)-ARRAY['approval','installedAt','frozenLaneId','registration','registeredAt'])
+  IF (to_jsonb(NEW)-ARRAY['receipt','approval','installedAt','frozenLaneId','registration','registeredAt']) IS DISTINCT FROM
+      (to_jsonb(OLD)-ARRAY['receipt','approval','installedAt','frozenLaneId','registration','registeredAt'])
   THEN RAISE EXCEPTION 'nexi_ingress_owner_candidate_immutable'; END IF;
   IF OLD."approval" IS NULL THEN
     IF NEW."approval" IS NULL OR NEW."installedAt" IS NULL OR NEW."frozenLaneId"<>OLD."oldLaneId"
@@ -162,8 +252,8 @@ CREATE TRIGGER nexi_ingress_owner_delivery_guard BEFORE INSERT OR UPDATE OR DELE
 CREATE TRIGGER nexi_ingress_owner_delivery_no_truncate BEFORE TRUNCATE ON "NexiIngressOwnerDelivery"
   FOR EACH STATEMENT EXECUTE FUNCTION nexi_ingress_owner_source_guard();
 
--- The crypto verifier is in trusted provider code with a pinned APP Ed25519
--- public key. SQL supplies permanence/fencing, not an approval signing oracle.
+-- Provider verifies Ed25519, then attests the exact complete row. The protected
+-- SQL receipt verifier rejects any fabricated state before these fences use it.
 CREATE FUNCTION nexi_ingress_owner_prefix_guard() RETURNS trigger
 LANGUAGE plpgsql SET search_path=pg_catalog,public,pg_temp AS $$
 DECLARE lane text; source "NexiIngressOwnerSource"%ROWTYPE;

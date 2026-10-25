@@ -108,6 +108,7 @@ model NexiIngressContactCache {
 
 // Receive ownership metadata only. Historical lanes/journals are never moved.
 model NexiIngressOwnerRoot {
+  receipt String LARGE_TEXT
   id String @id @db.VarChar(64)
   scopeId String @db.VarChar(64)
   instanceId String @db.VarChar(100)
@@ -119,6 +120,7 @@ model NexiIngressOwnerRoot {
 }
 
 model NexiIngressOwnerGeneration {
+  receipt String LARGE_TEXT
   id String @id @db.VarChar(36)
   candidateId String @unique @db.VarChar(36)
   rootLaneId String @db.VarChar(64)
@@ -146,6 +148,7 @@ model NexiIngressOwnerGeneration {
 
 // New raw intake only. A legacy journal is never copied into this table.
 model NexiIngressOwnerSource {
+  receipt String LARGE_TEXT
   id String @id @db.VarChar(36)
   dedupKey String @unique @db.VarChar(64)
   rootLaneId String @db.VarChar(64)
@@ -163,6 +166,7 @@ model NexiIngressOwnerSource {
 
 // One source, one delivery journal, one immutable source/delivery sequence pair.
 model NexiIngressOwnerDelivery {
+  receipt String LARGE_TEXT
   sourceJournalId String @id @db.VarChar(36)
   deliveryJournalId String @unique @db.VarChar(36)
   generationId String @db.VarChar(36)
