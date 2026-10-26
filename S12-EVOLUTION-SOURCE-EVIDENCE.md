@@ -3,6 +3,9 @@
 Prepared 2026-10-26. The new Git evidence closes the historical input-attribution
 gap in [the closure supplement](S12-EVOLUTION-CLOSURE.md). It records source
 evidence only. Deployment readiness remains **false**.
+The [current candidate gate](S12-EVOLUTION-CURRENT-GATE.md) confirms the a2ad
+comparison with approved ancestor 6c270 and records the focused exact-role-graph
+and complete-baseline-ledger precondition correction. It retains all external gates.
 
 The initial code/schema input snapshot is `6c2703916035e2a16990883ab0764cd3fd797842`, tree
 `c29fc0e89b0936f1b5774263b5cf1168379babc7`. The upstream is

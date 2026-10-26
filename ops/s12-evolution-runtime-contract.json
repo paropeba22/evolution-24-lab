@@ -1,6 +1,7 @@
 {
   "status": "SOURCE_SURFACE_CLASSIFIED_DEPLOYMENT_CATALOG_RECONCILIATION_REQUIRED",
   "deployment_ready": false,
+  "principal_contract": "ops/s12-evolution-principal-contract.json",
   "source_head": "87a82765f52ad9945f9bf52562e99c84e1ad6a49",
   "upstream": "e273b904d53f5726970fd6a244ed9caa61dfeb9a",
   "coverage": "All 54 source models classified by operation; generic chatbot aliases and dynamic event bindings resolved. This is the full supported API surface, not approval to grant dormant modules in the actual deployment.",

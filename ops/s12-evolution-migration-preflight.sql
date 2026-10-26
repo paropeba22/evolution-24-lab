@@ -26,6 +26,32 @@ DO $$ BEGIN
     OR NOT EXISTS(SELECT 1 FROM pg_catalog.pg_roles WHERE rolname=session_user AND rolcanlogin AND NOT rolinherit
       AND NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole AND NOT rolreplication AND NOT rolbypassrls)
   THEN RAISE EXCEPTION 'owner or migration-login attributes unsafe'; END IF;
+  -- Check the whole prepared role graph, not just the one valid guard edge.
+  -- Runtime may still be NOLOGIN here: its credential ceremony is separate.
+  IF (SELECT count(*) FROM pg_catalog.pg_roles
+      WHERE rolname IN ('nexi_evolution_schema_owner','nexi_evolution_guard_owner',
+        'nexi_evolution_migrator','nexi_evolution_runtime')
+        AND NOT rolinherit AND NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole
+        AND NOT rolreplication AND NOT rolbypassrls
+        AND (rolname NOT IN ('nexi_evolution_schema_owner','nexi_evolution_guard_owner') OR NOT rolcanlogin))<>4
+    OR (SELECT count(*) FROM pg_catalog.pg_auth_members a
+      JOIN pg_catalog.pg_roles member ON member.oid=a.member
+      JOIN pg_catalog.pg_roles owner ON owner.oid=a.roleid
+      WHERE member.rolname='nexi_evolution_migrator'
+        AND owner.rolname IN ('nexi_evolution_schema_owner','nexi_evolution_guard_owner')
+        AND a.set_option AND NOT a.inherit_option AND NOT a.admin_option)<>2
+    OR (SELECT count(DISTINCT a.roleid) FROM pg_catalog.pg_auth_members a
+      JOIN pg_catalog.pg_roles member ON member.oid=a.member
+      WHERE member.rolname='nexi_evolution_migrator')<>2
+    OR EXISTS(SELECT 1 FROM pg_catalog.pg_auth_members a
+      JOIN pg_catalog.pg_roles member ON member.oid=a.member
+      JOIN pg_catalog.pg_roles owner ON owner.oid=a.roleid
+      WHERE member.rolname IN ('nexi_evolution_schema_owner','nexi_evolution_guard_owner',
+        'nexi_evolution_migrator','nexi_evolution_runtime')
+        AND (member.rolname<>'nexi_evolution_migrator'
+          OR owner.rolname NOT IN ('nexi_evolution_schema_owner','nexi_evolution_guard_owner')
+          OR NOT a.set_option OR a.inherit_option OR a.admin_option))
+  THEN RAISE EXCEPTION 'unexpected owner, migrator or runtime role graph'; END IF;
   IF NOT EXISTS(SELECT 1 FROM pg_catalog.pg_db_role_setting d JOIN pg_catalog.pg_roles r ON r.oid=d.setrole
     JOIN pg_catalog.pg_database db ON db.oid=d.setdatabase
     WHERE r.rolname=session_user AND db.datname=current_database()
@@ -56,6 +82,9 @@ DO $$ BEGIN
       WHERE migration_name='20261025000000_nexi_ingress_owner_generations' AND rolled_back_at IS NULL)
   THEN RAISE EXCEPTION 'migration ledger unresolved or target already recorded'; END IF;
 END $$;
+-- Reject missing/unknown history before a future migrate deploy can replay it.
+-- The fragment creates nothing and requires this active READ ONLY transaction.
+\ir s12-evolution-baseline-ledger-contract.sql
 SELECT session_user AS login,current_user AS effective_owner,current_database() AS database,
        current_setting('role') AS active_role,current_setting('session_replication_role') AS replication_role;
 ROLLBACK;

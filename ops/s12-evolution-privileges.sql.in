@@ -96,6 +96,9 @@ COMMIT;
 -- authenticated direct connection, without SET ROLE, as a separate authorized
 -- operation. It checks both session identity and the catalog login-default
 -- contract. It never authorizes migration or proves a future unbuilt artifact.
+-- It also requires the exact four-role graph and includes the 70-row source
+-- baseline ledger contract. Missing/unknown history, duplicate active records,
+-- incomplete steps or checksum drift stop before any migration invocation.
 -- Apply only the reconciled 20261025000000 migration; do not replay histories.
 -- Provision the receipt key separately without SQL logs, argv, shell trace,
 -- chat output or committed files. No signing/key-returning SQL API is allowed.

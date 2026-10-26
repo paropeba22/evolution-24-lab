@@ -1,0 +1,65 @@
+{
+  "status": "PREPARED_NOT_PROVISIONED",
+  "deployment_ready": false,
+  "source_snapshot": "a2ad9338c5901f10d001495ba357938915d28c79",
+  "database": "nexi",
+  "principals": [
+    {
+      "name": "nexi_evolution_runtime",
+      "login": "NOLOGIN until separately authorized credential ceremony, then LOGIN",
+      "attributes": "NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT",
+      "member_of": [],
+      "owns_objects": false,
+      "database_privileges": ["CONNECT"],
+      "schemas": {"public": ["USAGE"], "nexi_ingress_owner_private": []},
+      "relations": "s12-evolution-runtime-contract.json: each relation's base privileges plus confirmed optional additions only",
+      "sequence_privileges": "USAGE only on the two catalog-confirmed dependencies; no UPDATE/setval",
+      "direct_trigger_function_execute": false,
+      "migration_ledger_or_key_access": false,
+      "ddl_or_parameter_bypass": false
+    },
+    {
+      "name": "nexi_evolution_migrator",
+      "login": "NOLOGIN until separately authorized short-lived maintenance credential",
+      "attributes": "NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT",
+      "member_of": [
+        {"role": "nexi_evolution_schema_owner", "set": true, "inherit": false, "admin": false},
+        {"role": "nexi_evolution_guard_owner", "set": true, "inherit": false, "admin": false}
+      ],
+      "owns_objects": false,
+      "database_privileges": ["CONNECT"],
+      "database_login_defaults": {"role": "nexi_evolution_guard_owner", "search_path": "public", "session_replication_role": "origin"},
+      "direct_object_grants": [],
+      "credential_mounted_in_runtime": false,
+      "preflight": "s12-evolution-migration-preflight.sql, including exact baseline ledger, on a fresh direct connection without SET ROLE",
+      "end_of_window": "Disable LOGIN, revoke SET memberships and reset maintenance defaults through the separately authorized administrative plan"
+    },
+    {
+      "name": "nexi_evolution_schema_owner",
+      "login": "NOLOGIN permanently",
+      "attributes": "NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT",
+      "member_of": [],
+      "owns_objects": "Only exact baseline objects explicitly transferred after catalog review; no REASSIGN OWNED BY postgres",
+      "s12_owner_generation_migration_used_by_default": false,
+      "default_runtime_table_sequence_grants": [],
+      "default_public_function_execute": false
+    },
+    {
+      "name": "nexi_evolution_guard_owner",
+      "login": "NOLOGIN permanently",
+      "attributes": "NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT",
+      "member_of": [],
+      "owns_objects": ["NexiIngressOwnerRoot", "NexiIngressOwnerGeneration", "NexiIngressOwnerSource", "NexiIngressOwnerDelivery", "five nexi_ingress_owner_* functions", "nexi_ingress_owner_private schema and receipt_key", "private pgcrypto extension"],
+      "extension_members": "Trusted extension C routines may retain bootstrap ownership; runtime still receives no private schema USAGE",
+      "temporary_ddl": {"database": ["CREATE"], "public_schema": ["CREATE"], "REFERENCES": ["NexiIngressScope", "NexiIngressLane", "NexiIngressJournal"], "TRIGGER": ["NexiIngressLane", "NexiIngressJournal"], "_prisma_migrations": ["SELECT", "INSERT", "UPDATE"]},
+      "temporary_grants_revoked_after_verified_migration": true,
+      "default_runtime_table_sequence_grants": [],
+      "default_public_function_execute": false,
+      "runtime_can_set_this_role": false
+    }
+  ],
+  "administrator": "Separate authorized cluster administrator only; no admin credential in runtime or normal maintenance process",
+  "source_baseline_ledger": {"file": "s12-evolution-baseline-ledger-contract.sql", "migrations": 70, "basis": "Original pinned Git blob SHA-256 values; final provider/staging bytes and real ledger must still be reconciled"},
+  "external_gates": ["Complete production catalogs and enabled consumers", "Typed final artifact provenance and migration bytes", "Restricted role provisioning and fresh Prisma connection readback"],
+  "no_operational_authorization": true
+}
