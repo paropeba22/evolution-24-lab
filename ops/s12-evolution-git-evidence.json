@@ -11,8 +11,8 @@
       "tree": "a8b54645504343dac9c0fd3fe9bc2febe6fe067b"
     },
     "candidate_overlay": {
-      "commit": "6c2703916035e2a16990883ab0764cd3fd797842",
-      "tree": "c29fc0e89b0936f1b5774263b5cf1168379babc7"
+      "commit": "b462f1c5cd292fac1a18835b1e0c08b6269371d9",
+      "tree": "d23148df4b45913c29d3dc7a7dde50efb6f9869e"
     },
     "git_blob_integrity_verified": true,
     "inputs": [
@@ -81,7 +81,7 @@
       },
       {
         "role": "candidate_overlay",
-        "commit": "6c2703916035e2a16990883ab0764cd3fd797842",
+        "commit": "b462f1c5cd292fac1a18835b1e0c08b6269371d9",
         "path": "patch-prisma-binding.mjs",
         "git_blob": "06e9a826f72fcfeb42e84c87dfe4e1c74d52e774",
         "byte_length": 681,
@@ -90,7 +90,7 @@
       },
       {
         "role": "candidate_overlay",
-        "commit": "6c2703916035e2a16990883ab0764cd3fd797842",
+        "commit": "b462f1c5cd292fac1a18835b1e0c08b6269371d9",
         "path": "patch-groups-source.mjs",
         "git_blob": "191614fc6fe8520b78572d2c7b55289a63addb5a",
         "byte_length": 53919,
@@ -99,7 +99,7 @@
       },
       {
         "role": "candidate_overlay",
-        "commit": "6c2703916035e2a16990883ab0764cd3fd797842",
+        "commit": "b462f1c5cd292fac1a18835b1e0c08b6269371d9",
         "path": "patch-attendance-source.mjs",
         "git_blob": "70b4189321fae5e542c7d3a15622ca520ead3a81",
         "byte_length": 30214,
@@ -108,7 +108,7 @@
       },
       {
         "role": "candidate_overlay",
-        "commit": "6c2703916035e2a16990883ab0764cd3fd797842",
+        "commit": "b462f1c5cd292fac1a18835b1e0c08b6269371d9",
         "path": "patch-ingress-source.mjs",
         "git_blob": "860a17541e8ef0aecfcb4e5b3934436fc2aa1b42",
         "byte_length": 18381,
@@ -117,7 +117,7 @@
       },
       {
         "role": "candidate_overlay",
-        "commit": "6c2703916035e2a16990883ab0764cd3fd797842",
+        "commit": "b462f1c5cd292fac1a18835b1e0c08b6269371d9",
         "path": "attendance-models.prisma",
         "git_blob": "8cf2ba63117c9e84f85c213e9df4ce6826fa26b0",
         "byte_length": 3653,
@@ -126,7 +126,7 @@
       },
       {
         "role": "candidate_overlay",
-        "commit": "6c2703916035e2a16990883ab0764cd3fd797842",
+        "commit": "b462f1c5cd292fac1a18835b1e0c08b6269371d9",
         "path": "ingress-models.prisma",
         "git_blob": "46edd099a10eaa6e638e72727db79daf76d63b08",
         "byte_length": 5960,
@@ -135,7 +135,7 @@
       },
       {
         "role": "candidate_overlay",
-        "commit": "6c2703916035e2a16990883ab0764cd3fd797842",
+        "commit": "b462f1c5cd292fac1a18835b1e0c08b6269371d9",
         "path": "ops/s12-evolution-runtime-contract.json",
         "git_blob": "25c5ec023002ca39a87938a65e01ba446a6b5636",
         "byte_length": 198061,
@@ -144,16 +144,34 @@
       },
       {
         "role": "candidate_overlay",
-        "commit": "6c2703916035e2a16990883ab0764cd3fd797842",
+        "commit": "b462f1c5cd292fac1a18835b1e0c08b6269371d9",
         "path": "Dockerfile",
-        "git_blob": "34ab11a99b3a5dc687043d522e167ce16b3509d0",
-        "byte_length": 16199,
-        "raw_sha256": "e0b194fc434e4d2fcb20f1d575c9ba9a29a9e72c5f2bee2952cd5609cefa3e45",
-        "lf_text_sha256": "e0b194fc434e4d2fcb20f1d575c9ba9a29a9e72c5f2bee2952cd5609cefa3e45"
+        "git_blob": "6aa73eebed63c2e65862e406fe725dc3036b010f",
+        "byte_length": 16456,
+        "raw_sha256": "626e2fc4307c433cae4984c010862893db941870860202eff51aacaec8a35992",
+        "lf_text_sha256": "626e2fc4307c433cae4984c010862893db941870860202eff51aacaec8a35992"
       },
       {
         "role": "candidate_overlay",
-        "commit": "6c2703916035e2a16990883ab0764cd3fd797842",
+        "commit": "b462f1c5cd292fac1a18835b1e0c08b6269371d9",
+        "path": ".gitattributes",
+        "git_blob": "61a7d864eafeb423ff6e8069ddfc9a22d59c237c",
+        "byte_length": 107,
+        "raw_sha256": "fadac4a88c31b65ca4d2d8664a5b609c167280774afd9a9023ea7364b7b47e65",
+        "lf_text_sha256": "fadac4a88c31b65ca4d2d8664a5b609c167280774afd9a9023ea7364b7b47e65"
+      },
+      {
+        "role": "candidate_overlay",
+        "commit": "b462f1c5cd292fac1a18835b1e0c08b6269371d9",
+        "path": "Docker/scripts/deploy_database.sh",
+        "git_blob": "b64fd6c9105be6a36187ebb651d641536cfe6264",
+        "byte_length": 377,
+        "raw_sha256": "695c665d85b3d6583feb6c151ff08778a5a6f065d13fc9df447f7005bf7a61d2",
+        "lf_text_sha256": "695c665d85b3d6583feb6c151ff08778a5a6f065d13fc9df447f7005bf7a61d2"
+      },
+      {
+        "role": "candidate_overlay",
+        "commit": "b462f1c5cd292fac1a18835b1e0c08b6269371d9",
         "path": "prisma.config.ts",
         "git_blob": "22e28198245c32e9906bf8d3f624a374e9043748",
         "byte_length": 556,
@@ -162,7 +180,7 @@
       },
       {
         "role": "candidate_overlay",
-        "commit": "6c2703916035e2a16990883ab0764cd3fd797842",
+        "commit": "b462f1c5cd292fac1a18835b1e0c08b6269371d9",
         "path": "nexi-start.sh",
         "git_blob": "948734db9610492c74c59df9f7270e3214d6bc80",
         "byte_length": 1142,
@@ -171,7 +189,7 @@
       },
       {
         "role": "candidate_overlay",
-        "commit": "6c2703916035e2a16990883ab0764cd3fd797842",
+        "commit": "b462f1c5cd292fac1a18835b1e0c08b6269371d9",
         "path": "ops/s12-evolution-named-runtime-grants.sql.in",
         "git_blob": "27a689b7399c3ee2b1bf6fbfd0fe3c79995803eb",
         "byte_length": 10544,
@@ -180,7 +198,7 @@
       },
       {
         "role": "candidate_overlay",
-        "commit": "6c2703916035e2a16990883ab0764cd3fd797842",
+        "commit": "b462f1c5cd292fac1a18835b1e0c08b6269371d9",
         "path": "ops/s12-evolution-privileges.sql.in",
         "git_blob": "538fcdd8150bba486d8022f03cba20448e3a701e",
         "byte_length": 10906,
@@ -189,7 +207,7 @@
       },
       {
         "role": "candidate_overlay",
-        "commit": "6c2703916035e2a16990883ab0764cd3fd797842",
+        "commit": "b462f1c5cd292fac1a18835b1e0c08b6269371d9",
         "path": "ops/s12-evolution-migration-preflight.sql",
         "git_blob": "db612724d99c11ebfb158dd5d309df8bdccb83eb",
         "byte_length": 5022,
@@ -774,7 +792,7 @@
       },
       {
         "role": "candidate_overlay",
-        "commit": "6c2703916035e2a16990883ab0764cd3fd797842",
+        "commit": "b462f1c5cd292fac1a18835b1e0c08b6269371d9",
         "path": "prisma/postgresql-migrations/20260926000000_add_chatwoot_inbox_id/migration.sql",
         "git_blob": "d9f2d72c42e48c080f0f27f4ff9aa544fae61ebd",
         "byte_length": 57,
@@ -783,7 +801,7 @@
       },
       {
         "role": "candidate_overlay",
-        "commit": "6c2703916035e2a16990883ab0764cd3fd797842",
+        "commit": "b462f1c5cd292fac1a18835b1e0c08b6269371d9",
         "path": "prisma/postgresql-migrations/20261002000000_nexi_groups_wave1/migration.sql",
         "git_blob": "e01d546e786e8a090dbf9d9dff83dd7c0d9a769f",
         "byte_length": 1227,
@@ -792,7 +810,7 @@
       },
       {
         "role": "candidate_overlay",
-        "commit": "6c2703916035e2a16990883ab0764cd3fd797842",
+        "commit": "b462f1c5cd292fac1a18835b1e0c08b6269371d9",
         "path": "prisma/postgresql-migrations/20261002000001_harden_groups_wave1/migration.sql",
         "git_blob": "28762b6cb778fe339cfc214e2b66a8fcb5d301f9",
         "byte_length": 344,
@@ -801,7 +819,7 @@
       },
       {
         "role": "candidate_overlay",
-        "commit": "6c2703916035e2a16990883ab0764cd3fd797842",
+        "commit": "b462f1c5cd292fac1a18835b1e0c08b6269371d9",
         "path": "prisma/postgresql-migrations/20261002000002_namespace_groups_source/migration.sql",
         "git_blob": "6bbb454889fe8a42ffda2884333d51c69f0299e0",
         "byte_length": 1040,
@@ -810,7 +828,7 @@
       },
       {
         "role": "candidate_overlay",
-        "commit": "6c2703916035e2a16990883ab0764cd3fd797842",
+        "commit": "b462f1c5cd292fac1a18835b1e0c08b6269371d9",
         "path": "prisma/postgresql-migrations/20261005000000_nexi_attendance_boundaries/migration.sql",
         "git_blob": "6983ec38731e5952e196f1b8d117eaab67dcf9d3",
         "byte_length": 10544,
@@ -819,7 +837,7 @@
       },
       {
         "role": "candidate_overlay",
-        "commit": "6c2703916035e2a16990883ab0764cd3fd797842",
+        "commit": "b462f1c5cd292fac1a18835b1e0c08b6269371d9",
         "path": "prisma/postgresql-migrations/20261005000001_attendance_canonical_version/migration.sql",
         "git_blob": "ce2b5d40be7c3313c81fc0525c36366bee262cae",
         "byte_length": 1880,
@@ -828,7 +846,7 @@
       },
       {
         "role": "candidate_overlay",
-        "commit": "6c2703916035e2a16990883ab0764cd3fd797842",
+        "commit": "b462f1c5cd292fac1a18835b1e0c08b6269371d9",
         "path": "prisma/postgresql-migrations/20261006000000_attendance_release_dispatch/migration.sql",
         "git_blob": "83c97c78d61018ddeb85add7c10150a8cc6778b0",
         "byte_length": 10836,
@@ -837,7 +855,7 @@
       },
       {
         "role": "candidate_overlay",
-        "commit": "6c2703916035e2a16990883ab0764cd3fd797842",
+        "commit": "b462f1c5cd292fac1a18835b1e0c08b6269371d9",
         "path": "prisma/postgresql-migrations/20261010000000_attendance_physical_dispatch/migration.sql",
         "git_blob": "21e914e2eb94b5d05db3e4ca26cdfe3466825fe9",
         "byte_length": 6534,
@@ -846,7 +864,7 @@
       },
       {
         "role": "candidate_overlay",
-        "commit": "6c2703916035e2a16990883ab0764cd3fd797842",
+        "commit": "b462f1c5cd292fac1a18835b1e0c08b6269371d9",
         "path": "prisma/postgresql-migrations/20261015000000_nexi_durable_ingress/migration.sql",
         "git_blob": "9feb483e61bce51065eefd711cae243de5525513",
         "byte_length": 1774,
@@ -855,7 +873,7 @@
       },
       {
         "role": "candidate_overlay",
-        "commit": "6c2703916035e2a16990883ab0764cd3fd797842",
+        "commit": "b462f1c5cd292fac1a18835b1e0c08b6269371d9",
         "path": "prisma/postgresql-migrations/20261015000001_nexi_ingress_secondary/migration.sql",
         "git_blob": "57a13e8ded3a2fef7ce350e32e168f45273dbdc0",
         "byte_length": 1993,
@@ -864,7 +882,7 @@
       },
       {
         "role": "candidate_overlay",
-        "commit": "6c2703916035e2a16990883ab0764cd3fd797842",
+        "commit": "b462f1c5cd292fac1a18835b1e0c08b6269371d9",
         "path": "prisma/postgresql-migrations/20261015000002_nexi_ingress_contact_cache/migration.sql",
         "git_blob": "8df271eb714fd5a823192178ecda6c39a6519bea",
         "byte_length": 1028,
@@ -873,7 +891,7 @@
       },
       {
         "role": "candidate_overlay",
-        "commit": "6c2703916035e2a16990883ab0764cd3fd797842",
+        "commit": "b462f1c5cd292fac1a18835b1e0c08b6269371d9",
         "path": "prisma/postgresql-migrations/20261025000000_nexi_ingress_owner_generations/migration.sql",
         "git_blob": "064634227cbce330c70e6eeada4db6536e627d07",
         "byte_length": 20040,
@@ -1691,7 +1709,7 @@
         "provider_path": "prisma/postgresql-migrations/20260926000000_add_chatwoot_inbox_id/migration.sql",
         "staged_path": "prisma/migrations/20260926000000_add_chatwoot_inbox_id/migration.sql",
         "origin": "candidate_overlay",
-        "commit": "6c2703916035e2a16990883ab0764cd3fd797842",
+        "commit": "b462f1c5cd292fac1a18835b1e0c08b6269371d9",
         "git_blob": "d9f2d72c42e48c080f0f27f4ff9aa544fae61ebd",
         "byte_length": 57,
         "git_blob_raw_sha256": "6e7004d282dd2e196e5737ea40e2c0f0aaee287cac98e5054d60f700a1580b90",
@@ -1703,7 +1721,7 @@
         "provider_path": "prisma/postgresql-migrations/20261002000000_nexi_groups_wave1/migration.sql",
         "staged_path": "prisma/migrations/20261002000000_nexi_groups_wave1/migration.sql",
         "origin": "candidate_overlay",
-        "commit": "6c2703916035e2a16990883ab0764cd3fd797842",
+        "commit": "b462f1c5cd292fac1a18835b1e0c08b6269371d9",
         "git_blob": "e01d546e786e8a090dbf9d9dff83dd7c0d9a769f",
         "byte_length": 1227,
         "git_blob_raw_sha256": "dfbae110b75f4dcfc981677eab787491813ec99a9968053f4bc6621e7cf7985c",
@@ -1715,7 +1733,7 @@
         "provider_path": "prisma/postgresql-migrations/20261002000001_harden_groups_wave1/migration.sql",
         "staged_path": "prisma/migrations/20261002000001_harden_groups_wave1/migration.sql",
         "origin": "candidate_overlay",
-        "commit": "6c2703916035e2a16990883ab0764cd3fd797842",
+        "commit": "b462f1c5cd292fac1a18835b1e0c08b6269371d9",
         "git_blob": "28762b6cb778fe339cfc214e2b66a8fcb5d301f9",
         "byte_length": 344,
         "git_blob_raw_sha256": "8a7bb12eace9434ced34834c0b3abe193d31c9db6603e070143110cdb9c1afa5",
@@ -1727,7 +1745,7 @@
         "provider_path": "prisma/postgresql-migrations/20261002000002_namespace_groups_source/migration.sql",
         "staged_path": "prisma/migrations/20261002000002_namespace_groups_source/migration.sql",
         "origin": "candidate_overlay",
-        "commit": "6c2703916035e2a16990883ab0764cd3fd797842",
+        "commit": "b462f1c5cd292fac1a18835b1e0c08b6269371d9",
         "git_blob": "6bbb454889fe8a42ffda2884333d51c69f0299e0",
         "byte_length": 1040,
         "git_blob_raw_sha256": "2400f3e45fba4f0e6d2ad307a8a20abec502fb4acb5d7da255a29c1d37c70dcd",
@@ -1739,7 +1757,7 @@
         "provider_path": "prisma/postgresql-migrations/20261005000000_nexi_attendance_boundaries/migration.sql",
         "staged_path": "prisma/migrations/20261005000000_nexi_attendance_boundaries/migration.sql",
         "origin": "candidate_overlay",
-        "commit": "6c2703916035e2a16990883ab0764cd3fd797842",
+        "commit": "b462f1c5cd292fac1a18835b1e0c08b6269371d9",
         "git_blob": "6983ec38731e5952e196f1b8d117eaab67dcf9d3",
         "byte_length": 10544,
         "git_blob_raw_sha256": "57f49c82bc9340a7f1db76b3fa1ce6648bc0f07ba404bd0f3da96c111539486f",
@@ -1751,7 +1769,7 @@
         "provider_path": "prisma/postgresql-migrations/20261005000001_attendance_canonical_version/migration.sql",
         "staged_path": "prisma/migrations/20261005000001_attendance_canonical_version/migration.sql",
         "origin": "candidate_overlay",
-        "commit": "6c2703916035e2a16990883ab0764cd3fd797842",
+        "commit": "b462f1c5cd292fac1a18835b1e0c08b6269371d9",
         "git_blob": "ce2b5d40be7c3313c81fc0525c36366bee262cae",
         "byte_length": 1880,
         "git_blob_raw_sha256": "0214f56e508df1d81b23700ee6ca73c554f82945db1ffc898d5a58b626ca4ab1",
@@ -1763,7 +1781,7 @@
         "provider_path": "prisma/postgresql-migrations/20261006000000_attendance_release_dispatch/migration.sql",
         "staged_path": "prisma/migrations/20261006000000_attendance_release_dispatch/migration.sql",
         "origin": "candidate_overlay",
-        "commit": "6c2703916035e2a16990883ab0764cd3fd797842",
+        "commit": "b462f1c5cd292fac1a18835b1e0c08b6269371d9",
         "git_blob": "83c97c78d61018ddeb85add7c10150a8cc6778b0",
         "byte_length": 10836,
         "git_blob_raw_sha256": "2a8daff6ce7b8bc16173d2babbe70c7e580237d90291df8d465f693d6647580f",
@@ -1775,7 +1793,7 @@
         "provider_path": "prisma/postgresql-migrations/20261010000000_attendance_physical_dispatch/migration.sql",
         "staged_path": "prisma/migrations/20261010000000_attendance_physical_dispatch/migration.sql",
         "origin": "candidate_overlay",
-        "commit": "6c2703916035e2a16990883ab0764cd3fd797842",
+        "commit": "b462f1c5cd292fac1a18835b1e0c08b6269371d9",
         "git_blob": "21e914e2eb94b5d05db3e4ca26cdfe3466825fe9",
         "byte_length": 6534,
         "git_blob_raw_sha256": "a17cff382193662ebd2598e59d8d559d7e7a642cd0137a8754007ddcd46af2ae",
@@ -1787,7 +1805,7 @@
         "provider_path": "prisma/postgresql-migrations/20261015000000_nexi_durable_ingress/migration.sql",
         "staged_path": "prisma/migrations/20261015000000_nexi_durable_ingress/migration.sql",
         "origin": "candidate_overlay",
-        "commit": "6c2703916035e2a16990883ab0764cd3fd797842",
+        "commit": "b462f1c5cd292fac1a18835b1e0c08b6269371d9",
         "git_blob": "9feb483e61bce51065eefd711cae243de5525513",
         "byte_length": 1774,
         "git_blob_raw_sha256": "042e4282213477a330644a5017621f1646793880c141b195c82092bf0009ba04",
@@ -1799,7 +1817,7 @@
         "provider_path": "prisma/postgresql-migrations/20261015000001_nexi_ingress_secondary/migration.sql",
         "staged_path": "prisma/migrations/20261015000001_nexi_ingress_secondary/migration.sql",
         "origin": "candidate_overlay",
-        "commit": "6c2703916035e2a16990883ab0764cd3fd797842",
+        "commit": "b462f1c5cd292fac1a18835b1e0c08b6269371d9",
         "git_blob": "57a13e8ded3a2fef7ce350e32e168f45273dbdc0",
         "byte_length": 1993,
         "git_blob_raw_sha256": "f9e556dd35b041ce92b9a860ab5b49002dfc553d0c2f3f043edc199e8ee8be6d",
@@ -1811,7 +1829,7 @@
         "provider_path": "prisma/postgresql-migrations/20261015000002_nexi_ingress_contact_cache/migration.sql",
         "staged_path": "prisma/migrations/20261015000002_nexi_ingress_contact_cache/migration.sql",
         "origin": "candidate_overlay",
-        "commit": "6c2703916035e2a16990883ab0764cd3fd797842",
+        "commit": "b462f1c5cd292fac1a18835b1e0c08b6269371d9",
         "git_blob": "8df271eb714fd5a823192178ecda6c39a6519bea",
         "byte_length": 1028,
         "git_blob_raw_sha256": "3c6a65a339cae039d0742337ae76bec09f5890b8f0786dfa9e61b6e0ec0a599c",
@@ -1823,7 +1841,7 @@
         "provider_path": "prisma/postgresql-migrations/20261025000000_nexi_ingress_owner_generations/migration.sql",
         "staged_path": "prisma/migrations/20261025000000_nexi_ingress_owner_generations/migration.sql",
         "origin": "candidate_overlay",
-        "commit": "6c2703916035e2a16990883ab0764cd3fd797842",
+        "commit": "b462f1c5cd292fac1a18835b1e0c08b6269371d9",
         "git_blob": "064634227cbce330c70e6eeada4db6536e627d07",
         "byte_length": 20040,
         "git_blob_raw_sha256": "e17a49cd4f395d79cc370679c9512f59184233fd19caa985b532b425f9329d57",
@@ -1844,10 +1862,20 @@
         "ledger_status": "NOT_CAPTURED"
       }
     ],
+    "final_deploy_helper_source": {
+      "path": "Docker/scripts/deploy_database.sh",
+      "origin": "candidate_overlay",
+      "commit": "b462f1c5cd292fac1a18835b1e0c08b6269371d9",
+      "git_blob": "b64fd6c9105be6a36187ebb651d641536cfe6264",
+      "raw_sha256": "695c665d85b3d6583feb6c151ff08778a5a6f065d13fc9df447f7005bf7a61d2",
+      "final_stage_copy": "COPY --chmod=0555 Docker/scripts/deploy_database.sh /evolution/Docker/scripts/deploy_database.sh",
+      "contract": "Fail-closed shim: no environment/helper reads, child processes, migration/generation or variable/argument output; literal stderr notice and exit 78.",
+      "deployed_bytes_verified": false
+    },
     "checksum_boundary": "raw_sha256 hashes original Git blob bytes, not Windows checkout text. Neither it nor lf_text_sha256 is a deployed ledger checksum until final artifact bytes and ledger rows are captured."
   },
   "privileges": {
-    "source_contract_commit": "6c2703916035e2a16990883ab0764cd3fd797842",
+    "source_contract_commit": "b462f1c5cd292fac1a18835b1e0c08b6269371d9",
     "source_models": 54,
     "source_profiles": [
       "attendance",
