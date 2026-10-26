@@ -3,6 +3,13 @@
   "deployment_ready": false,
   "source_snapshot": "a2ad9338c5901f10d001495ba357938915d28c79",
   "database": "nexi",
+  "membership_boundary": {
+    "protected_principals": "All four principals below, as both member and granted role in pg_auth_members",
+    "allowed_edges": "Only the two migrator member_of entries below, with SET=true, INHERIT=false, ADMIN=false; all other incident edges are forbidden",
+    "third_party_memberships": false,
+    "transitive_access": "Every third-party path to a protected identity crosses a forbidden incident edge; reject that edge regardless of SET/INHERIT/ADMIN flags, including all-false flags",
+    "catalog_scope": "PostgreSQL 18 pg_auth_members; inspect every incident row across grantors without administrative exemptions; existing exact-count checks reject duplicate allowed-edge rows"
+  },
   "principals": [
     {
       "name": "nexi_evolution_runtime",

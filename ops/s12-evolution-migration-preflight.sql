@@ -26,7 +26,11 @@ DO $$ BEGIN
     OR NOT EXISTS(SELECT 1 FROM pg_catalog.pg_roles WHERE rolname=session_user AND rolcanlogin AND NOT rolinherit
       AND NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole AND NOT rolreplication AND NOT rolbypassrls)
   THEN RAISE EXCEPTION 'owner or migration-login attributes unsafe'; END IF;
-  -- Check the whole prepared role graph, not just the one valid guard edge.
+  -- Check every edge incident to the four protected roles, in both directions.
+  -- Only migrator -> {schema_owner,guard_owner} with SET true, INHERIT/ADMIN
+  -- false is allowed. Any third-party path must cross an incident edge, so
+  -- rejecting all other such edges also rejects indirect SET/INHERIT/ADMIN
+  -- access. Do not filter by enabled options or exempt administrative members.
   -- Runtime may still be NOLOGIN here: its credential ceremony is separate.
   IF (SELECT count(*) FROM pg_catalog.pg_roles
       WHERE rolname IN ('nexi_evolution_schema_owner','nexi_evolution_guard_owner',
@@ -46,8 +50,10 @@ DO $$ BEGIN
     OR EXISTS(SELECT 1 FROM pg_catalog.pg_auth_members a
       JOIN pg_catalog.pg_roles member ON member.oid=a.member
       JOIN pg_catalog.pg_roles owner ON owner.oid=a.roleid
-      WHERE member.rolname IN ('nexi_evolution_schema_owner','nexi_evolution_guard_owner',
-        'nexi_evolution_migrator','nexi_evolution_runtime')
+      WHERE (member.rolname IN ('nexi_evolution_schema_owner','nexi_evolution_guard_owner',
+          'nexi_evolution_migrator','nexi_evolution_runtime')
+        OR owner.rolname IN ('nexi_evolution_schema_owner','nexi_evolution_guard_owner',
+          'nexi_evolution_migrator','nexi_evolution_runtime'))
         AND (member.rolname<>'nexi_evolution_migrator'
           OR owner.rolname NOT IN ('nexi_evolution_schema_owner','nexi_evolution_guard_owner')
           OR NOT a.set_option OR a.inherit_option OR a.admin_option))

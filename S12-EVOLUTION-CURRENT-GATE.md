@@ -55,8 +55,19 @@ It also checked the valid guard-owner membership without rejecting extra edges.
 
 The preflight now requires all four principals with safe attributes, both owners
 NOLOGIN, the migrator LOGIN, exactly its two SET-only owner memberships and no
-granted roles for runtime or owners. Runtime may remain NOLOGIN during maintenance
-because runtime credential activation is separate. No privileges are added.
+granted roles for runtime or owners. The subsequent P2 correction also checks
+every membership whose granted role is one of the four protected identities,
+rejecting third-party members of owners, migrator and runtime. Only the two
+migrator-to-owner edges are allowed, each with SET=true, INHERIT=false and
+ADMIN=false. Every other incident edge fails, even with all options false or an
+administrative member; all grantor rows remain subject to the existing exact
+counts. Any indirect third-party path must cross such a forbidden incident edge,
+so this exact graph check rejects direct and transitive membership access without
+depending on effective SET/INHERIT/ADMIN reachability heuristics. It uses the
+PostgreSQL 18 catalog columns already required by this preflight. Runtime may
+remain NOLOGIN during maintenance because runtime credential activation is
+separate. No privileges are added. This correction was inspected statically;
+neither SQL nor tests were executed, and operational gates remain closed.
 
 Its new include `ops/s12-evolution-baseline-ledger-contract.sql` requires an active
 read-only migration session and exactly the 70 pre-target source migration names,
