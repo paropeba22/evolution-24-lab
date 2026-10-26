@@ -10,35 +10,57 @@ function Digest([string]$text) { [Convert]::ToHexString([Security.Cryptography.S
 $basePath=(Resolve-Path -LiteralPath $BaselineOverlayRoot).Path
 $candidatePath=(Resolve-Path -LiteralPath $CandidateOverlayRoot).Path
 $upstreamPath=(Resolve-Path -LiteralPath $UpstreamRoot).Path
-function ReadLf([string]$file) { [IO.File]::ReadAllText($file).Replace("`r`n","`n") }
-function DeriveSchema([string]$overlay) {
+$inputTexts=@{}
+$observedInputs=[Collections.Generic.List[object]]::new()
+function ReadInput([string]$role,[string]$root,[string]$relativePath) {
+  $file=Join-Path $root $relativePath
+  $key=$role+'|'+$file
+  if (-not $inputTexts.ContainsKey($key)) {
+    # Hash and consume the same in-memory decoded text snapshot. These hashes
+    # describe observed content only; no Git revision is inferred from a path.
+    $text=[IO.File]::ReadAllText($file)
+    $inputTexts[$key]=$text
+    $observedInputs.Add([ordered]@{
+      role=$role;root=$root;path=$relativePath
+      decoded_text_sha256=(Digest $text)
+      lf_text_sha256=(Digest $text.Replace("`r`n","`n"))
+    })
+  }
+  return $inputTexts[$key]
+}
+function ReadLf([string]$role,[string]$root,[string]$relativePath) { (ReadInput $role $root $relativePath).Replace("`r`n","`n") }
+function DeriveSchema([string]$role,[string]$overlay) {
   # Static evaluation of only the exact schema text transformations, not patcher
   # execution, Prisma generation, application build or schema reconstruction by
-  # guessed models. Every input and transformation is retained by revision/hash.
-  $source=ReadLf (Join-Path $upstreamPath 'prisma\postgresql-schema.prisma')
+  # guessed models. Consumed input text is hashed, without revision attribution.
+  $source=ReadLf 'upstream' $upstreamPath 'prisma\postgresql-schema.prisma'
   $inbox='  nameInbox               String?   @db.VarChar(100)'
   if (($source.Split(@($inbox),[StringSplitOptions]::None)).Count -ne 2) { throw 'Inbox anchor mismatch' }
   $source=$source.Replace($inbox,$inbox+"`n  inboxId                 String?   @db.VarChar(32)")
   $start=$source.IndexOf('model Instance {'); $end=$source.IndexOf("`n}",$start)
   if ($start -lt 0 -or $end -le $start) { throw 'Instance anchor mismatch' }
   $source=$source.Insert($end,"`n  nexiGroupsSocketOwner String? @db.VarChar(36)`n  NexiGroupControl NexiGroupControl?`n  NexiGroupEventOutbox NexiGroupEventOutbox[]")
-  $groupPatcher=ReadLf (Join-Path $overlay 'patch-groups-source.mjs')
+  $groupPatcher=ReadLf $role $overlay 'patch-groups-source.mjs'
   $group=[regex]::Match($groupPatcher,'(?s)return source \+ `(\n\nmodel NexiGroupControl \{.*?\n)`;\n\}\);')
   if (-not $group.Success) { throw 'Exact group schema template not found' }
   $source += $group.Groups[1].Value.Replace('${json}','@db.JsonB')
-  $source += "`n"+(ReadLf (Join-Path $overlay 'attendance-models.prisma')).Replace('JSON_TYPE','@db.JsonB')
-  $source += "`n"+(ReadLf (Join-Path $overlay 'ingress-models.prisma')).Replace('JSON_TYPE','@db.JsonB').Replace('LARGE_TEXT','@db.Text')
+  $source += "`n"+(ReadLf $role $overlay 'attendance-models.prisma').Replace('JSON_TYPE','@db.JsonB')
+  $source += "`n"+(ReadLf $role $overlay 'ingress-models.prisma').Replace('JSON_TYPE','@db.JsonB').Replace('LARGE_TEXT','@db.Text')
   return $source
 }
-$baseline=DeriveSchema $basePath
-$candidate=DeriveSchema $candidatePath
-$wrapper=[IO.File]::ReadAllText((Join-Path $upstreamPath 'runWithProvider.js'))
+$baseline=DeriveSchema 'baseline_overlay' $basePath
+$candidate=DeriveSchema 'candidate_overlay' $candidatePath
+$wrapper=ReadInput 'upstream' $upstreamPath 'runWithProvider.js'
 $variants=[ordered]@{raw=$wrapper;lf=$wrapper.Replace("`r`n","`n");lf_with_trailing_lf=$wrapper.Replace("`r`n","`n").TrimEnd("`n")+"`n";crlf=$wrapper.Replace("`r`n","`n").Replace("`n","`r`n");crlf_with_trailing_crlf=$wrapper.Replace("`r`n","`n").TrimEnd("`n").Replace("`n","`r`n")+"`r`n"}
 $result=[ordered]@{
  status='STATIC_BYTE_DERIVATION_NOT_BUILT_OR_DEPLOYED'
- upstream='e273b904d53f5726970fd6a244ed9caa61dfeb9a'
- overlay_baseline='f248f1ede50ec2d5519cef0ba4c391a49d6124b4'
- overlay_candidate_source='87a82765f52ad9945f9bf52562e99c84e1ad6a49'
+ input_provenance=[ordered]@{
+   status='OBSERVED_CONTENT_ONLY'
+   revision_attribution_verified=$false
+   hash_scope='SHA-256 of UTF-8 re-encoded decoded text; ReadAllText strips encoding BOM; LF hash normalizes CRLF only.'
+   inputs=$observedInputs.ToArray()
+   limits='No Git commit/blob validation, full patcher equivalence, build or deployed artifact provenance is established. A matching output hash does not identify a source revision.'
+ }
  baseline_lf_sha256=(Digest $baseline)
  candidate_lf_sha256=(Digest $candidate)
  reported_runtime_schema_sha256='145e9ac35677739e544c5092b7c7326d9271d9dbfebc6a5690fe014338e85d7f'

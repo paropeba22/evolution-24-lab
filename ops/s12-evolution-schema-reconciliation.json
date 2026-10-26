@@ -1,8 +1,15 @@
 {
   "status": "STATIC_BYTE_DERIVATION_NOT_BUILT_OR_DEPLOYED",
-  "upstream": "e273b904d53f5726970fd6a244ed9caa61dfeb9a",
-  "overlay_baseline": "f248f1ede50ec2d5519cef0ba4c391a49d6124b4",
-  "overlay_candidate_source": "87a82765f52ad9945f9bf52562e99c84e1ad6a49",
+  "input_provenance": {
+    "status": "HISTORICAL_INPUTS_NOT_VERIFIED",
+    "revision_attribution_verified": false,
+    "claimed_references_from_prior_report": {
+      "upstream": "e273b904d53f5726970fd6a244ed9caa61dfeb9a",
+      "overlay_baseline": "f248f1ede50ec2d5519cef0ba4c391a49d6124b4",
+      "overlay_candidate_source": "87a82765f52ad9945f9bf52562e99c84e1ad6a49"
+    },
+    "limits": "Historical output hashes retained without rerunning the recipe. The previous script did not verify these revision claims or record consumed input hashes; these results do not prove commit/blob provenance."
+  },
   "baseline_lf_sha256": "145e9ac35677739e544c5092b7c7326d9271d9dbfebc6a5690fe014338e85d7f",
   "candidate_lf_sha256": "403b508bf0da6ceccb461b2b61837da1c450d8f36008acdee75f47018cc14463",
   "reported_runtime_schema_sha256": "145e9ac35677739e544c5092b7c7326d9271d9dbfebc6a5690fe014338e85d7f",

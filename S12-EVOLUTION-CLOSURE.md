@@ -59,13 +59,27 @@ generation are involved. Text is explicitly LF, matching the actual patchers.
 The initial raw-wrapper mismatch was CRLF versus LF, not evidence of different
 wrapper logic. `ops/s12-evolution-schema-reconciliation.json` preserves all
 compared variants. The repeatable static recipe is
-`ops/s12-reconcile-schema-static.ps1`; it reads exact source snapshots and emits
-hash evidence only. It invokes no application, patcher, Prisma, compiler or DB.
+`ops/s12-reconcile-schema-static.ps1`; it emits observed text hash evidence only.
+It invokes no application, patcher, Prisma, compiler or DB.
 
-These equalities close schema/config/wrapper/start **content** attribution. The
+These reported equalities concern schema/config/wrapper/start **content**. The
 baseline schema inputs are identical between b206 and f248; schema equality does
 not distinguish their application revisions. The candidate schema hash is an
 expected text contract, not a hash of a newly built/deployed candidate image.
+
+Revision attribution is not established by this recipe. The historical report
+above named pinned revisions, but the previous script printed those constants
+without validating the supplied directories against Git commits/blobs. The saved
+JSON now explicitly marks that historical provenance as unverified; its existing
+output hashes are retained observations, not a newly reproduced result.
+The corrected script snapshots each consumed input text once and records its
+resolved root, relative path, decoded-text SHA-256 and CRLF-normalized LF SHA-256.
+Hashes cover UTF-8 re-encoded text after `ReadAllText` encoding/BOM handling, not
+original file bytes. Arbitrary directories can be compared, but no fixed revision
+is attributed to them. Independent commit/blob comparison is required for source
+attribution, and complete patcher/build/artifact provenance remains a separate
+gate. Anchor matches and output hash equality alone cannot establish it. The
+corrected recipe was not executed in this review correction; no tests were run.
 
 `prisma.config.ts` reads `DATABASE_CONNECTION_URI`, selects the PostgreSQL schema,
 and points to `prisma/migrations`. The matched wrapper maps psql_bouncer to
@@ -135,6 +149,17 @@ classification, not the deployment's minimum: enabled module profiles and actual
 consumers must be confirmed before selecting grants for optional integrations.
 Current superuser behavior is not accepted as evidence that every existing
 privilege is needed.
+
+For Rabbitmq, Nats, Sqs and Websocket, the relation's `core_api` privileges are
+SELECT and DELETE: `monitor.service.ts:109` includes all four unconditionally,
+and explicit cleanup calls at lines 215–217/220 require DELETE independently of
+feature flags. These are direct calls, not inferred FK cascade requirements.
+The additive `optional_profiles` entry reserves INSERT/UPDATE for confirmed
+`event_integrations` consumers (`event.controller.ts:100` upsert); its get at
+line 125 uses core SELECT. The named SQL separates the same operations. Selecting
+core cannot omit those reads/deletes or select optional writes implicitly.
+Both profile selection and catalog reconciliation remain behind the existing
+fail-closed gates; `deployment_ready=false` and the initial `\quit 3` are retained.
 
 The two sequence requirements are USAGE on the catalog-confirmed sequences
 dependent on RuntimeConfig.id and NexiGroupEventOutbox.id, never UPDATE/setval.

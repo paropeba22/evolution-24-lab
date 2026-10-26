@@ -25,16 +25,25 @@ GRANT DELETE,INSERT,SELECT,UPDATE ON TABLE public."Label" TO nexi_evolution_runt
 GRANT DELETE,INSERT,SELECT,UPDATE ON TABLE public."Proxy" TO nexi_evolution_runtime;
 -- profile=core_api; source evidence in s12-evolution-runtime-contract.json
 GRANT DELETE,INSERT,SELECT,UPDATE ON TABLE public."Setting" TO nexi_evolution_runtime;
--- profile=event_integrations; source evidence in s12-evolution-runtime-contract.json
-GRANT DELETE,INSERT,SELECT,UPDATE ON TABLE public."Rabbitmq" TO nexi_evolution_runtime;
--- profile=event_integrations; source evidence in s12-evolution-runtime-contract.json
-GRANT DELETE,INSERT,SELECT,UPDATE ON TABLE public."Nats" TO nexi_evolution_runtime;
--- profile=event_integrations; source evidence in s12-evolution-runtime-contract.json
-GRANT DELETE,INSERT,SELECT,UPDATE ON TABLE public."Sqs" TO nexi_evolution_runtime;
+-- profile=core_api; unconditional instanceInfo includes and explicit cleanup.
+GRANT DELETE,SELECT ON TABLE public."Rabbitmq" TO nexi_evolution_runtime;
+-- profile=core_api; unconditional instanceInfo includes and explicit cleanup.
+GRANT DELETE,SELECT ON TABLE public."Nats" TO nexi_evolution_runtime;
+-- profile=core_api; unconditional instanceInfo includes and explicit cleanup.
+GRANT DELETE,SELECT ON TABLE public."Sqs" TO nexi_evolution_runtime;
+-- profile=core_api; unconditional instanceInfo includes and explicit cleanup.
+GRANT DELETE,SELECT ON TABLE public."Websocket" TO nexi_evolution_runtime;
+-- profile=event_integrations; OPTIONAL additions, only for confirmed consumers.
+-- Core SELECT already covers optional get/upsert predicates and RETURNING.
+GRANT INSERT,UPDATE ON TABLE public."Rabbitmq" TO nexi_evolution_runtime;
+-- profile=event_integrations; OPTIONAL additions, only for confirmed consumers.
+GRANT INSERT,UPDATE ON TABLE public."Nats" TO nexi_evolution_runtime;
+-- profile=event_integrations; OPTIONAL additions, only for confirmed consumers.
+GRANT INSERT,UPDATE ON TABLE public."Sqs" TO nexi_evolution_runtime;
+-- profile=event_integrations; OPTIONAL additions, only for confirmed consumers.
+GRANT INSERT,UPDATE ON TABLE public."Websocket" TO nexi_evolution_runtime;
 -- profile=event_integrations; source evidence in s12-evolution-runtime-contract.json
 GRANT INSERT,SELECT,UPDATE ON TABLE public."Kafka" TO nexi_evolution_runtime;
--- profile=event_integrations; source evidence in s12-evolution-runtime-contract.json
-GRANT DELETE,INSERT,SELECT,UPDATE ON TABLE public."Websocket" TO nexi_evolution_runtime;
 -- profile=event_integrations; source evidence in s12-evolution-runtime-contract.json
 GRANT INSERT,SELECT,UPDATE ON TABLE public."Pusher" TO nexi_evolution_runtime;
 -- profile=chatbot_integrations; source evidence in s12-evolution-runtime-contract.json

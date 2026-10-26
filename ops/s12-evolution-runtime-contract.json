@@ -9,6 +9,7 @@
     "Nested connect requires target reads, not REFERENCES; PostgreSQL FK cascades run internally, not runtime child DELETE grants.",
     "No CREATE/ownership/TRUNCATE/TRIGGER/REFERENCES/MAINTAIN or grant option.",
     "Optional-module profiles require allowlisted deployed configuration evidence before selecting exact grants.",
+    "Each relation's runtime_privileges belongs to its profile; optional_profiles contains additive privileges requiring separate deployment confirmation, never a table-wide profile switch.",
     "No DELETE on permanent NEXI evidence; no direct trigger-function EXECUTE."
   ],
   "relations": [
@@ -1742,122 +1743,173 @@
     {
       "schema": "public",
       "name": "Rabbitmq",
-      "profile": "event_integrations",
+      "profile": "core_api",
       "runtime_privileges": [
         "DELETE",
-        "INSERT",
-        "SELECT",
-        "UPDATE"
+        "SELECT"
       ],
       "grant_option": false,
       "ownership": false,
       "source_evidence": [
+        {
+          "model": "Rabbitmq",
+          "method": "findMany/include",
+          "file": "upstream/src/api/services/monitor.service.ts",
+          "line": 109,
+          "kind": "unconditional_instance_relation_include"
+        },
         {
           "model": "Rabbitmq",
           "method": "deleteMany",
           "file": "upstream/src/api/services/monitor.service.ts",
           "line": 215,
           "kind": "direct_delegate"
-        },
-        {
-          "model": "Rabbitmq",
-          "method": "findUnique",
-          "file": "upstream/src/api/integrations/event/event.controller.ts",
-          "line": 100,
-          "kind": "dynamic_name_bound_in_concrete_event_controller"
-        },
-        {
-          "model": "Rabbitmq",
-          "method": "upsert",
-          "file": "upstream/src/api/integrations/event/event.controller.ts",
-          "line": 100,
-          "kind": "dynamic_name_bound_in_concrete_event_controller"
         }
       ],
       "source_relations": [
         "Instance   Instance  @relation(fields: [instanceId], references: [id], onDelete: Cascade)"
       ],
-      "deployment_profile_confirmed": false
+      "deployment_profile_confirmed": false,
+      "optional_profiles": [
+        {
+          "profile": "event_integrations",
+          "runtime_privileges": [
+            "INSERT",
+            "UPDATE"
+          ],
+          "source_evidence": [
+            {
+              "model": "Rabbitmq",
+              "method": "findUnique",
+              "file": "upstream/src/api/integrations/event/event.controller.ts",
+              "line": 125,
+              "kind": "dynamic_name_bound_in_concrete_event_controller"
+            },
+            {
+              "model": "Rabbitmq",
+              "method": "upsert",
+              "file": "upstream/src/api/integrations/event/event.controller.ts",
+              "line": 100,
+              "kind": "dynamic_name_bound_in_concrete_event_controller"
+            }
+          ],
+          "deployment_profile_confirmed": false
+        }
+      ]
     },
     {
       "schema": "public",
       "name": "Nats",
-      "profile": "event_integrations",
+      "profile": "core_api",
       "runtime_privileges": [
         "DELETE",
-        "INSERT",
-        "SELECT",
-        "UPDATE"
+        "SELECT"
       ],
       "grant_option": false,
       "ownership": false,
       "source_evidence": [
+        {
+          "model": "Nats",
+          "method": "findMany/include",
+          "file": "upstream/src/api/services/monitor.service.ts",
+          "line": 109,
+          "kind": "unconditional_instance_relation_include"
+        },
         {
           "model": "Nats",
           "method": "deleteMany",
           "file": "upstream/src/api/services/monitor.service.ts",
           "line": 216,
           "kind": "direct_delegate"
-        },
-        {
-          "model": "Nats",
-          "method": "findUnique",
-          "file": "upstream/src/api/integrations/event/event.controller.ts",
-          "line": 100,
-          "kind": "dynamic_name_bound_in_concrete_event_controller"
-        },
-        {
-          "model": "Nats",
-          "method": "upsert",
-          "file": "upstream/src/api/integrations/event/event.controller.ts",
-          "line": 100,
-          "kind": "dynamic_name_bound_in_concrete_event_controller"
         }
       ],
       "source_relations": [
         "Instance   Instance  @relation(fields: [instanceId], references: [id], onDelete: Cascade)"
       ],
-      "deployment_profile_confirmed": false
+      "deployment_profile_confirmed": false,
+      "optional_profiles": [
+        {
+          "profile": "event_integrations",
+          "runtime_privileges": [
+            "INSERT",
+            "UPDATE"
+          ],
+          "source_evidence": [
+            {
+              "model": "Nats",
+              "method": "findUnique",
+              "file": "upstream/src/api/integrations/event/event.controller.ts",
+              "line": 125,
+              "kind": "dynamic_name_bound_in_concrete_event_controller"
+            },
+            {
+              "model": "Nats",
+              "method": "upsert",
+              "file": "upstream/src/api/integrations/event/event.controller.ts",
+              "line": 100,
+              "kind": "dynamic_name_bound_in_concrete_event_controller"
+            }
+          ],
+          "deployment_profile_confirmed": false
+        }
+      ]
     },
     {
       "schema": "public",
       "name": "Sqs",
-      "profile": "event_integrations",
+      "profile": "core_api",
       "runtime_privileges": [
         "DELETE",
-        "INSERT",
-        "SELECT",
-        "UPDATE"
+        "SELECT"
       ],
       "grant_option": false,
       "ownership": false,
       "source_evidence": [
         {
           "model": "Sqs",
+          "method": "findMany/include",
+          "file": "upstream/src/api/services/monitor.service.ts",
+          "line": 109,
+          "kind": "unconditional_instance_relation_include"
+        },
+        {
+          "model": "Sqs",
           "method": "deleteMany",
           "file": "upstream/src/api/services/monitor.service.ts",
           "line": 217,
           "kind": "direct_delegate"
-        },
-        {
-          "model": "Sqs",
-          "method": "findUnique",
-          "file": "upstream/src/api/integrations/event/event.controller.ts",
-          "line": 100,
-          "kind": "dynamic_name_bound_in_concrete_event_controller"
-        },
-        {
-          "model": "Sqs",
-          "method": "upsert",
-          "file": "upstream/src/api/integrations/event/event.controller.ts",
-          "line": 100,
-          "kind": "dynamic_name_bound_in_concrete_event_controller"
         }
       ],
       "source_relations": [
         "Instance   Instance  @relation(fields: [instanceId], references: [id], onDelete: Cascade)"
       ],
-      "deployment_profile_confirmed": false
+      "deployment_profile_confirmed": false,
+      "optional_profiles": [
+        {
+          "profile": "event_integrations",
+          "runtime_privileges": [
+            "INSERT",
+            "UPDATE"
+          ],
+          "source_evidence": [
+            {
+              "model": "Sqs",
+              "method": "findUnique",
+              "file": "upstream/src/api/integrations/event/event.controller.ts",
+              "line": 125,
+              "kind": "dynamic_name_bound_in_concrete_event_controller"
+            },
+            {
+              "model": "Sqs",
+              "method": "upsert",
+              "file": "upstream/src/api/integrations/event/event.controller.ts",
+              "line": 100,
+              "kind": "dynamic_name_bound_in_concrete_event_controller"
+            }
+          ],
+          "deployment_profile_confirmed": false
+        }
+      ]
     },
     {
       "schema": "public",
@@ -1894,42 +1946,59 @@
     {
       "schema": "public",
       "name": "Websocket",
-      "profile": "event_integrations",
+      "profile": "core_api",
       "runtime_privileges": [
         "DELETE",
-        "INSERT",
-        "SELECT",
-        "UPDATE"
+        "SELECT"
       ],
       "grant_option": false,
       "ownership": false,
       "source_evidence": [
         {
           "model": "Websocket",
+          "method": "findMany/include",
+          "file": "upstream/src/api/services/monitor.service.ts",
+          "line": 109,
+          "kind": "unconditional_instance_relation_include"
+        },
+        {
+          "model": "Websocket",
           "method": "deleteMany",
           "file": "upstream/src/api/services/monitor.service.ts",
           "line": 220,
           "kind": "direct_delegate"
-        },
-        {
-          "model": "Websocket",
-          "method": "findUnique",
-          "file": "upstream/src/api/integrations/event/event.controller.ts",
-          "line": 100,
-          "kind": "dynamic_name_bound_in_concrete_event_controller"
-        },
-        {
-          "model": "Websocket",
-          "method": "upsert",
-          "file": "upstream/src/api/integrations/event/event.controller.ts",
-          "line": 100,
-          "kind": "dynamic_name_bound_in_concrete_event_controller"
         }
       ],
       "source_relations": [
         "Instance   Instance  @relation(fields: [instanceId], references: [id], onDelete: Cascade)"
       ],
-      "deployment_profile_confirmed": false
+      "deployment_profile_confirmed": false,
+      "optional_profiles": [
+        {
+          "profile": "event_integrations",
+          "runtime_privileges": [
+            "INSERT",
+            "UPDATE"
+          ],
+          "source_evidence": [
+            {
+              "model": "Websocket",
+              "method": "findUnique",
+              "file": "upstream/src/api/integrations/event/event.controller.ts",
+              "line": 125,
+              "kind": "dynamic_name_bound_in_concrete_event_controller"
+            },
+            {
+              "model": "Websocket",
+              "method": "upsert",
+              "file": "upstream/src/api/integrations/event/event.controller.ts",
+              "line": 100,
+              "kind": "dynamic_name_bound_in_concrete_event_controller"
+            }
+          ],
+          "deployment_profile_confirmed": false
+        }
+      ]
     },
     {
       "schema": "public",
