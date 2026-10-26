@@ -82,6 +82,9 @@ DO $$ BEGIN
     OR NOT has_table_privilege(current_user,'public."NexiIngressJournal"','REFERENCES')
     OR NOT has_table_privilege(current_user,'public."NexiIngressLane"','TRIGGER')
     OR NOT has_table_privilege(current_user,'public."NexiIngressJournal"','TRIGGER')
+    OR NOT has_table_privilege(current_user,'public."_prisma_migrations"','SELECT')
+    OR NOT has_table_privilege(current_user,'public."_prisma_migrations"','INSERT')
+    OR NOT has_table_privilege(current_user,'public."_prisma_migrations"','UPDATE')
   THEN RAISE EXCEPTION 'reviewed temporary migration capabilities absent'; END IF;
   IF EXISTS(SELECT 1 FROM public."_prisma_migrations" WHERE rolled_back_at IS NULL AND finished_at IS NULL)
     OR EXISTS(SELECT 1 FROM public."_prisma_migrations"
