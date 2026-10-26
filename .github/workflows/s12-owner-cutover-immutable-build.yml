@@ -1,0 +1,132 @@
+name: S12 Evolution approved SHA to private OCI (build only)
+
+on:
+  # Publishing this exact ops branch is the explicit bootstrap dispatch.
+  push:
+    branches: [ops/s12-evolution-immutable-build-a2ad933]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: s12-evolution-immutable-build-a2ad933
+  cancel-in-progress: false
+
+env:
+  SOURCE_SHA: a2ad9338c5901f10d001495ba357938915d28c79
+  IMAGE_PACKAGE: ghcr.io/paropeba22/nexi-evolution-s12-owner-cutover-a2ad933
+
+jobs:
+  build-preserve-verify:
+    if: github.repository == 'paropeba22/evolution-24-lab' && github.ref == 'refs/heads/ops/s12-evolution-immutable-build-a2ad933'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout build controls from this exact ops revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          path: control
+          persist-credentials: false
+      - name: Checkout approved candidate without modifying it
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: a2ad9338c5901f10d001495ba357938915d28c79
+          path: source
+          persist-credentials: false
+      - name: Verify both checkouts and record immutable input identities
+        run: |
+          set -euo pipefail
+          test "$(git -C source rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git -C control rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git -C source status --porcelain --untracked-files=all)"
+          mkdir out
+          printf '%s\n' "$(git -C source rev-parse HEAD^{tree})" > out/source-tree.txt
+      - name: Check package privacy before publishing
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          python3 control/ops/s12-ghcr-privacy.py before
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+      - name: Build approved Dockerfile to OCI archive only
+        run: |
+          set -euo pipefail
+          docker buildx build --platform linux/amd64 --provenance=false --sbom=false \
+            --label "org.opencontainers.image.revision=$SOURCE_SHA" \
+            --label org.opencontainers.image.source=https://github.com/paropeba22/evolution-24-lab \
+            --label "io.nexi.build.control-revision=$GITHUB_SHA" \
+            --label "io.nexi.build.run=https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --metadata-file out/buildx-metadata.private.json \
+            --output type=oci,dest=out/image.oci.tar --file source/Dockerfile source
+      - name: Verify original archive blobs, platform and labels
+        id: archive
+        run: |
+          set -euo pipefail
+          python3 control/ops/s12-verify-build-oci.py archive
+      - name: Install registry and filesystem inspection tools on this remote runner
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq skopeo umoci
+      - name: Transfer authenticated OCI and capture registry bytes by digest
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REGISTRY_USER: ${{ github.actor }}
+          MANIFEST_DIGEST: ${{ steps.archive.outputs.manifest_digest }}
+        run: |
+          set -euo pipefail
+          set +x +v
+          umask 077
+          auth="$RUNNER_TEMP/s12-ghcr-auth.json"
+          trap 'rm -f "$auth"' EXIT
+          printf '%s' "$REGISTRY_TOKEN" | skopeo login --authfile "$auth" --username "$REGISTRY_USER" --password-stdin ghcr.io
+          image="$IMAGE_PACKAGE:$SOURCE_SHA-run-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          skopeo copy --all --preserve-digests --authfile "$auth" oci-archive:out/image.oci.tar "docker://$image"
+          skopeo inspect --raw --authfile "$auth" "docker://$IMAGE_PACKAGE@$MANIFEST_DIGEST" > out/registry-manifest.json
+          python3 control/ops/s12-verify-build-oci.py registry
+          # The private registry now preserves the original blobs. Free the
+          # local archive/cache before the authenticated readback and unpack.
+          rm out/image.oci.tar
+          docker buildx prune --all --force
+          skopeo copy --preserve-digests --authfile "$auth" "docker://$IMAGE_PACKAGE@$MANIFEST_DIGEST" oci:out/registry-layout:verified
+          umoci unpack --rootless --image out/registry-layout:verified out/registry-unpack
+          # Unpack never runs ENTRYPOINT, CMD, a shell, Prisma or application code.
+          python3 control/ops/s12-verify-build-oci.py rootfs
+          printf '{}' > "$RUNNER_TEMP/s12-anonymous-auth.json"
+          if skopeo inspect --raw --authfile "$RUNNER_TEMP/s12-anonymous-auth.json" "docker://$IMAGE_PACKAGE@$MANIFEST_DIGEST" > /dev/null 2> out/anonymous-error.private.txt; then
+            echo 'STOP: image is anonymously readable.' >&2
+            exit 1
+          fi
+          if ! grep -Eqi 'unauthorized|denied|authentication required' out/anonymous-error.private.txt; then
+            echo 'STOP: anonymous privacy check was inconclusive.' >&2
+            exit 1
+          fi
+      - name: Confirm private visibility through authenticated package metadata
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          python3 control/ops/s12-ghcr-privacy.py after
+      - name: Preserve allowlisted verification receipts only
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: evolution-owner-cutover-a2ad933-receipts-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            out/local-oci-metadata.json
+            out/registry-manifest.json
+            out/transfer-receipt.json
+            out/final-file-inventory.json
+            out/final-image-contract.json
+            out/package-privacy-before.json
+            out/package-privacy-after.json
+            out/source-tree.txt
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 9
