@@ -1,5 +1,46 @@
 # Current Evolution candidate gate — 2026-10-26
 
+## Reconciliation of the subsequent maintenance preparation
+
+The clean candidate was re-read at
+`0c29c0bd03848757d9c515fb92e642bf0fe20869`. Both the operational-source baseline
+`f248f1ede50ec2d5519cef0ba4c391a49d6124b4` and the provenance correction
+`87a82765f52ad9945f9bf52562e99c84e1ad6a49` are confirmed ancestors. Relative to
+the a2ad snapshot discussed below, the ingress implementation, owner schema
+fragment/migration, Prisma config and Dockerfile have no changes. The existing
+schema and migration byte evidence therefore remains applicable to those source
+inputs; its recorded candidate revision is historical, not a new image claim.
+
+The latest preparation correction makes the migration preflight require separate
+SELECT, INSERT and UPDATE privileges on `public._prisma_migrations`. These are
+the same temporary operations already proposed for the NOLOGIN guard owner in
+worksheet phase B and revoked in phase C. Runtime receives no ledger access.
+The preflight remains READ ONLY; it only observes these capabilities. It never
+executes a migration, grants a privilege or approves a maintenance connection.
+
+Exact Git blobs at the reconciliation snapshot:
+
+| Preparation artifact | Git blob |
+| --- | --- |
+| Migration preflight | `c58af3047b95959acfd44faf17ac2e69d00c6b66` |
+| Seventy-migration baseline ledger contract | `7de09a8b587feac1ca771b30bef7fc5b1d5ca37b` |
+| Four-principal contract | `c259c7fb88984fff95b84f1d1915af9eb96b2cca` |
+| Phased privilege worksheet | `0b6153d97314691b88592b34076d81ef1856de58` |
+| Named runtime grant proposals | `27a689b7399c3ee2b1bf6fbfd0fe3c79995803eb` |
+| Fifty-four-relation runtime contract | `99ba3ed893bf02e9a98b21b027e800572fa44dc7` |
+
+No new functional defect was established by this reconciliation. No schema,
+protocol, grant list or workflow change is justified by it. All external gates
+below remain closed: typed artifact provenance, final package/engine/provider
+and staging bytes, per-object production catalogs and real ledger checksums,
+selected consumer profiles, separately authorized role/key maintenance and fresh
+restricted direct connection readback. The source matrix and exact ledger list
+do not replace these facts. Review of the final combined candidate remains an
+independent coordinating gate. No local test, build, Prisma/SQL execution,
+service, database or production change was performed.
+
+## Earlier source comparison and prepared contracts
+
 Compared exact candidate `a2ad9338c5901f10d001495ba357938915d28c79` with approved
 ancestor `6c2703916035e2a16990883ab0764cd3fd797842`, using the existing worktree
 and inventories. The ancestor relationship is confirmed; both inputs resolve to
