@@ -1,5 +1,9 @@
 # S12 Evolution Prisma provenance and privilege preparation
 
+See the 2026-10-26 [Git source evidence supplement](S12-EVOLUTION-SOURCE-EVIDENCE.md)
+for verified local commit/blob inputs and the complete source migration inventory.
+It does not release operational provenance, profile/catalog or identity gates.
+
 Status: **PREPARED / NOT EXECUTED / NOT READY FOR PRODUCTION APPLICATION**.
 The subsequent [closure supplement](S12-EVOLUTION-CLOSURE.md) supersedes the
 source-level schema/wrapper uncertainty below, completes all 54 model access

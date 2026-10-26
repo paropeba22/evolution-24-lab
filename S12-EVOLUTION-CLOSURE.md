@@ -1,5 +1,10 @@
 # S12 Evolution: source matrix and Prisma owner contract closure
 
+The 2026-10-26 [Git source evidence supplement](S12-EVOLUTION-SOURCE-EVIDENCE.md)
+now closes the historical input-attribution gap below using commit/tree/blob
+checks and records the complete source PostgreSQL migration inventory. It retains
+the operational artifact, catalog, profile and restricted-identity gates.
+
 Prepared only, 2026-10-25. This supplement supersedes the unresolved source-level
 findings in the initial privilege report where expressly stated below. No tests,
 builds, compilers, SQL execution, service/container/database execution, package
