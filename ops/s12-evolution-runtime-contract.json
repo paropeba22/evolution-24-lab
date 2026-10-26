@@ -2042,15 +2042,24 @@
     {
       "schema": "public",
       "name": "Typebot",
-      "profile": "chatbot_integrations",
+      "profile": "core_api",
       "runtime_privileges": [
         "DELETE",
-        "INSERT",
-        "SELECT",
-        "UPDATE"
+        "SELECT"
+      ],
+      "optional_profiles": [
+        {
+          "profile": "chatbot_integrations",
+          "runtime_privileges": [
+            "INSERT",
+            "UPDATE"
+          ],
+          "deployment_profile_confirmed": false
+        }
       ],
       "grant_option": false,
       "ownership": false,
+      "source_evidence_scope": "Shared core and optional operations. Unconditional cleanup at monitor.service.ts:219 requires DELETE and SELECT for its instanceId predicate; create/update evidence supports optional INSERT/UPDATE only.",
       "source_evidence": [
         {
           "model": "Typebot",
@@ -2585,15 +2594,24 @@
     {
       "schema": "public",
       "name": "IntegrationSession",
-      "profile": "chatbot_integrations",
+      "profile": "core_api",
       "runtime_privileges": [
         "DELETE",
-        "INSERT",
-        "SELECT",
-        "UPDATE"
+        "SELECT"
+      ],
+      "optional_profiles": [
+        {
+          "profile": "chatbot_integrations",
+          "runtime_privileges": [
+            "INSERT",
+            "UPDATE"
+          ],
+          "deployment_profile_confirmed": false
+        }
       ],
       "grant_option": false,
       "ownership": false,
+      "source_evidence_scope": "Shared core and optional operations. Unconditional cleanup at monitor.service.ts:218 requires DELETE and SELECT for its instanceId predicate; create/update/updateMany evidence supports optional INSERT/UPDATE only.",
       "source_evidence": [
         {
           "model": "IntegrationSession",

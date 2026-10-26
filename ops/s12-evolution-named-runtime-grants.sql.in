@@ -46,8 +46,10 @@ GRANT INSERT,UPDATE ON TABLE public."Websocket" TO nexi_evolution_runtime;
 GRANT INSERT,SELECT,UPDATE ON TABLE public."Kafka" TO nexi_evolution_runtime;
 -- profile=event_integrations; source evidence in s12-evolution-runtime-contract.json
 GRANT INSERT,SELECT,UPDATE ON TABLE public."Pusher" TO nexi_evolution_runtime;
--- profile=chatbot_integrations; source evidence in s12-evolution-runtime-contract.json
-GRANT DELETE,INSERT,SELECT,UPDATE ON TABLE public."Typebot" TO nexi_evolution_runtime;
+-- profile=core_api; unconditional cleanup; SELECT covers its instanceId predicate.
+GRANT DELETE,SELECT ON TABLE public."Typebot" TO nexi_evolution_runtime;
+-- profile=chatbot_integrations; OPTIONAL additions, only for confirmed consumers.
+GRANT INSERT,UPDATE ON TABLE public."Typebot" TO nexi_evolution_runtime;
 -- profile=chatbot_integrations; source evidence in s12-evolution-runtime-contract.json
 GRANT INSERT,SELECT,UPDATE ON TABLE public."TypebotSetting" TO nexi_evolution_runtime;
 -- profile=core_api; source evidence in s12-evolution-runtime-contract.json
@@ -56,8 +58,10 @@ GRANT INSERT,SELECT,UPDATE ON TABLE public."Media" TO nexi_evolution_runtime;
 GRANT DELETE,INSERT,SELECT ON TABLE public."OpenaiCreds" TO nexi_evolution_runtime;
 -- profile=chatbot_integrations; source evidence in s12-evolution-runtime-contract.json
 GRANT DELETE,INSERT,SELECT,UPDATE ON TABLE public."OpenaiBot" TO nexi_evolution_runtime;
--- profile=chatbot_integrations; source evidence in s12-evolution-runtime-contract.json
-GRANT DELETE,INSERT,SELECT,UPDATE ON TABLE public."IntegrationSession" TO nexi_evolution_runtime;
+-- profile=core_api; unconditional cleanup; SELECT covers its instanceId predicate.
+GRANT DELETE,SELECT ON TABLE public."IntegrationSession" TO nexi_evolution_runtime;
+-- profile=chatbot_integrations; OPTIONAL additions, only for confirmed consumers.
+GRANT INSERT,UPDATE ON TABLE public."IntegrationSession" TO nexi_evolution_runtime;
 -- profile=chatbot_integrations; source evidence in s12-evolution-runtime-contract.json
 GRANT INSERT,SELECT,UPDATE ON TABLE public."OpenaiSetting" TO nexi_evolution_runtime;
 -- profile=core_api; source evidence in s12-evolution-runtime-contract.json
