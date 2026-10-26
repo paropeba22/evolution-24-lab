@@ -100,7 +100,7 @@ $contractNames=@($contract.relations | ForEach-Object { $_.name })
 $missing=@($models | Where-Object { $_ -cnotin $contractNames })
 $extra=@($contractNames | Where-Object { $_ -cnotin $models })
 if ($missing.Count -or $extra.Count -or $models.Count -ne $contractNames.Count) { throw 'Schema/privilege model inventory mismatch' }
-foreach ($path in @('Dockerfile','prisma.config.ts','nexi-start.sh','ops/s12-evolution-named-runtime-grants.sql.in','ops/s12-evolution-privileges.sql.in','ops/s12-evolution-migration-preflight.sql')) {
+foreach ($path in @('Dockerfile','.gitattributes','Docker/scripts/deploy_database.sh','prisma.config.ts','nexi-start.sh','ops/s12-evolution-named-runtime-grants.sql.in','ops/s12-evolution-privileges.sql.in','ops/s12-evolution-migration-preflight.sql')) {
   $null=OverlayText 'candidate_overlay' $CandidateCommit $path
 }
 $wrapper=UpstreamText 'runWithProvider.js'
@@ -108,6 +108,11 @@ $package=UpstreamText 'package.json' | ConvertFrom-Json
 $lock=UpstreamText 'package-lock.json' | ConvertFrom-Json -AsHashtable
 $null=UpstreamText 'Docker/scripts/deploy_database.sh'
 $docker=OverlayText 'candidate_overlay' $CandidateCommit 'Dockerfile'
+$safeDeployCopy='COPY --chmod=0555 Docker/scripts/deploy_database.sh /evolution/Docker/scripts/deploy_database.sh'
+$finalStage=$docker.Replace("`r`n","`n").Split('FROM evoapicloud/evolution-api@')
+if ($finalStage.Count -ne 2 -or $finalStage[1].Split("`n") -cnotcontains $safeDeployCopy) {
+  throw 'The candidate final stage must override the inherited database deploy helper'
+}
 $merged=@{}
 $upstreamPaths=(GitText $UpstreamRepository @('ls-tree','-r','--name-only',$UpstreamCommit,'--','prisma/postgresql-migrations')).TrimEnd("`n").Split("`n")
 foreach ($path in $upstreamPaths) {
@@ -154,6 +159,14 @@ $result=[ordered]@{
     source_wrapper_lf_sha256=(HashText $wrapper.Replace("`r`n","`n"))
     source_package_deploy_script=$package.scripts.'db:deploy';source_versions=$versions
     final_base_scripts_and_engine_versions_verified=$false;provider_migration_files=$migrations
+    final_deploy_helper_source=[ordered]@{
+      path='Docker/scripts/deploy_database.sh';origin='candidate_overlay';commit=$CandidateCommit
+      git_blob=$snapshots['candidate_overlay|Docker/scripts/deploy_database.sh'].git_blob
+      raw_sha256=$snapshots['candidate_overlay|Docker/scripts/deploy_database.sh'].raw_sha256
+      final_stage_copy=$safeDeployCopy
+      contract='Fail-closed shim: no environment/helper reads, child processes, migration/generation or variable/argument output; literal stderr notice and exit 78.'
+      deployed_bytes_verified=$false
+    }
     checksum_boundary='raw_sha256 hashes original Git blob bytes, not Windows checkout text. Neither it nor lf_text_sha256 is a deployed ledger checksum until final artifact bytes and ledger rows are captured.'
   }
   privileges=[ordered]@{

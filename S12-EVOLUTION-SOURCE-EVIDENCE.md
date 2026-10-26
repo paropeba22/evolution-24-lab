@@ -4,12 +4,15 @@ Prepared 2026-10-26. The new Git evidence closes the historical input-attributio
 gap in [the closure supplement](S12-EVOLUTION-CLOSURE.md). It records source
 evidence only. Deployment readiness remains **false**.
 
-The inspected candidate is `6c2703916035e2a16990883ab0764cd3fd797842`, tree
+The initial code/schema input snapshot is `6c2703916035e2a16990883ab0764cd3fd797842`, tree
 `c29fc0e89b0936f1b5774263b5cf1168379babc7`. The upstream is
 `e273b904d53f5726970fd6a244ed9caa61dfeb9a`, tree
 `7dd4410526782b0349b98b4eb700721dec98adbf`. Baseline overlay attribution uses
 `f248f1ede50ec2d5519cef0ba4c391a49d6124b4`. These are resolved Git objects,
 not revision names printed without checking their inputs.
+After the credential-logging correction below, the regenerated JSON's
+`source_provenance.candidate_overlay` identifies the corrected source commit/tree;
+the original schema and migration hashes below remain the source contracts.
 
 ## Evidence collected from local immutable objects
 
@@ -47,10 +50,29 @@ as a deployed Prisma ledger checksum without actual artifact-byte comparison.
 
 The pinned upstream package lock records Prisma, client, engines and PostgreSQL
 adapter at **7.8.0**. These are source dependency versions. The final image
-inherits its maintenance package/scripts/dependencies from the separate final
+inherits its maintenance package/wrapper/dependencies from the separate final
 base; those installed versions and bytes remain unverified. The source deploy
 script stages `postgresql-migrations` as `prisma/migrations`, matching the config
 and wrapper explanation. No claim is made about the actual staging directory.
+
+## Credential logging correction after independent review
+
+The recorded upstream deploy shell contains a direct database-URL echo and also
+invokes migration/generation helpers whose final bytes are not established.
+The candidate Dockerfile now explicitly overwrites that inherited shell in its
+final stage with the tracked `Docker/scripts/deploy_database.sh`, mode 0555.
+The local shim disables shell trace/verbose mode before any output, reads no
+environment or helper, invokes no child process, prints one literal notice to
+stderr and exits 78. It never expands a URL, provider value or argument. Its
+source is forced to LF through `.gitattributes`. This removes the legacy helper
+from the candidate's maintenance paths; the separately approved maintenance job
+remains required.
+
+The Git evidence recipe now records the local shim and attributes it separately
+from the unsafe upstream shell, and requires its exact COPY in the final stage.
+This is a source-level correction, not a claim that the running image was rebuilt
+or changed. Actual final-artifact byte verification and the other gates remain
+blocked. No shell, build or test was executed to make this change.
 
 ## Privilege boundary
 

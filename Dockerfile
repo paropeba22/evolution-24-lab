@@ -131,6 +131,9 @@ FROM evoapicloud/evolution-api@sha256:65e29aa1a2ca096675825ff8feb3b5bf7fbcb167e3
 
 WORKDIR /evolution
 COPY prisma.config.ts /evolution/prisma.config.ts
+# Replace the inherited URL-logging deploy helper with a local fail-closed shim.
+# Schema maintenance is a separate approved job, never this legacy entrypoint.
+COPY --chmod=0555 Docker/scripts/deploy_database.sh /evolution/Docker/scripts/deploy_database.sh
 COPY --from=source-builder /evolution/dist /evolution/dist
 COPY --from=source-builder /evolution/prisma /evolution/prisma
 COPY --from=source-builder /evolution/nexi-transport.cjs /evolution/nexi-transport.cjs

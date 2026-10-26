@@ -1,0 +1,2 @@
+# The final image executes this POSIX shell source directly.
+Docker/scripts/deploy_database.sh text eol=lf
